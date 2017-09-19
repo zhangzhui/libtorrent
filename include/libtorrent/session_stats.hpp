@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2012-2015, Arvid Norberg
+Copyright (c) 2012-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,11 +34,11 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_SESSION_STATS_HPP_INCLUDED
 
 #include "libtorrent/config.hpp"
+#include "libtorrent/string_view.hpp"
 
 #include <vector>
 
-namespace libtorrent
-{
+namespace libtorrent {
 
 	// describes one statistics metric from the session. For more information,
 	// see the session-statistics_ section.
@@ -46,8 +46,8 @@ namespace libtorrent
 	{
 		char const* name;
 		int value_index;
-		enum { type_counter, type_gauge };
-		int type;
+		enum metric_type_t { type_counter, type_gauge };
+		metric_type_t type;
 	};
 
 	// This free function returns the list of available metrics exposed by
@@ -60,9 +60,7 @@ namespace libtorrent
 	// given a name of a metric, this function returns the counter index of it,
 	// or -1 if it could not be found. The counter index is the index into the
 	// values array returned by session_stats_alert.
-	TORRENT_EXPORT int find_metric_idx(char const* name);
-
+	TORRENT_EXPORT int find_metric_idx(string_view name);
 }
 
 #endif
-

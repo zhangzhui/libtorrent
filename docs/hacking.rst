@@ -3,7 +3,7 @@ libtorrent hacking
 ==================
 
 :Author: Arvid Norberg, arvid@libtorrent.org
-:Version: 1.1.0
+:Version: 1.2.0
 
 .. contents:: Table of contents
   :depth: 2
@@ -119,7 +119,7 @@ libtorrent starts 3 to 5 threads.
  * The third thread is the SHA-1 hash thread. By default there's only one hash thread,
    but on multi-core machines downloading at very high rates, libtorrent can be configured
    to start any number of hashing threads, to take full use of multi core systems.
-   (see ``session_settings::hashing_threads``).
+   (see ``settings_pack::aio_threads``).
 
  * The fourth and fifth threads are spawned by asio on systems that don't support
    asynchronous host name resolution, in order to simulate non-blocking ``getaddrinfo()``.
@@ -136,17 +136,9 @@ The disk cache implements *ARC*, Adaptive Replacement Cache. This consists of a 
 5. volatile read blocks
 6. write cache (blocks waiting to be flushed to disk)
 
-.. parsed-literal::
-	
-	             <--- recently used  frequently used --->
-	+--------------+--------------+  +--------------+--------------+
-	|     L1 **ghost** |           L1 |  | L2           | L2 **ghost**     |
-	+--------------+--------------+  +--------------+--------------+
-	
-	               <---------- cache_size ---------->
-	
-	<---------------------- 2 x cache_size ------------------------>
 
+.. image:: disk_cache.png
+	
 These LRUs are stored in ``block_cache`` in an array ``m_lru``.
 
 The cache algorithm works like this::

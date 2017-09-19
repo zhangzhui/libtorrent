@@ -33,81 +33,35 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/entry.hpp"
 #include "libtorrent/bencode.hpp"
 #include "libtorrent/torrent_info.hpp"
-#include "libtorrent/file.hpp"
 #include "libtorrent/storage.hpp"
 #include "libtorrent/hasher.hpp"
 #include "libtorrent/create_torrent.hpp"
-#include "libtorrent/file.hpp"
-#include "libtorrent/file_pool.hpp"
-#include "libtorrent/hex.hpp" // for from_hex
+#include "libtorrent/aux_/max_path.hpp" // for TORRENT_MAX_PATH
 
-#include <boost/bind.hpp>
+#include <functional>
+#include <cstdio>
+#include <sstream>
+#include <fstream>
 
 #ifdef TORRENT_WINDOWS
 #include <direct.h> // for _getcwd
 #endif
 
-using namespace libtorrent;
+using namespace lt;
+using namespace std::placeholders;
 
-int load_file(std::string const& filename, std::vector<char>& v, libtorrent::error_code& ec, int limit = 8000000)
+std::vector<char> load_file(std::string const& filename)
 {
-	ec.clear();
-	FILE* f = fopen(filename.c_str(), "rb");
-	if (f == NULL)
-	{
-		ec.assign(errno, boost::system::generic_category());
-		return -1;
-	}
-
-	int r = fseek(f, 0, SEEK_END);
-	if (r != 0)
-	{
-		ec.assign(errno, boost::system::generic_category());
-		fclose(f);
-		return -1;
-	}
-	long s = ftell(f);
-	if (s < 0)
-	{
-		ec.assign(errno, boost::system::generic_category());
-		fclose(f);
-		return -1;
-	}
-
-	if (s > limit)
-	{
-		fclose(f);
-		return -2;
-	}
-
-	r = fseek(f, 0, SEEK_SET);
-	if (r != 0)
-	{
-		ec.assign(errno, boost::system::generic_category());
-		fclose(f);
-		return -1;
-	}
-
-	v.resize(s);
-	if (s == 0)
-	{
-		fclose(f);
-		return 0;
-	}
-
-	r = fread(&v[0], 1, v.size(), f);
-	if (r < 0)
-	{
-		ec.assign(errno, boost::system::generic_category());
-		fclose(f);
-		return -1;
-	}
-
-	fclose(f);
-
-	if (r != s) return -3;
-
-	return 0;
+	std::vector<char> ret;
+	std::fstream in;
+	in.exceptions(std::ifstream::failbit);
+	in.open(filename.c_str(), std::ios_base::in | std::ios_base::binary);
+	in.seekg(0, std::ios_base::end);
+	size_t const size = size_t(in.tellg());
+	in.seekg(0, std::ios_base::beg);
+	ret.resize(size);
+	in.read(ret.data(), ret.size());
+	return ret;
 }
 
 std::string branch_path(std::string const& f)
@@ -119,7 +73,7 @@ std::string branch_path(std::string const& f)
 #endif
 	if (f == "/") return "";
 
-	int len = f.size();
+	int len = int(f.size());
 	// if the last character is / or \ ignore it
 	if (f[len-1] == '/' || f[len-1] == '\\') --len;
 	while (len > 0)
@@ -143,24 +97,24 @@ bool file_filter(std::string const& f)
 	char const* sep = strrchr(first, '/');
 #if defined(TORRENT_WINDOWS) || defined(TORRENT_OS2)
 	char const* altsep = strrchr(first, '\\');
-	if (sep == NULL || altsep > sep) sep = altsep;
+	if (sep == nullptr || altsep > sep) sep = altsep;
 #endif
 	// if there is no parent path, just set 'sep'
 	// to point to the filename.
 	// if there is a parent path, skip the '/' character
-	if (sep == NULL) sep = first;
+	if (sep == nullptr) sep = first;
 	else ++sep;
 
 	// return false if the first character of the filename is a .
 	if (sep[0] == '.') return false;
 
-	fprintf(stderr, "%s\n", f.c_str());
+	std::fprintf(stderr, "%s\n", f.c_str());
 	return true;
 }
 
-void print_progress(int i, int num)
+void print_progress(piece_index_t i, int num)
 {
-	fprintf(stderr, "\r%d/%d", i+1, num);
+	std::fprintf(stderr, "\r%d/%d", static_cast<int>(i)+1, num);
 }
 
 void print_usage()
@@ -207,7 +161,7 @@ void print_usage()
 
 int main(int argc, char* argv[])
 {
-	using namespace libtorrent;
+	using namespace lt;
 
 	std::string creator_str = "libtorrent";
 	std::string comment_str;
@@ -228,7 +182,7 @@ int main(int argc, char* argv[])
 		std::vector<sha1_hash> similar;
 		int pad_file_limit = -1;
 		int piece_size = 0;
-		int flags = 0;
+		create_flags_t flags = {};
 		std::string root_cert;
 
 		std::string outfile;
@@ -264,7 +218,7 @@ int main(int argc, char* argv[])
 				case 'p':
 					++i;
 					pad_file_limit = atoi(argv[i]);
-					flags |= create_torrent::optimize;
+					flags |= create_torrent::optimize_alignment;
 					break;
 				case 's':
 					++i;
@@ -299,15 +253,17 @@ int main(int argc, char* argv[])
 					++i;
 					if (strlen(argv[i]) != 40)
 					{
-						fprintf(stderr, "invalid info-hash for -S. "
+						std::fprintf(stderr, "invalid info-hash for -S. "
 							"Expected 40 hex characters\n");
 						print_usage();
 						return 1;
 					}
+					std::stringstream hash(argv[i]);
 					sha1_hash ih;
-					if (!from_hex(argv[i], 40, (char*)&ih[0]))
+					hash >> ih;
+					if (hash.fail())
 					{
-						fprintf(stderr, "invalid info-hash for -S\n");
+						std::fprintf(stderr, "invalid info-hash for -S\n");
 						print_usage();
 						return 1;
 					}
@@ -337,7 +293,13 @@ int main(int argc, char* argv[])
 			_getcwd(cwd, sizeof(cwd));
 			full_path = cwd + ("\\" + full_path);
 #else
-			getcwd(cwd, sizeof(cwd));
+			char const* ret = getcwd(cwd, sizeof(cwd));
+			if (ret == NULL)
+			{
+				std::fprintf(stderr, "failed to get current working directory: %s\n"
+					, strerror(errno));
+				return 1;
+			}
 			full_path = cwd + ("/" + full_path);
 #endif
 		}
@@ -369,72 +331,52 @@ int main(int argc, char* argv[])
 
 		error_code ec;
 		set_piece_hashes(t, branch_path(full_path)
-			, boost::bind(&print_progress, _1, t.num_pieces()), ec);
+			, std::bind(&print_progress, _1, t.num_pieces()), ec);
 		if (ec)
 		{
-			fprintf(stderr, "%s\n", ec.message().c_str());
+			std::fprintf(stderr, "%s\n", ec.message().c_str());
 			return 1;
 		}
 
-		fprintf(stderr, "\n");
+		std::fprintf(stderr, "\n");
 		t.set_creator(creator_str.c_str());
 		if (!comment_str.empty())
 			t.set_comment(comment_str.c_str());
 
 		if (!root_cert.empty())
 		{
-			std::vector<char> pem;
-			load_file(root_cert, pem, ec, 10000);
-			if (ec)
-			{
-				fprintf(stderr, "failed to load root certificate for tracker: %s\n", ec.message().c_str());
-			}
-			else
-			{
-				t.set_root_cert(std::string(&pem[0], pem.size()));
-			}
+			std::vector<char> pem = load_file(root_cert);
+			t.set_root_cert(std::string(&pem[0], pem.size()));
 		}
 
 		// create the torrent and print it to stdout
 		std::vector<char> torrent;
 		bencode(back_inserter(torrent), t.generate());
-		FILE* output = stdout;
 		if (!outfile.empty())
-			output = fopen(outfile.c_str(), "wb+");
-		if (output == NULL)
 		{
-			fprintf(stderr, "failed to open file \"%s\": (%d) %s\n"
-				, outfile.c_str(), errno, strerror(errno));
-			return 1;
+			std::fstream out;
+			out.exceptions(std::ifstream::failbit);
+			out.open(outfile.c_str(), std::ios_base::out | std::ios_base::binary);
+			out.write(&torrent[0], torrent.size());
 		}
-		fwrite(&torrent[0], 1, torrent.size(), output);
-
-		if (output != stdout)
-			fclose(output);
+		else
+		{
+			fwrite(&torrent[0], 1, torrent.size(), stdout);
+		}
 
 		if (!merklefile.empty())
 		{
-			output = fopen(merklefile.c_str(), "wb+");
-			if (output == NULL)
-			{
-				fprintf(stderr, "failed to open file \"%s\": (%d) %s\n"
-					, merklefile.c_str(), errno, strerror(errno));
-				return 1;
-			}
-			int ret = fwrite(&t.merkle_tree()[0], 20, t.merkle_tree().size(), output);
-			if (ret != int(t.merkle_tree().size()))
-			{
-				fprintf(stderr, "failed to write %s: (%d) %s\n"
-					, merklefile.c_str(), errno, strerror(errno));
-			}
-			fclose(output);
+			std::fstream merkle;
+			merkle.exceptions(std::ifstream::failbit);
+			merkle.open(merklefile.c_str(), std::ios_base::out | std::ios_base::binary);
+			merkle.write(reinterpret_cast<char const*>(&t.merkle_tree()[0]), t.merkle_tree().size() * 20);
 		}
 
 #ifndef BOOST_NO_EXCEPTIONS
 	}
-	catch (std::exception& e)
+	catch (std::exception const& e)
 	{
-		fprintf(stderr, "%s\n", e.what());
+		std::fprintf(stderr, "%s\n", e.what());
 	}
 #endif
 

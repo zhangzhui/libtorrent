@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2015, Arvid Norberg
+Copyright (c) 2003-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,18 +34,14 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_STAT_HPP_INCLUDED
 
 #include <algorithm>
-#include <vector>
-#include <assert.h>
-#include <cstring>
 #include <limits>
-#include <boost/cstdint.hpp>
+#include <cstdint>
 
-#include "libtorrent/invariant_check.hpp"
 #include "libtorrent/config.hpp"
 #include "libtorrent/assert.hpp"
 
-namespace libtorrent
-{
+namespace libtorrent {
+
 	class TORRENT_EXTRA_EXPORT stat_channel
 	{
 	public:
@@ -58,9 +54,9 @@ namespace libtorrent
 
 		void operator+=(stat_channel const& s)
 		{
-			TORRENT_ASSERT(m_counter < (std::numeric_limits<boost::uint32_t>::max)() - s.m_counter);
+			TORRENT_ASSERT(m_counter < (std::numeric_limits<std::int32_t>::max)() - s.m_counter);
 			m_counter += s.m_counter;
-			TORRENT_ASSERT(m_total_counter < (std::numeric_limits<boost::uint64_t>::max)() - s.m_counter);
+			TORRENT_ASSERT(m_total_counter < (std::numeric_limits<std::int64_t>::max)() - s.m_counter);
 			m_total_counter += s.m_counter;
 		}
 
@@ -68,26 +64,26 @@ namespace libtorrent
 		{
 			TORRENT_ASSERT(count >= 0);
 
-			TORRENT_ASSERT(m_counter < (std::numeric_limits<boost::uint32_t>::max)() - count);
+			TORRENT_ASSERT(m_counter < (std::numeric_limits<std::int32_t>::max)() - count);
 			m_counter += count;
-			TORRENT_ASSERT(m_total_counter < (std::numeric_limits<boost::uint64_t>::max)() - count);
+			TORRENT_ASSERT(m_total_counter < (std::numeric_limits<std::int64_t>::max)() - count);
 			m_total_counter += count;
 		}
 
 		// should be called once every second
 		void second_tick(int tick_interval_ms);
-		int rate() const { return m_5_sec_average; }
-		int low_pass_rate() const { return m_5_sec_average; }
+		std::int32_t rate() const { return m_5_sec_average; }
+		std::int32_t low_pass_rate() const { return m_5_sec_average; }
 
-		boost::int64_t total() const { return m_total_counter; }
+		std::int64_t total() const { return m_total_counter; }
 
-		void offset(boost::int64_t c)
+		void offset(std::int64_t c)
 		{
-			TORRENT_ASSERT(m_total_counter < (std::numeric_limits<boost::uint64_t>::max)() - c);
+			TORRENT_ASSERT(m_total_counter < (std::numeric_limits<std::int64_t>::max)() - c);
 			m_total_counter += c;
 		}
 
-		int counter() const { return m_counter; }
+		std::int32_t counter() const { return m_counter; }
 
 		void clear()
 		{
@@ -99,18 +95,17 @@ namespace libtorrent
 	private:
 
 		// total counters
-		boost::uint64_t m_total_counter;
+		std::int64_t m_total_counter;
 
 		// the accumulator for this second.
-		boost::uint32_t m_counter;
+		std::int32_t m_counter;
 
 		// sliding average
-		boost::uint32_t m_5_sec_average;
+		std::int32_t m_5_sec_average;
 	};
 
 	class TORRENT_EXTRA_EXPORT stat
 	{
-	friend class invariant_access;
 	public:
 		void operator+=(const stat& s)
 		{
@@ -202,14 +197,14 @@ namespace libtorrent
 				+ m_stat[download_ip_protocol].rate();
 		}
 
-		boost::int64_t total_upload() const
+		std::int64_t total_upload() const
 		{
 			return m_stat[upload_payload].total()
 				+ m_stat[upload_protocol].total()
 				+ m_stat[upload_ip_protocol].total();
 		}
 
-		boost::int64_t total_download() const
+		std::int64_t total_download() const
 		{
 			return m_stat[download_payload].total()
 				+ m_stat[download_protocol].total()
@@ -221,17 +216,17 @@ namespace libtorrent
 		int download_payload_rate() const
 		{ return m_stat[download_payload].rate(); }
 
-		boost::int64_t total_payload_upload() const
+		std::int64_t total_payload_upload() const
 		{ return m_stat[upload_payload].total(); }
-		boost::int64_t total_payload_download() const
+		std::int64_t total_payload_download() const
 		{ return m_stat[download_payload].total(); }
 
-		boost::int64_t total_protocol_upload() const
+		std::int64_t total_protocol_upload() const
 		{ return m_stat[upload_protocol].total(); }
-		boost::int64_t total_protocol_download() const
+		std::int64_t total_protocol_download() const
 		{ return m_stat[download_protocol].total(); }
 
-		boost::int64_t total_transfer(int channel) const
+		std::int64_t total_transfer(int channel) const
 		{ return m_stat[channel].total(); }
 		int transfer_rate(int channel) const
 		{ return m_stat[channel].rate(); }
@@ -239,7 +234,7 @@ namespace libtorrent
 		// this is used to offset the statistics when a
 		// peer_connection is opened and have some previous
 		// transfers from earlier connections.
-		void add_stat(boost::int64_t downloaded, boost::int64_t uploaded)
+		void add_stat(std::int64_t downloaded, std::int64_t uploaded)
 		{
 			m_stat[download_payload].offset(downloaded);
 			m_stat[upload_payload].offset(uploaded);
@@ -257,6 +252,8 @@ namespace libtorrent
 		// these are the channels we keep stats for
 		enum
 		{
+			// TODO: 3 everything but payload counters and rates could probably be
+			// removed from here
 			upload_payload,
 			upload_protocol,
 			download_payload,
@@ -286,4 +283,3 @@ namespace libtorrent
 }
 
 #endif // TORRENT_STAT_HPP_INCLUDED
-

@@ -3,12 +3,11 @@ EXTRA_DIST = \
   Jamfile                   \
   setup.py                  \
   client.py                 \
-  rss_reader.py             \
   simple_client.py          \
   make_torrent.py           \
   src/alert.cpp             \
   src/bytes.hpp             \
-  src/big_number.cpp        \
+  src/sha1_hash.cpp         \
   src/converters.cpp        \
   src/create_torrent.cpp    \
   src/datetime.cpp          \
@@ -21,6 +20,7 @@ EXTRA_DIST = \
   src/module.cpp            \
   src/optional.hpp          \
   src/peer_info.cpp         \
+  src/boost_python.hpp      \
   src/session.cpp           \
   src/session_settings.cpp  \
   src/string.cpp            \

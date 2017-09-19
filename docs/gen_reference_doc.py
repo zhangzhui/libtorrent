@@ -7,6 +7,10 @@ import sys
 verbose = '--verbose' in sys.argv
 dump = '--dump' in sys.argv
 internal = '--internal' in sys.argv
+plain_output = '--plain-output' in sys.argv
+if plain_output:
+	plain_file = open('plain_text_out.txt', 'w+')
+in_code = None
 
 paths = ['include/libtorrent/*.hpp', 'include/libtorrent/kademlia/*.hpp', 'include/libtorrent/extensions/*.hpp']
 
@@ -33,6 +37,7 @@ symbols = {}
 preprocess_rst = \
 {
 	'manual.rst':'manual-ref.rst',
+	'upgrade_to_1.2.rst':'upgrade_to_1.2-ref.rst',
 	'settings.rst':'settings-ref.rst'
 }
 
@@ -68,7 +73,6 @@ category_mapping = {
 	'add_torrent_params.hpp': 'Core',
 	'session_status.hpp': 'Core',
 	'error_code.hpp': 'Error Codes',
-	'file.hpp': 'File',
 	'storage.hpp': 'Custom Storage',
 	'storage_defs.hpp': 'Storage',
 	'file_storage.hpp': 'Storage',
@@ -77,9 +81,7 @@ category_mapping = {
 	'ut_metadata.hpp': 'Plugins',
 	'ut_pex.hpp': 'Plugins',
 	'ut_trackers.hpp': 'Plugins',
-	'metadata_transfer.hpp': 'Plugins',
 	'smart_ban.hpp': 'Plugins',
-	'lt_trackers.hpp': 'Plugins',
 	'create_torrent.hpp': 'Create Torrents',
 	'alert.hpp': 'Alerts',
 	'alert_types.hpp': 'Alerts',
@@ -96,8 +98,8 @@ category_mapping = {
 	'bitfield.hpp': 'Utility',
 	'sha1_hash.hpp': 'Utility',
 	'hasher.hpp': 'Utility',
+	'hasher512.hpp': 'Utility',
 	'identify_client.hpp': 'Utility',
-	'thread.hpp': 'Utility',
 	'ip_filter.hpp': 'Filter',
 	'session_settings.hpp': 'Settings',
 	'settings_pack.hpp': 'Settings',
@@ -149,7 +151,7 @@ def is_visible(desc):
 	return True
 
 def highlight_signature(s):
-	name = s.split('(')
+	name = s.split('(', 1)
 	name2 = name[0].split(' ')
 	if len(name2[-1]) == 0: return s
 
@@ -168,6 +170,9 @@ def highlight_signature(s):
 	# we also have to escape colons
 	name[1] = name[1].replace(':', '\\:')
 
+	# escape trailing underscores
+	name[1] = name[1].replace('_', '\\_')
+
 	# comments in signatures are italic
 	name[1] = name[1].replace('/\\*', '*/\\*')
 	name[1] = name[1].replace('\\*/', '\\*/*')
@@ -182,16 +187,44 @@ def html_sanitize(s):
 		else: ret += i
 	return ret
 
-def looks_like_variable(line):
+def looks_like_namespace(line):
 	line = line.strip()
-	if not line.endswith(';'): return False
+	if line.startswith('namespace'): return True
+	return False
+
+def looks_like_blank(line):
+	line = line.split('//')[0]
+	line = line.replace('{', '')
+	line = line.replace('}', '')
+	line = line.replace('[', '')
+	line = line.replace(']', '')
+	line = line.replace(';', '')
+	line = line.strip()
+	return len(line) == 0
+
+def looks_like_variable(line):
+	line = line.split('//')[0]
+	line = line.strip()
 	if not ' ' in line and not '\t' in line: return False
 	if line.startswith('friend '): return False
 	if line.startswith('enum '): return False
 	if line.startswith(','): return False
 	if line.startswith(':'): return False
 	if line.startswith('typedef'): return False
-	return True
+	if ' = ' in line: return True
+	if line.endswith(';'): return True
+	return False
+
+def looks_like_forward_decl(line):
+	line = line.split('//')[0]
+	line = line.strip()
+	if not line.endswith(';'): return False
+	if '{' in line: return False
+	if '}' in line: return False
+	if line.startswith('friend '): return True
+	if line.startswith('struct '): return True
+	if line.startswith('class '): return True
+	return False
 
 def looks_like_function(line):
 	if line.startswith('friend'): return False
@@ -270,7 +303,8 @@ def parse_class(lno, lines, filename):
 		state = 'private'
 		class_type = 'class'
 
-	name = decl.split(':')[0].replace('class ', '').replace('struct ', '').strip()
+	name = decl.split(':')[0].replace('class ', '').replace('struct ', '').replace('final', '').strip()
+
 
 	while lno < len(lines):
 		l = lines[lno].strip()
@@ -300,6 +334,24 @@ def parse_class(lno, lines, filename):
 
 		if l.startswith('//'):
 			if verbose: print 'desc  %s' % l
+
+			# plain output prints just descriptions and filters out c++ code.
+			# it's used to run spell checker over
+			if plain_output:
+				line = l.split('//')[1]
+				# if the first character is a space, strip it
+				if len(line) > 0 and line[0] == ' ': line = line[1:]
+				global in_code
+				if in_code != None and not line.startswith(in_code) and len(line) > 1:
+					in_code = None
+
+				if line.strip().startswith('.. code::'):
+					in_code = line.split('.. code::')[0] + '\t'
+
+				# strip out C++ code from the plain text output since it's meant for
+				# running spell checking over
+				if not line.strip().startswith('.. ') and in_code == None:
+					plain_file.write(line + '\n')
 			l = l[2:]
 			if len(l) and l[0] == ' ': l = l[1:]
 			context += l + '\n'
@@ -342,9 +394,15 @@ def parse_class(lno, lines, filename):
 			continue
 
 		if looks_like_variable(l):
+			if verbose: print 'var     %s' % l
 			if not is_visible(context):
 				continue
-			n = l.split(' ')[-1].split(':')[0].split(';')[0]
+			l = l.split('//')[0].strip()
+			# the name may look like this:
+			# std::uint8_t fails : 7;
+			# int scrape_downloaded = -1;
+			# static constexpr peer_flags_t interesting{0x1};
+			n = l.split('=')[0].split('{')[0].strip().split(' : ')[0].split(' ')[-1].split(':')[0].split(';')[0]
 			if context == '' and blanks == 0 and len(fields):
 				fields[-1]['names'].append(n)
 				fields[-1]['signatures'].append(l)
@@ -358,6 +416,7 @@ def parse_class(lno, lines, filename):
 			continue
 
 		if l.startswith('enum '):
+			if verbose: print 'enum    %s' % l
 			if not is_visible(context):
 				consume_block(lno - 1, lines)
 			else:
@@ -372,7 +431,14 @@ def parse_class(lno, lines, filename):
 			continue
 
 		context = ''
-		if verbose: print '??      %s' % l
+
+		if verbose:
+			if looks_like_forward_decl(l) \
+				or looks_like_blank(l) \
+				or looks_like_namespace(l):
+				print '--      %s' % l
+			else:
+				print '??      %s' % l
 
 	if len(name) > 0:
 		print '\x1b[31mFAILED TO PARSE CLASS\x1b[0m %s\nfile: %s:%d' % (name, filename, lno)
@@ -491,33 +557,26 @@ def consume_ifdef(lno, lines, warn_on_ifdefs = False):
 
 	if verbose: print 'prep  %s' % l
 
-	if warn_on_ifdefs and ('TORRENT_DEBUG' in l):
+	if warn_on_ifdefs and l.strip().startswith('#if'):
 		while l.endswith('\\'):
 			lno += 1
 			l += lines[lno].strip()
 			if verbose: print 'prep  %s' % lines[lno].trim()
 		define = trim_define(l)
-		print '\x1b[31mWARNING: possible ABI breakage in public struct! "%s" \x1b[34m %s:%d\x1b[0m' % \
-			(define, filename, lno)
-		# we've already warned once, no need to do it twice
-		warn_on_ifdefs = False
-
-	if warn_on_ifdefs and '#if' in l:
-		while l.endswith('\\'):
-			lno += 1
-			l += lines[lno].strip()
-			if verbose: print 'prep  %s' % lines[lno].trim()
-		define = trim_define(l)
-		if define != '':
+		if 'TORRENT_' in define:
+			print '\x1b[31mWARNING: possible ABI breakage in public struct! "%s" \x1b[34m %s:%d\x1b[0m' % \
+				(define, filename, lno)
+			# we've already warned once, no need to do it twice
+			warn_on_ifdefs = False
+		elif define != '':
 			print '\x1b[33msensitive define in public struct: "%s"\x1b[34m %s:%d\x1b[0m' % (define, filename, lno)
 
-	if l == '#ifndef TORRENT_NO_DEPRECATE' or \
-		l == '#ifdef TORRENT_DEBUG' or \
-		(l.startswith('#if ') and ' TORRENT_USE_ASSERTS' in l) or \
-		(l.startswith('#if ') and ' TORRENT_USE_INVARIANT_CHECKS' in l) or \
-		l == '#ifdef TORRENT_ASIO_DEBUGGING' or \
-		(l.startswith('#if') and 'defined TORRENT_DEBUG' in l) or \
-		(l.startswith('#if') and 'defined TORRENT_ASIO_DEBUGGING' in l):
+	if (l.startswith('#if') and (
+		' TORRENT_USE_ASSERTS' in l or
+		' TORRENT_USE_INVARIANT_CHECKS' in l or
+		' TORRENT_ASIO_DEBUGGING' in l) or
+		l == '#ifndef TORRENT_NO_DEPRECATE'
+		):
 		while lno < len(lines):
 			l = lines[lno].strip()
 			lno += 1
@@ -583,6 +642,7 @@ for filename in files:
 			continue
 
 		if (l == 'namespace detail' or \
+			l == 'namespace impl' or \
 			l == 'namespace aux') \
 			and not internal:
 			lno = consume_block(lno, lines)
@@ -652,7 +712,13 @@ for filename in files:
 			continue
 
 		blanks += 1
-		if verbose: print '??    %s' % l
+		if verbose:
+			if looks_like_forward_decl(l) \
+				or looks_like_blank(l) \
+				or looks_like_namespace(l):
+				print '--    %s' % l
+			else:
+				print '??    %s' % l
 
 		context = ''
 	h.close()
@@ -782,7 +848,9 @@ def linkify_symbols(string):
 #			print '  literal: "%s"' % l
 			ret.append(l)
 			continue
-		if l.endswith('::') or '.. code::' in l:
+		if l.strip() == '.. parsed-literal::' or \
+			l.strip().startswith('.. code::') or \
+			(not l.strip().startswith('..') and l.endswith('::')):
 #			print '  start literal: "%s"' % l
 			in_literal = True
 		words = l.split(' ')
@@ -933,6 +1001,8 @@ reference documentation
 
 ''')
 
+out.write('`single-page version`__\n\n__ single-page-ref.html\n\n')
+
 for i in range(4):
 
 	out.write('.. container:: main-toc\n\n')
@@ -949,7 +1019,11 @@ for cat in categories:
 
 	out.write('''
 :Author: Arvid Norberg, arvid@libtorrent.org
-:Version: 1.1.0
+:Version: 1.2.0
+
+`home`__
+
+__ reference.html
 
 %s
 

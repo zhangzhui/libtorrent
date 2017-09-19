@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2006-2015, Arvid Norberg & Daniel Wallin
+Copyright (c) 2006-2016, Arvid Norberg & Daniel Wallin
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -38,15 +38,14 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include <libtorrent/io.hpp>
 
-namespace libtorrent { namespace dht
-{
+namespace libtorrent { namespace dht {
 
-observer_ptr bootstrap::new_observer(void* ptr
-	, udp::endpoint const& ep, node_id const& id)
+observer_ptr bootstrap::new_observer(udp::endpoint const& ep
+	, node_id const& id)
 {
-	observer_ptr o(new (ptr) get_peers_observer(this, ep, id));
-#if defined TORRENT_DEBUG || TORRENT_RELEASE_ASSERTS
-	o->m_in_constructor = false;
+	auto o = m_node.m_rpc.allocate_observer<get_peers_observer>(self(), ep, id);
+#if TORRENT_USE_ASSERTS
+	if (o) o->m_in_constructor = false;
 #endif
 	return o;
 }
@@ -58,17 +57,30 @@ bool bootstrap::invoke(observer_ptr o)
 	entry& a = e["a"];
 
 	e["q"] = "get_peers";
-	a["info_hash"] = target().to_string();
+	// in case our node id changes during the bootstrap, make sure to always use
+	// the current node id (rather than the target stored in the traversal
+	// algorithm)
+	node_id target = get_node().nid();
+	make_id_secret(target);
+	a["info_hash"] = target.to_string();
+
+	if (o->flags & observer::flag_initial)
+	{
+		// if this packet is being sent to a bootstrap/router node, let it know
+		// that we're actually bootstrapping (as opposed to being collateral
+		// traffic).
+		a["bs"] = 1;
+	}
 
 //	e["q"] = "find_node";
-//	a["target"] = target().to_string();
-	m_node.stats_counters().inc_stats_counter(counters::dht_find_node_out);
+//	a["target"] = target.to_string();
+	m_node.stats_counters().inc_stats_counter(counters::dht_get_peers_out);
 	return m_node.m_rpc.invoke(e, o->target_ep(), o);
 }
 
 bootstrap::bootstrap(
 	node& dht_node
-	, node_id target
+	, node_id const& target
 	, done_callback const& callback)
 	: get_peers(dht_node, target, get_peers::data_callback(), callback, false)
 {
@@ -76,31 +88,20 @@ bootstrap::bootstrap(
 
 char const* bootstrap::name() const { return "bootstrap"; }
 
-void bootstrap::trim_seed_nodes()
-{
-	// when we're bootstrapping, we want to start as far away from our ID as
-	// possible, to cover as much as possible of the ID space. So, remove all
-	// nodes except for the 32 that are farthest away from us
-	if (m_results.size() > 32)
-		m_results.erase(m_results.begin(), m_results.end() - 32);
-}
-
 void bootstrap::done()
 {
 #ifndef TORRENT_DISABLE_LOGGING
-	get_node().observer()->log(dht_logger::traversal, "[%p] bootstrap done, pinging remaining nodes"
-		, static_cast<void*>(this));
+	get_node().observer()->log(dht_logger::traversal, "[%u] bootstrap done, pinging remaining nodes"
+		, id());
 #endif
 
-	for (std::vector<observer_ptr>::iterator i = m_results.begin()
-		, end(m_results.end()); i != end; ++i)
+	for (auto const& o : m_results)
 	{
-		if ((*i)->flags & observer::flag_queried) continue;
+		if (o->flags & observer::flag_queried) continue;
 		// this will send a ping
-		m_node.add_node((*i)->target_ep());
+		m_node.add_node(o->target_ep());
 	}
 	get_peers::done();
 }
 
 } } // namespace libtorrent::dht
-

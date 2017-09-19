@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2010-2015, Arvid Norberg
+Copyright (c) 2010-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -33,17 +33,18 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef TORRENT_COPY_PTR
 #define TORRENT_COPY_PTR
 
-namespace libtorrent
-{
+namespace libtorrent {
+
 	template <class T>
 	struct copy_ptr
 	{
 		copy_ptr(): m_ptr(0) {}
-		copy_ptr(T* t): m_ptr(t) {}
+		explicit copy_ptr(T* t): m_ptr(t) {}
 		copy_ptr(copy_ptr const& p): m_ptr(p.m_ptr ? new T(*p.m_ptr) : 0) {}
 		void reset(T* t = 0) { delete m_ptr; m_ptr = t; }
 		copy_ptr& operator=(copy_ptr const& p)
 		{
+			if (m_ptr == p.m_ptr) return *this;
 			delete m_ptr;
 			m_ptr = p.m_ptr ? new T(*p.m_ptr) : 0;
 			return *this;
@@ -58,7 +59,7 @@ namespace libtorrent
 			m_ptr = p.m_ptr;
 			p.m_ptr = tmp;
 		}
-		operator bool() const { return m_ptr != 0; }
+		explicit operator bool() const { return m_ptr != 0; }
 		~copy_ptr() { delete m_ptr; }
 	private:
 		T* m_ptr;
@@ -66,4 +67,3 @@ namespace libtorrent
 }
 
 #endif // TORRENT_COPY_PTR
-

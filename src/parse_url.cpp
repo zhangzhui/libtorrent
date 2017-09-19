@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2008-2015, Arvid Norberg
+Copyright (c) 2008-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -30,14 +30,15 @@ POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#include "libtorrent/parse_url.hpp"
 #include <algorithm>
 
-namespace libtorrent
-{
+#include "libtorrent/parse_url.hpp"
+#include "libtorrent/string_util.hpp"
+
+namespace libtorrent {
 
 	// returns protocol, auth, hostname, port, path
-	boost::tuple<std::string, std::string, std::string, int, std::string>
+	std::tuple<std::string, std::string, std::string, int, std::string>
 		parse_url_components(std::string url, error_code& ec)
 	{
 		std::string hostname; // hostname only
@@ -101,16 +102,19 @@ namespace libtorrent
 				ec = errors::expected_close_bracket_in_address;
 				goto exit;
 			}
+			// strip the brackets
+			hostname.assign(start + 1, port_pos);
 			port_pos = std::find(port_pos, url.end(), ':');
 		}
 		else
 		{
 			port_pos = std::find(start, url.end(), ':');
+			if (port_pos < end) hostname.assign(start, port_pos);
+			else hostname.assign(start, end);
 		}
 
 		if (port_pos < end)
 		{
-			hostname.assign(start, port_pos);
 			++port_pos;
 			for (std::string::iterator i = port_pos; i < end; ++i)
 			{
@@ -120,16 +124,44 @@ namespace libtorrent
 			}
 			port = std::atoi(std::string(port_pos, end).c_str());
 		}
-		else
-		{
-			hostname.assign(start, end);
-		}
 
 		start = end;
 exit:
-		return boost::make_tuple(protocol, auth, hostname, port
+		return std::make_tuple(std::move(protocol)
+			, std::move(auth)
+			, std::move(hostname)
+			, port
 			, std::string(start, url.end()));
 	}
 
-}
+	// splits a url into the base url and the path
+	std::tuple<std::string, std::string>
+		split_url(std::string url, error_code& ec)
+	{
+		std::string base;
+		std::string path;
 
+		// PARSE URL
+		std::string::iterator pos
+			= std::find(url.begin(), url.end(), ':');
+
+		if (pos == url.end() || url.end() - pos < 3
+			|| *(pos + 1) != '/' || *(pos + 2) != '/')
+		{
+			ec = errors::unsupported_url_protocol;
+			return std::make_tuple(url, path);
+		}
+		pos += 3; // skip "://"
+
+		pos = std::find(pos, url.end(), '/');
+		if (pos == url.end())
+		{
+			return std::make_tuple(std::move(url), std::move(path));
+		}
+
+		base.assign(url.begin(), pos);
+		path.assign(pos, url.end());
+		return std::make_tuple(std::move(base), std::move(path));
+	}
+
+}

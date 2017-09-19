@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2015, Arvid Norberg
+Copyright (c) 2003-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -37,12 +37,14 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/peer_info.hpp" // for peer_info flags
 #include "libtorrent/performance_counters.hpp" // for counters
 #include "libtorrent/request_blocks.hpp"
+#include "libtorrent/alert_manager.hpp"
+#include "libtorrent/aux_/has_block.hpp"
 
 #include <vector>
 
-namespace libtorrent
-{
-	int source_rank(int source_bitmask)
+namespace libtorrent {
+
+	int source_rank(peer_source_flags_t const source_bitmask)
 	{
 		int ret = 0;
 		if (source_bitmask & peer_info::tracker) ret |= 1 << 5;
@@ -72,28 +74,33 @@ namespace libtorrent
 		// initialized after we have the metadata
 		if (!t.are_files_checked()) return false;
 
-		TORRENT_ASSERT(c.peer_info_struct() != 0 || c.type() != peer_connection::bittorrent_connection);
+		// we don't want to request more blocks while trying to gracefully pause
+		if (t.graceful_pause()) return false;
 
-		bool time_critical_mode = t.num_time_critical_pieces() > 0;
+		TORRENT_ASSERT(c.peer_info_struct() != nullptr
+			|| c.type() != connection_type::bittorrent);
 
-		int desired_queue_size = c.desired_queue_size();
+		bool const time_critical_mode = t.num_time_critical_pieces() > 0;
 
 		// in time critical mode, only have 1 outstanding request at a time
 		// via normal requests
-		if (time_critical_mode)
-			desired_queue_size = (std::min)(1, desired_queue_size);
+		int const desired_queue_size = time_critical_mode
+			? 1 : c.desired_queue_size();
 
 		int num_requests = desired_queue_size
 			- int(c.download_queue().size())
 			- int(c.request_queue().size());
 
 #ifndef TORRENT_DISABLE_LOGGING
-		c.peer_log(peer_log_alert::info, "PIECE_PICKER"
-			, "dlq: %d rqq: %d target: %d req: %d engame: %d"
-			, int(c.download_queue().size()), int(c.request_queue().size())
-			, c.desired_queue_size(), num_requests, c.endgame());
+		if (c.should_log(peer_log_alert::info))
+		{
+			c.peer_log(peer_log_alert::info, "PIECE_PICKER"
+				, "dlq: %d rqq: %d target: %d req: %d engame: %d"
+				, int(c.download_queue().size()), int(c.request_queue().size())
+				, desired_queue_size, num_requests, c.endgame());
+		}
 #endif
-		TORRENT_ASSERT(c.desired_queue_size() > 0);
+		TORRENT_ASSERT(desired_queue_size > 0);
 		// if our request queue is already full, we
 		// don't have to make any new requests yet
 		if (num_requests <= 0) return false;
@@ -118,7 +125,7 @@ namespace libtorrent
 		// the number of blocks we want, but it will try to make the picked
 		// blocks be from whole pieces, possibly by returning more blocks
 		// than we requested.
-#ifdef TORRENT_DEBUG
+#if TORRENT_USE_ASSERTS
 		error_code ec;
 		TORRENT_ASSERT(c.remote() == c.get_socket()->remote_endpoint(ec) || ec);
 #endif
@@ -128,22 +135,22 @@ namespace libtorrent
 		std::vector<pending_block> const& dq = c.download_queue();
 		std::vector<pending_block> const& rq = c.request_queue();
 
-		std::vector<int> const& suggested = c.suggested_pieces();
-		bitfield const* bits = &c.get_bitfield();
-		bitfield fast_mask;
-		
+		std::vector<piece_index_t> const& suggested = c.suggested_pieces();
+		auto const* bits = &c.get_bitfield();
+		typed_bitfield<piece_index_t> fast_mask;
+
 		if (c.has_peer_choked())
 		{
 			// if we are choked we can only pick pieces from the
 			// allowed fast set. The allowed fast set is sorted
 			// in ascending priority order
-			std::vector<int> const& allowed_fast = c.allowed_fast();
 
 			// build a bitmask with only the allowed pieces in it
 			fast_mask.resize(c.get_bitfield().size(), false);
-			for (std::vector<int>::const_iterator i = allowed_fast.begin()
-				, end(allowed_fast.end()); i != end; ++i)
-				if ((*bits)[*i]) fast_mask.set_bit(*i);
+			for (auto const& i : c.allowed_fast())
+			{
+				if ((*bits)[i]) fast_mask.set_bit(i);
+			}
 			bits = &fast_mask;
 		}
 
@@ -155,15 +162,23 @@ namespace libtorrent
 		// the last argument is if we should prefer whole pieces
 		// for this peer. If we're downloading one piece in 20 seconds
 		// then use this mode.
-		p.pick_pieces(*bits, interesting_pieces
+		picker_flags_t const flags = p.pick_pieces(*bits, interesting_pieces
 			, num_requests, prefer_contiguous_blocks, c.peer_info_struct()
 			, c.picker_options(), suggested, t.num_peers()
 			, ses.stats_counters());
 
 #ifndef TORRENT_DISABLE_LOGGING
+		if (t.alerts().should_post<picker_log_alert>()
+			&& !interesting_pieces.empty())
+		{
+			t.alerts().emplace_alert<picker_log_alert>(t.get_handle(), c.remote()
+				, c.pid(), flags, &interesting_pieces[0], int(interesting_pieces.size()));
+		}
 		c.peer_log(peer_log_alert::info, "PIECE_PICKER"
 			, "prefer_contiguous: %d picked: %d"
 			, prefer_contiguous_blocks, int(interesting_pieces.size()));
+#else
+		TORRENT_UNUSED(flags);
 #endif
 
 		// if the number of pieces we have + the number of pieces
@@ -173,7 +188,7 @@ namespace libtorrent
 		// also, if we already have at least one outstanding
 		// request, we shouldn't pick any busy pieces either
 		// in time critical mode, it's OK to request busy blocks
-		bool dont_pick_busy_blocks
+		bool const dont_pick_busy_blocks
 			= ((ses.settings().get_bool(settings_pack::strict_end_game_mode)
 				&& p.get_download_queue_size() < p.num_want_left())
 				|| dq.size() + rq.size() > 0)
@@ -218,18 +233,18 @@ namespace libtorrent
 			// pieces we didn't request. Those aren't marked in the
 			// piece picker, but we still keep track of them in the
 			// download queue
-			if (std::find_if(dq.begin(), dq.end(), has_block(*i)) != dq.end()
-				|| std::find_if(rq.begin(), rq.end(), has_block(*i)) != rq.end())
+			if (std::find_if(dq.begin(), dq.end(), aux::has_block(*i)) != dq.end()
+				|| std::find_if(rq.begin(), rq.end(), aux::has_block(*i)) != rq.end())
 			{
-#ifdef TORRENT_DEBUG
+#if TORRENT_USE_ASSERTS
 				std::vector<pending_block>::const_iterator j
-					= std::find_if(dq.begin(), dq.end(), has_block(*i));
+					= std::find_if(dq.begin(), dq.end(), aux::has_block(*i));
 				if (j != dq.end()) TORRENT_ASSERT(j->timed_out || j->not_wanted);
 #endif
 #ifndef TORRENT_DISABLE_LOGGING
 				c.peer_log(peer_log_alert::info, "PIECE_PICKER"
 					, "not_picking: %d,%d already in queue"
-					, i->piece_index, i->block_index);
+					, static_cast<int>(i->piece_index), i->block_index);
 #endif
 				continue;
 			}
@@ -237,7 +252,7 @@ namespace libtorrent
 			// ok, we found a piece that's not being downloaded
 			// by somebody else. request it from this peer
 			// and return
-			if (!c.add_request(*i, 0)) continue;
+			if (!c.add_request(*i, {})) continue;
 			TORRENT_ASSERT(p.num_peers(*i) == 1);
 			TORRENT_ASSERT(p.is_requested(*i));
 			num_requests--;
@@ -262,7 +277,7 @@ namespace libtorrent
 		// and can't find any, that doesn't count as end-game
 		if (!c.has_peer_choked())
 			c.set_endgame(true);
-	
+
 		// if we don't have any potential busy blocks to request
 		// or if we already have outstanding requests, don't
 		// pick a busy piece
@@ -272,7 +287,7 @@ namespace libtorrent
 			return true;
 		}
 
-#ifdef TORRENT_DEBUG
+#if TORRENT_USE_ASSERTS
 		piece_picker::downloading_piece st;
 		p.piece_info(busy_block.piece_index, st);
 		TORRENT_ASSERT(st.requested + st.finished + st.writing
@@ -283,7 +298,7 @@ namespace libtorrent
 		TORRENT_ASSERT(!p.is_finished(busy_block));
 		TORRENT_ASSERT(p.num_peers(busy_block) > 0);
 
-		c.add_request(busy_block, peer_connection::req_busy);
+		c.add_request(busy_block, peer_connection::busy);
 		return true;
 	}
 

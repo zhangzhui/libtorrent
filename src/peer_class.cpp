@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2011-2015, Arvid Norberg
+Copyright (c) 2011-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -33,12 +33,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/peer_class.hpp"
 #include "libtorrent/peer_connection.hpp"
 
-#ifdef TORRENT_USE_VALGRIND
-#include <valgrind/memcheck.h>
-#endif
+namespace libtorrent {
 
-namespace libtorrent
-{
 	void peer_class::set_upload_limit(int limit)
 	{
 		TORRENT_ASSERT(limit >= -1);
@@ -77,64 +73,53 @@ namespace libtorrent
 		priority[peer_connection::download_channel] = (std::max)(1, (std::min)(255, pci->download_priority));
 	}
 
-	peer_class_t peer_class_pool::new_peer_class(std::string const& label)
+	peer_class_t peer_class_pool::new_peer_class(std::string label)
 	{
-		peer_class_t ret = 0;
+		peer_class_t ret{0};
 		if (!m_free_list.empty())
 		{
 			ret = m_free_list.back();
 			m_free_list.pop_back();
+			m_peer_classes[ret] = peer_class(std::move(label));
 		}
 		else
 		{
-			ret = m_peer_classes.size();
-			m_peer_classes.push_back(boost::shared_ptr<peer_class>());
+			ret = m_peer_classes.end_index();
+			m_peer_classes.emplace_back(std::move(label));
 		}
 
-		TORRENT_ASSERT(m_peer_classes[ret].get() == 0);
-		m_peer_classes[ret] = boost::make_shared<peer_class>(label);
 		return ret;
 	}
 
 	void peer_class_pool::decref(peer_class_t c)
 	{
-#ifdef TORRENT_USE_VALGRIND
-		VALGRIND_CHECK_VALUE_IS_DEFINED(c);
-#endif
-		TORRENT_ASSERT(c < m_peer_classes.size());
-		TORRENT_ASSERT(m_peer_classes[c].get());
+		TORRENT_ASSERT(c < m_peer_classes.end_index());
+		TORRENT_ASSERT(m_peer_classes[c].in_use);
+		TORRENT_ASSERT(m_peer_classes[c].references > 0);
 
-		--m_peer_classes[c]->references;
-		if (m_peer_classes[c]->references) return;
-		m_peer_classes[c].reset();
+		--m_peer_classes[c].references;
+		if (m_peer_classes[c].references) return;
+		m_peer_classes[c].clear();
 		m_free_list.push_back(c);
 	}
 
 	void peer_class_pool::incref(peer_class_t c)
 	{
-#ifdef TORRENT_USE_VALGRIND
-		VALGRIND_CHECK_VALUE_IS_DEFINED(c);
-#endif
-		TORRENT_ASSERT(c < m_peer_classes.size());
-		TORRENT_ASSERT(m_peer_classes[c].get());
+		TORRENT_ASSERT(c < m_peer_classes.end_index());
+		TORRENT_ASSERT(m_peer_classes[c].in_use);
 
-		++m_peer_classes[c]->references;
+		++m_peer_classes[c].references;
 	}
 
 	peer_class* peer_class_pool::at(peer_class_t c)
 	{
-#ifdef TORRENT_USE_VALGRIND
-		VALGRIND_CHECK_VALUE_IS_DEFINED(c);
-#endif
-		if (c >= m_peer_classes.size()) return 0;
-		return m_peer_classes[c].get();
+		if (c >= m_peer_classes.end_index() || !m_peer_classes[c].in_use) return nullptr;
+		return &m_peer_classes[c];
 	}
 
 	peer_class const* peer_class_pool::at(peer_class_t c) const
 	{
-		if (c >= m_peer_classes.size()) return 0;
-		return m_peer_classes[c].get();
+		if (c >= m_peer_classes.end_index() || !m_peer_classes[c].in_use) return nullptr;
+		return &m_peer_classes[c];
 	}
-
 }
-

@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2015, Arvid Norberg
+Copyright (c) 2007-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -35,15 +35,8 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/aux_/disable_warnings_push.hpp"
 
-#include <boost/function/function1.hpp>
-#include <boost/function/function2.hpp>
-#include <boost/function/function5.hpp>
-#include <boost/bind.hpp>
-#include <boost/shared_ptr.hpp>
-#include <boost/enable_shared_from_this.hpp>
 #include <boost/noncopyable.hpp>
-#include <vector>
-#include <string>
+#include <boost/optional.hpp>
 
 #ifdef TORRENT_USE_OPENSSL
 #include <boost/asio/ssl/context.hpp>
@@ -51,35 +44,38 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
+#include <functional>
+#include <vector>
+#include <string>
+
 #include "libtorrent/socket.hpp"
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/http_parser.hpp"
 #include "libtorrent/deadline_timer.hpp"
 #include "libtorrent/assert.hpp"
 #include "libtorrent/socket_type.hpp"
-#include "libtorrent/session_settings.hpp"
-
 #include "libtorrent/i2p_stream.hpp"
+#include "libtorrent/aux_/vector.hpp"
+#include "libtorrent/resolver_interface.hpp"
 
-namespace libtorrent
-{
+namespace libtorrent {
 
 struct http_connection;
 struct resolver_interface;
 
-const int default_max_bottled_buffer_size = 2*1024*1024;
+const int default_max_bottled_buffer_size = 2 * 1024 * 1024;
 
-typedef boost::function<void(error_code const&
-	, http_parser const&, char const* data, int size, http_connection&)> http_handler;
+typedef std::function<void(error_code const&
+	, http_parser const&, span<char const> data, http_connection&)> http_handler;
 
-typedef boost::function<void(http_connection&)> http_connect_handler;
+typedef std::function<void(http_connection&)> http_connect_handler;
 
-typedef boost::function<void(http_connection&, std::vector<tcp::endpoint>&)> http_filter_handler;
+typedef std::function<void(http_connection&, std::vector<tcp::endpoint>&)> http_filter_handler;
 
 // when bottled, the last two arguments to the handler
 // will always be 0
 struct TORRENT_EXTRA_EXPORT http_connection
-	: boost::enable_shared_from_this<http_connection>
+	: std::enable_shared_from_this<http_connection>
 	, boost::noncopyable
 {
 	http_connection(io_service& ios
@@ -104,20 +100,20 @@ struct TORRENT_EXTRA_EXPORT http_connection
 	std::string m_sendbuffer;
 
 	void get(std::string const& url, time_duration timeout = seconds(30)
-		, int prio = 0, proxy_settings const* ps = 0, int handle_redirects = 5
+		, int prio = 0, aux::proxy_settings const* ps = nullptr, int handle_redirects = 5
 		, std::string const& user_agent = std::string()
-		, address const& bind_addr = address_v4::any()
-		, int resolve_flags = 0, std::string const& auth_ = std::string()
+		, boost::optional<address> const& bind_addr = boost::optional<address>()
+		, resolver_flags resolve_flags = resolver_flags{}, std::string const& auth_ = std::string()
 #if TORRENT_USE_I2P
 		, i2p_connection* i2p_conn = 0
 #endif
 		);
 
 	void start(std::string const& hostname, int port
-		, time_duration timeout, int prio = 0, proxy_settings const* ps = 0
+		, time_duration timeout, int prio = 0, aux::proxy_settings const* ps = nullptr
 		, bool ssl = false, int handle_redirect = 5
-		, address const& bind_addr = address_v4::any()
-		, int resolve_flags = 0
+		, boost::optional<address> const& bind_addr = boost::optional<address>()
+		, resolver_flags resolve_flags = resolver_flags{}
 #if TORRENT_USE_I2P
 		, i2p_connection* i2p_conn = 0
 #endif
@@ -142,19 +138,23 @@ private:
 	void on_connect(error_code const& e);
 	void on_write(error_code const& e);
 	void on_read(error_code const& e, std::size_t bytes_transferred);
-	static void on_timeout(boost::weak_ptr<http_connection> p
+	static void on_timeout(std::weak_ptr<http_connection> p
 		, error_code const& e);
 	void on_assign_bandwidth(error_code const& e);
 
-	void callback(error_code e, char* data = 0, int size = 0);
+	void callback(error_code e, span<char> data = {});
 
-	std::vector<char> m_recvbuffer;
+	aux::vector<char> m_recvbuffer;
 
 	std::string m_hostname;
 	std::string m_url;
 	std::string m_user_agent;
 
-	std::vector<tcp::endpoint> m_endpoints;
+	aux::vector<tcp::endpoint> m_endpoints;
+
+	// if the current connection attempt fails, we'll connect to the
+	// endpoint with this index (in m_endpoints) next
+	int m_next_ep;
 
 	socket_type m_sock;
 
@@ -186,11 +186,10 @@ private:
 
 	// specifies whether or not the connection is
 	// configured to use a proxy
-	proxy_settings m_proxy;
+	aux::proxy_settings m_proxy;
 
-	// the address to bind to. address_v4::any()
-	// means do not bind
-	address m_bind_addr;
+	// the address to bind to
+	boost::optional<address> m_bind_addr;
 
 	// if username password was passed in, remember it in case we need to
 	// re-issue the request for a redirect
@@ -203,7 +202,7 @@ private:
 
 	// maximum size of bottled buffer
 	int m_max_bottled_buffer_size;
-	
+
 	// the current download limit, in bytes per second
 	// 0 is unlimited.
 	int m_rate_limit;
@@ -216,9 +215,9 @@ private:
 	int m_priority;
 
 	// used for DNS lookups
-	int m_resolve_flags;
+	resolver_flags m_resolve_flags;
 
-	boost::uint16_t m_port;
+	std::uint16_t m_port;
 
 	// bottled means that the handler is called once, when
 	// everything is received (and buffered in memory).

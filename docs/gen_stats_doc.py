@@ -7,9 +7,12 @@ f = open('../include/libtorrent/performance_counters.hpp')
 counter_type = ''
 
 for l in f:
+
+	# ignore anything after //
+	if '//' in l: l = l.split('//')[0]
+
 	l = l.strip()
 
-	if l.startswith('//'): continue
 	if l.startswith('#'): continue
 	if l == '': continue
 
@@ -17,7 +20,7 @@ for l in f:
 		counter_type = 'counter'
 		continue
 
-	if 'enum stats_gauges_t' in l:
+	if 'enum stats_gauge_t' in l:
 		counter_type = 'gauge'
 		continue
 
@@ -78,9 +81,19 @@ names = []
 types = []
 
 for l in f:
+	description_line = l.lstrip().startswith('//')
+
 	l = l.strip()
 
-	if l.startswith('// '):
+	if mode == 'ignore':
+		if '#endif' in l: mode = ''
+		continue
+
+	if 'TORRENT_NO_DEPRECATE' in l:
+		mode = 'ignore'
+		continue
+
+	if description_line == True:
 		if len(names) > 0:
 			render_section(names, description, types)
 			description = ''

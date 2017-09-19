@@ -37,35 +37,27 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/peer_id.hpp"
 #include "libtorrent/address.hpp"
 #include "libtorrent/io_service.hpp"
+#include "libtorrent/time.hpp"
 #include "libtorrent/disk_buffer_holder.hpp"
-
-#ifndef TORRENT_DISABLE_DHT
-#include "libtorrent/socket.hpp"
-#endif
-
+#include "libtorrent/error_code.hpp"
 #include "libtorrent/socket.hpp" // for tcp::endpoint
+#include "libtorrent/aux_/vector.hpp"
+#include "libtorrent/aux_/listen_socket_handle.hpp"
+#include "libtorrent/session_types.hpp"
 
-#include "libtorrent/aux_/disable_warnings_push.hpp"
-
-#include <boost/weak_ptr.hpp>
-#include <boost/function.hpp>
-
-#ifndef TORRENT_DISABLE_LOGGING
-#include <boost/shared_ptr.hpp>
-#endif
+#include <functional>
+#include <memory>
 
 #ifdef TORRENT_USE_OPENSSL
+#include "libtorrent/aux_/disable_warnings_push.hpp"
 #include <boost/asio/ssl/context.hpp>
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
 #endif
 
-#include "libtorrent/aux_/disable_warnings_pop.hpp"
+namespace libtorrent {
 
-namespace libtorrent
-{
 	class peer_connection;
 	class torrent;
-	struct proxy_settings;
-	struct socket_job;
 #ifndef TORRENT_NO_DEPRECATE
 	struct pe_settings;
 #endif
@@ -92,26 +84,27 @@ namespace libtorrent
 	struct resolver_interface;
 
 #ifndef TORRENT_DISABLE_DHT
-	namespace dht
-	{
+namespace dht {
+
 		struct dht_tracker;
 	}
 #endif
 }
 
-namespace libtorrent { namespace aux
-{
+namespace libtorrent { namespace aux {
+
+	struct proxy_settings;
 	struct session_settings;
 
 #if !defined TORRENT_DISABLE_LOGGING || TORRENT_USE_ASSERTS
 	// This is the basic logging and debug interface offered by the session.
 	// a release build with logging disabled (which is the default) will
 	// not have this class at all
-	struct session_logger
+	struct TORRENT_EXTRA_EXPORT session_logger
 	{
 #ifndef TORRENT_DISABLE_LOGGING
+		virtual bool should_log() const = 0;
 		virtual void session_log(char const* fmt, ...) const TORRENT_FORMAT(2,3) = 0;
-		virtual void session_vlog(char const* fmt, va_list& va) const = 0;
 #endif
 
 #if TORRENT_USE_ASSERTS
@@ -125,13 +118,12 @@ namespace libtorrent { namespace aux
 	};
 #endif // TORRENT_DISABLE_LOGGING || TORRENT_USE_ASSERTS
 
-	// TOOD: 2 make this interface a lot smaller. It could be split up into
+	// TODO: 2 make this interface a lot smaller. It could be split up into
 	// several smaller interfaces. Each subsystem could then limit the size
 	// of the mock object to test it.
-	struct session_interface
-		: buffer_allocator_interface
+	struct TORRENT_EXTRA_EXPORT session_interface
 #if !defined TORRENT_DISABLE_LOGGING || TORRENT_USE_ASSERTS
-		, session_logger
+		: session_logger
 #endif
 	{
 		// TODO: 2 the IP voting mechanism should be factored out
@@ -146,7 +138,10 @@ namespace libtorrent { namespace aux
 
 		virtual void set_external_address(address const& ip
 			, int source_type, address const& source) = 0;
-		virtual external_ip const& external_address() const = 0;
+		virtual void set_external_address(tcp::endpoint const& local_endpoint
+			, address const& ip
+			, int source_type, address const& source) = 0;
+		virtual external_ip external_address() const = 0;
 
 		virtual disk_interface& disk_thread() = 0;
 
@@ -156,76 +151,49 @@ namespace libtorrent { namespace aux
 		virtual io_service& get_io_service() = 0;
 		virtual resolver_interface& get_resolver() = 0;
 
-		typedef boost::function<void(error_code const&, std::vector<address> const&)>
-			callback_t;
-
-		// TODO: 2 remove this. There's already get_resolver()
-		virtual void async_resolve(std::string const& host, int flags
-			, callback_t const& h) = 0;
-
 		virtual bool has_connection(peer_connection* p) const = 0;
-		virtual void insert_peer(boost::shared_ptr<peer_connection> const& c) = 0;
-		
-		virtual void queue_async_resume_data(boost::shared_ptr<torrent> const& t) = 0;
-		virtual void done_async_resume() = 0;
-		virtual void evict_torrent(torrent* t) = 0;
+		virtual void insert_peer(std::shared_ptr<peer_connection> const& c) = 0;
 
-		virtual void remove_torrent(torrent_handle const& h, int options = 0) = 0;
-		virtual void remove_torrent_impl(boost::shared_ptr<torrent> tptr, int options) = 0;
+		virtual void remove_torrent(torrent_handle const& h, remove_flags_t options = {}) = 0;
+		virtual void remove_torrent_impl(std::shared_ptr<torrent> tptr, remove_flags_t options) = 0;
 
 		// port filter
 		virtual port_filter const& get_port_filter() const = 0;
 		virtual void ban_ip(address addr) = 0;
 
-		virtual boost::int64_t session_time() const = 0;
-	
-		virtual bool is_paused() const = 0;
+		virtual std::uint16_t session_time() const = 0;
+		virtual time_point session_start_time() const = 0;
+
 		virtual bool is_aborted() const = 0;
 		virtual int num_uploads() const = 0;
 		virtual bool preemptive_unchoke() const = 0;
 		virtual void trigger_optimistic_unchoke() = 0;
 		virtual void trigger_unchoke() = 0;
 
-		virtual boost::weak_ptr<torrent> find_torrent(sha1_hash const& info_hash) const = 0;
-		virtual boost::weak_ptr<torrent> find_disconnect_candidate_torrent() const = 0;
-		virtual boost::shared_ptr<torrent> delay_load_torrent(sha1_hash const& info_hash
+		virtual std::weak_ptr<torrent> find_torrent(sha1_hash const& info_hash) const = 0;
+		virtual std::weak_ptr<torrent> find_disconnect_candidate_torrent() const = 0;
+		virtual std::shared_ptr<torrent> delay_load_torrent(sha1_hash const& info_hash
 			, peer_connection* pc) = 0;
-		virtual void insert_torrent(sha1_hash const& ih, boost::shared_ptr<torrent> const& t
+		virtual void insert_torrent(sha1_hash const& ih, std::shared_ptr<torrent> const& t
 			, std::string uuid) = 0;
-		virtual void insert_uuid_torrent(std::string uuid, boost::shared_ptr<torrent> const& t) = 0;
+#ifndef TORRENT_NO_DEPRECATE
+		//deprecated in 1.2
+		virtual void insert_uuid_torrent(std::string uuid, std::shared_ptr<torrent> const& t) = 0;
+#endif
 		virtual void set_queue_position(torrent* t, int p) = 0;
 		virtual int num_torrents() const = 0;
 
 		virtual peer_id const& get_peer_id() const = 0;
 
-		// cork a peer and schedule a delayed uncork
-		// does nothing if the peer is already corked
-		virtual void cork_burst(peer_connection* p) = 0;
-
-		virtual void close_connection(peer_connection* p, error_code const& ec) = 0;
+		virtual void close_connection(peer_connection* p) = 0;
 		virtual int num_connections() const = 0;
-
-		virtual char* allocate_buffer() = 0;
-		virtual void free_buffer(char* buf) = 0;
-		virtual int send_buffer_size() const = 0;
 
 		virtual void deferred_submit_jobs() = 0;
 
-		virtual boost::uint16_t listen_port() const = 0;
-		virtual boost::uint16_t ssl_listen_port() const = 0;
+		virtual std::uint16_t listen_port() const = 0;
+		virtual std::uint16_t ssl_listen_port() const = 0;
 
-		// TODO: 2 factor out the thread pool for socket jobs into a separate
-		// class
-		// used to (potentially) issue socket write calls onto multiple threads
-		virtual void post_socket_job(socket_job& j) = 0;
-
-		// load the specified torrent. also evict one torrent, except
-		// for the one specified, if we are at the limit of loaded torrents
-		virtual bool load_torrent(torrent* t) = 0;
-
-		// bump the specified torrent to make it the most recently used one
-		// in the torrent LRU (i.e. the least likely to get unloaded)
-		virtual void bump_torrent(torrent* t, bool back = true) = 0;
+		virtual void for_each_listen_socket(std::function<void(aux::listen_socket_handle const&)> f) = 0;
 
 		// ask for which interface and port to bind outgoing peer connections on
 		virtual tcp::endpoint bind_outgoing_socket(socket_type& s, address const&
@@ -234,7 +202,7 @@ namespace libtorrent { namespace aux
 			, error_code& ec) = 0;
 
 #ifndef TORRENT_DISABLE_MUTABLE_TORRENTS
-		virtual std::vector<boost::shared_ptr<torrent> > find_collection(
+		virtual std::vector<std::shared_ptr<torrent>> find_collection(
 			std::string const& collection) const = 0;
 #endif
 
@@ -246,18 +214,15 @@ namespace libtorrent { namespace aux
 		virtual char const* i2p_session() const = 0;
 #endif
 
-		virtual void prioritize_connections(boost::weak_ptr<torrent> t) = 0;
-
-		virtual tcp::endpoint get_ipv6_interface() const = 0;
-		virtual tcp::endpoint get_ipv4_interface() const = 0;
+		virtual void prioritize_connections(std::weak_ptr<torrent> t) = 0;
 
 		virtual void trigger_auto_manage() = 0;
 
-		virtual void apply_settings_pack(boost::shared_ptr<settings_pack> pack) = 0;
+		virtual void apply_settings_pack(std::shared_ptr<settings_pack> pack) = 0;
 		virtual session_settings const& settings() const = 0;
 
 		virtual void queue_tracker_request(tracker_request& req
-			, boost::weak_ptr<request_callback> c) = 0;
+			, std::weak_ptr<request_callback> c) = 0;
 
 		// peer-classes
 		virtual void set_peer_classes(peer_class_set* s, address const& a, int st) = 0;
@@ -275,8 +240,6 @@ namespace libtorrent { namespace aux
 		virtual void trancieve_ip_packet(int bytes, bool ipv6) = 0;
 		virtual void sent_syn(bool ipv6) = 0;
 		virtual void received_synack(bool ipv6) = 0;
-
-		virtual int peak_up_rate() const = 0;
 
 		enum torrent_list_index
 		{
@@ -301,7 +264,7 @@ namespace libtorrent { namespace aux
 			// when recalculating auto-managed torrents. started auto managed
 			// torrents that are inactive are not part of these lists, because they
 			// are not considered for auto managing (they are left started
-			// unconditionallty)
+			// unconditionally)
 			torrent_downloading_auto_managed,
 			torrent_seeding_auto_managed,
 			torrent_checking_auto_managed,
@@ -312,7 +275,7 @@ namespace libtorrent { namespace aux
 			num_torrent_lists
 		};
 
-		virtual std::vector<torrent*>& torrent_list(int i) = 0;
+		virtual aux::vector<torrent*>& torrent_list(int i) = 0;
 
 		virtual bool has_lsd() const = 0;
 		virtual void announce_lsd(sha1_hash const& ih, int port, bool broadcast = false) = 0;
@@ -322,6 +285,7 @@ namespace libtorrent { namespace aux
 		virtual std::vector<block_info>& block_info_storage() = 0;
 
 #ifdef TORRENT_USE_OPENSSL
+		virtual libtorrent::utp_socket_manager* ssl_utp_socket_manager() = 0;
 		virtual boost::asio::ssl::context* ssl_ctx() = 0 ;
 #endif
 
@@ -329,25 +293,28 @@ namespace libtorrent { namespace aux
 		virtual torrent const* find_encrypted_torrent(
 			sha1_hash const& info_hash, sha1_hash const& xor_mask) = 0;
 		virtual void add_obfuscated_hash(sha1_hash const& obfuscated
-			, boost::weak_ptr<torrent> const& t) = 0;
+			, std::weak_ptr<torrent> const& t) = 0;
 #endif
 
 #ifndef TORRENT_DISABLE_DHT
 		virtual bool announce_dht() const = 0;
-		virtual void add_dht_node(udp::endpoint n) = 0;
+		virtual void add_dht_node(udp::endpoint const& n) = 0;
 		virtual bool has_dht() const = 0;
-		virtual int external_udp_port() const = 0;
+		virtual int external_udp_port(address const& local_address) const = 0;
 		virtual dht::dht_tracker* dht() = 0;
-		virtual void prioritize_dht(boost::weak_ptr<torrent> t) = 0;
+		virtual void prioritize_dht(std::weak_ptr<torrent> t) = 0;
 #endif
 
 		virtual counters& stats_counters() = 0;
 		virtual void received_buffer(int size) = 0;
 		virtual void sent_buffer(int size) = 0;
-	protected:
-		~session_interface() {}
+
+#if TORRENT_USE_ASSERTS
+		virtual bool verify_queue_position(torrent const*, int) = 0;
+#endif
+
+		virtual ~session_interface() {}
 	};
 }}
 
 #endif
-

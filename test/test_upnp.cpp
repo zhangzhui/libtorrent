@@ -35,15 +35,17 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/socket_io.hpp" // print_endpoint
 #include "test.hpp"
 #include "setup_transfer.hpp"
+#include "libtorrent/aux_/path.hpp"
 #include <fstream>
-#include <boost/bind.hpp>
-#include <boost/ref.hpp>
-#include <boost/smart_ptr.hpp>
+#include <functional>
 #include <iostream>
+#include <memory>
 
-using namespace libtorrent;
+using namespace lt;
 
-broadcast_socket* sock = 0;
+using lt::portmap_protocol;
+
+broadcast_socket* sock = nullptr;
 int g_port = 0;
 
 char const* soap_add_response[] = {
@@ -71,17 +73,17 @@ void incoming_msearch(udp::endpoint const& from, char* buffer
 {
 	http_parser p;
 	bool error = false;
-	p.incoming(buffer::const_interval(buffer, buffer + size), error);
+	p.incoming(span<char const>(buffer, size), error);
 	if (error || !p.header_finished())
 	{
-		std::cerr << "*** malformed HTTP from "
+		std::cout << "*** malformed HTTP from "
 			<< print_endpoint(from) << std::endl;
 		return;
 	}
 
 	if (p.method() != "m-search") return;
 
-	std::cerr << "< incoming m-search from " << from << std::endl;
+	std::cout << "< incoming m-search from " << from << std::endl;
 
 	char msg[] = "HTTP/1.1 200 OK\r\n"
 		"ST:upnp:rootdevice\r\n"
@@ -94,23 +96,17 @@ void incoming_msearch(udp::endpoint const& from, char* buffer
 
 	TORRENT_ASSERT(g_port != 0);
 	char buf[sizeof(msg) + 30];
-	int len = snprintf(buf, sizeof(buf), msg, g_port);
+	int len = std::snprintf(buf, sizeof(buf), msg, g_port);
 
 	error_code ec;
 	sock->send(buf, len, ec);
 
-	if (ec) std::cerr << "*** error sending " << ec.message() << std::endl;
-}
-
-void log_callback(char const* err)
-{
-	std::cerr << "UPnP: " << err << std::endl;
-	//TODO: store the log and verify that some key messages are there
+	if (ec) std::cout << "*** error sending " << ec.message() << std::endl;
 }
 
 struct callback_info
 {
-	int mapping;
+	port_mapping_t mapping;
 	int port;
 	error_code ec;
 	bool operator==(callback_info const& e)
@@ -119,17 +115,40 @@ struct callback_info
 
 std::list<callback_info> callbacks;
 
-void callback(int mapping, address const& ip, int port, error_code const& err)
+namespace
 {
-	callback_info info = {mapping, port, err};
-	callbacks.push_back(info);
-	std::cerr << "mapping: " << mapping << ", port: " << port << ", IP: " << ip
-		<< ", error: \"" << err.message() << "\"\n";
+	struct upnp_callback : aux::portmap_callback
+	{
+		void on_port_mapping(port_mapping_t const mapping
+			, address const& ip, int port
+			, portmap_protocol const protocol, error_code const& err
+			, portmap_transport const transport) override
+		{
+			callback_info info = {mapping, port, err};
+			callbacks.push_back(info);
+			std::cout << "mapping: " << static_cast<int>(mapping)
+				<< ", port: " << port << ", IP: " << ip
+				<< ", proto: " << static_cast<int>(protocol)
+				<< ", error: \"" << err.message() << "\"\n";
+		}
+	#ifndef TORRENT_DISABLE_LOGGING
+		virtual bool should_log_portmap(portmap_transport transport) const override
+		{
+			return true;
+		}
+
+		virtual void log_portmap(portmap_transport transport, char const* msg) const override
+		{
+			std::cout << "UPnP: " << msg << std::endl;
+			//TODO: store the log and verify that some key messages are there
+		}
+	#endif
+	};
 }
 
 void run_upnp_test(char const* root_filename, char const* router_model, char const* control_name, int igd_version)
 {
-	libtorrent::io_service ios;
+	lt::io_service ios;
 
 	g_port = start_web_server();
 
@@ -139,13 +158,13 @@ void run_upnp_test(char const* root_filename, char const* router_model, char con
 	buf.push_back(0);
 
 	FILE* xml_file = fopen("upnp.xml", "w+");
-	if (xml_file == NULL)
+	if (xml_file == nullptr)
 	{
-		fprintf(stderr, "failed to open file 'upnp.xml': %s\n", strerror(errno));
+		std::printf("failed to open file 'upnp.xml': %s\n", strerror(errno));
 		TEST_CHECK(false);
 		return;
 	}
-	fprintf(xml_file, &buf[0], g_port);
+	std::fprintf(xml_file, &buf[0], g_port);
 	fclose(xml_file);
 
 	std::ofstream xml(control_name, std::ios::trunc);
@@ -159,9 +178,8 @@ void run_upnp_test(char const* root_filename, char const* router_model, char con
 
 	std::string user_agent = "test agent";
 
-	boost::shared_ptr<upnp> upnp_handler = boost::make_shared<upnp>(boost::ref(ios)
-		, address_v4::from_string("127.0.0.1")
-		, user_agent, &callback, &log_callback, false);
+	upnp_callback cb;
+	auto upnp_handler = std::make_shared<upnp>(ios, user_agent, cb, false);
 	upnp_handler->start();
 	upnp_handler->discover_device();
 
@@ -171,19 +189,19 @@ void run_upnp_test(char const* root_filename, char const* router_model, char con
 		ios.poll(ec);
 		if (ec)
 		{
-			fprintf(stderr, "io_service::run(): %s\n", ec.message().c_str());
+			std::printf("io_service::run(): %s\n", ec.message().c_str());
 			ec.clear();
 			break;
 		}
 		if (upnp_handler->router_model() != "") break;
-		test_sleep(100);
+		std::this_thread::sleep_for(lt::milliseconds(100));
 	}
 
-	std::cerr << "router: " << upnp_handler->router_model() << std::endl;
+	std::cout << "router: " << upnp_handler->router_model() << std::endl;
 	TEST_EQUAL(upnp_handler->router_model(), router_model);
 
-	int mapping1 = upnp_handler->add_mapping(upnp::tcp, 500, 500);
-	int mapping2 = upnp_handler->add_mapping(upnp::udp, 501, 501);
+	auto const mapping1 = upnp_handler->add_mapping(portmap_protocol::tcp, 500, ep("127.0.0.1", 500));
+	auto const mapping2 = upnp_handler->add_mapping(portmap_protocol::udp, 501, ep("127.0.0.1", 501));
 
 	for (int i = 0; i < 40; ++i)
 	{
@@ -191,12 +209,12 @@ void run_upnp_test(char const* root_filename, char const* router_model, char con
 		ios.poll(ec);
 		if (ec)
 		{
-			fprintf(stderr, "io_service::run(): %s\n", ec.message().c_str());
+			std::printf("io_service::run(): %s\n", ec.message().c_str());
 			ec.clear();
 			break;
 		}
 		if (callbacks.size() >= 2) break;
-		test_sleep(100);
+		std::this_thread::sleep_for(lt::milliseconds(100));
 	}
 
 	callback_info expected1 = {mapping1, 500, error_code()};
@@ -217,12 +235,12 @@ void run_upnp_test(char const* root_filename, char const* router_model, char con
 		ios.poll(ec);
 		if (ec)
 		{
-			fprintf(stderr, "io_service::run(): %s\n", ec.message().c_str());
+			std::printf("io_service::run(): %s\n", ec.message().c_str());
 			ec.clear();
 			break;
 		}
 		if (callbacks.size() >= 4) break;
-		test_sleep(100);
+		std::this_thread::sleep_for(lt::milliseconds(100));
 	}
 
 	// there should have been two DeleteMapping calls

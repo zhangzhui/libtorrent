@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2015, Arvid Norberg
+Copyright (c) 2003-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -32,31 +32,16 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/config.hpp"
 
-#include "libtorrent/aux_/disable_warnings_push.hpp"
-
-#include <vector>
 #include <limits>
-#include <boost/bind.hpp>
-#include <stdlib.h>
-
-#include "libtorrent/aux_/disable_warnings_pop.hpp"
+#include <cstdlib>
 
 #include "libtorrent/web_connection_base.hpp"
-#include "libtorrent/session.hpp"
-#include "libtorrent/identify_client.hpp"
-#include "libtorrent/entry.hpp"
-#include "libtorrent/bencode.hpp"
-#include "libtorrent/alert_types.hpp"
 #include "libtorrent/invariant_check.hpp"
-#include "libtorrent/io.hpp"
-#include "libtorrent/version.hpp"
 #include "libtorrent/parse_url.hpp"
 #include "libtorrent/peer_info.hpp"
 
-using boost::shared_ptr;
+namespace libtorrent {
 
-namespace libtorrent
-{
 	web_connection_base::web_connection_base(
 		peer_connection_args const& pack
 		, web_seed_t& web)
@@ -75,12 +60,16 @@ namespace libtorrent
 
 		INVARIANT_CHECK;
 
+		TORRENT_ASSERT(is_outgoing());
+
+		TORRENT_ASSERT(!m_torrent.lock()->is_upload_only());
+
 		// we only want left-over bandwidth
 		// TODO: introduce a web-seed default class which has a low download priority
-		
+
 		std::string protocol;
 		error_code ec;
-		boost::tie(protocol, m_basic_auth, m_host, m_port, m_path)
+		std::tie(protocol, m_basic_auth, m_host, m_port, m_path)
 			= parse_url_components(web.url, ec);
 		TORRENT_ASSERT(!ec);
 
@@ -111,21 +100,22 @@ namespace libtorrent
 
 	void web_connection_base::start()
 	{
-		set_upload_only(true);
-		if (is_disconnecting()) return;
+		// avoid calling torrent::set_seed because it calls torrent::check_invariant
+		// which fails because the m_num_connecting count is not consistent until
+		// after we call peer_connection::start
+		m_upload_only = true;
 		peer_connection::start();
+		// disconnect_if_redundant must be called after start to keep
+		// m_num_connecting consistent
+		disconnect_if_redundant();
 	}
 
-	web_connection_base::~web_connection_base()
-	{}
+	web_connection_base::~web_connection_base() = default;
 
 	void web_connection_base::on_connected()
 	{
-		boost::shared_ptr<torrent> t = associated_torrent().lock();
+		std::shared_ptr<torrent> t = associated_torrent().lock();
 		TORRENT_ASSERT(t);
-	
-		// this is always a seed
-		incoming_have_all();
 
 		// it is always possible to request pieces
 		incoming_unchoke();
@@ -138,28 +128,34 @@ namespace libtorrent
 	{
 		request += "Host: ";
 		request += m_host;
-		if (m_first_request || m_settings.get_bool(settings_pack::always_send_user_agent)) {
+		if ((m_first_request || m_settings.get_bool(settings_pack::always_send_user_agent))
+			&& !m_settings.get_bool(settings_pack::anonymous_mode))
+		{
 			request += "\r\nUser-Agent: ";
 			request += m_settings.get_str(settings_pack::user_agent);
 		}
-		if (!m_external_auth.empty()) {
+		if (!m_external_auth.empty())
+		{
 			request += "\r\nAuthorization: ";
 			request += m_external_auth;
-		} else if (!m_basic_auth.empty()) {
+		}
+		else if (!m_basic_auth.empty())
+		{
 			request += "\r\nAuthorization: Basic ";
 			request += m_basic_auth;
 		}
-		if (sett.get_int(settings_pack::proxy_type) == settings_pack::http_pw) {
+		if (sett.get_int(settings_pack::proxy_type) == settings_pack::http_pw)
+		{
 			request += "\r\nProxy-Authorization: Basic ";
 			request += base64encode(sett.get_str(settings_pack::proxy_username)
 				+ ":" + sett.get_str(settings_pack::proxy_password));
 		}
-		for (web_seed_entry::headers_t::const_iterator it = m_extra_headers.begin();
-		     it != m_extra_headers.end(); ++it) {
-		  request += "\r\n";
-		  request += it->first;
-		  request += ": ";
-		  request += it->second;
+		for (auto const& h : m_extra_headers)
+		{
+			request += "\r\n";
+			request += h.first;
+			request += ": ";
+			request += h.second;
 		}
 		if (using_proxy) {
 			request += "\r\nProxy-Connection: keep-alive";
@@ -195,7 +191,7 @@ namespace libtorrent
 		INVARIANT_CHECK;
 
 		if (error) return;
-		sent_bytes(0, bytes_transferred);
+		sent_bytes(0, int(bytes_transferred));
 	}
 
 
@@ -211,4 +207,3 @@ namespace libtorrent
 #endif
 
 }
-

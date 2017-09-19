@@ -35,36 +35,32 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/hasher.hpp"
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/bencode.hpp"
-#include "libtorrent/thread.hpp"
 #include "libtorrent/time.hpp"
-#include "libtorrent/file.hpp"
+#include "libtorrent/aux_/path.hpp"
+#include "libtorrent/torrent_info.hpp"
 
 #include "test.hpp"
 #include "setup_transfer.hpp"
 #include "test_utils.hpp"
 
-#include <boost/tuple/tuple.hpp>
-#include <boost/bind.hpp>
+#include <tuple>
+#include <functional>
 
 #include <fstream>
 #include <iostream>
 
-using namespace libtorrent;
-namespace lt = libtorrent;
+using namespace lt;
 
-using boost::tuples::ignore;
+using std::ignore;
 
-const int mask = alert::all_categories & ~(alert::performance_warning | alert::stats_notification);
+auto const mask = alert::all_categories
+	& ~(alert::performance_warning | alert::stats_notification);
 
 int peer_disconnects = 0;
 
-int tracker_responses = 0;
-
 bool on_alert(alert const* a)
 {
-	if (alert_cast<tracker_reply_alert>(a))
-		++tracker_responses;
-	else if (alert_cast<peer_disconnected_alert>(a))
+	if (alert_cast<peer_disconnected_alert>(a))
 		++peer_disconnects;
 	else if (alert_cast<peer_error_alert>(a))
 		++peer_disconnects;
@@ -75,66 +71,62 @@ bool on_alert(alert const* a)
 // simulate a full disk
 struct test_storage : default_storage
 {
-	test_storage(storage_params const& params)
-		: default_storage(params)
+	test_storage(storage_params const& params, file_pool& pool)
+		: default_storage(params, pool)
 		, m_written(0)
 		, m_limit(16 * 1024 * 2)
 	{}
 
-	virtual void set_file_priority(std::vector<boost::uint8_t> const& p
-		, storage_error& ec) {}
+	void set_file_priority(aux::vector<std::uint8_t, file_index_t> const& p
+		, storage_error& ec) override {}
 
 	void set_limit(int lim)
 	{
-		mutex::scoped_lock l(m_mutex);
+		std::lock_guard<std::mutex> l(m_mutex);
 		m_limit = lim;
 	}
 
 	int writev(
-		file::iovec_t const* bufs
-		, int num_bufs
-		, int piece_index
+		span<iovec_t const> bufs
+		, piece_index_t piece_index
 		, int offset
-		, int flags
-		, storage_error& se)
+		, open_mode_t const flags
+		, storage_error& se) override
 	{
-		mutex::scoped_lock l(m_mutex);
+		std::unique_lock<std::mutex> l(m_mutex);
 		if (m_written >= m_limit)
 		{
-			std::cerr << "storage written: " << m_written << " limit: " << m_limit << std::endl;
+			std::cout << "storage written: " << m_written << " limit: " << m_limit << std::endl;
 			error_code ec;
-			ec = error_code(boost::system::errc::no_space_on_device, get_posix_category());
+			ec = error_code(boost::system::errc::no_space_on_device, generic_category());
 			se.ec = ec;
 			return 0;
 		}
 
-		for (int i = 0; i < num_bufs; ++i)
-			m_written += bufs[i].iov_len;
+		for (auto const& b : bufs) m_written += int(b.size());
 		l.unlock();
-		return default_storage::writev(bufs, num_bufs, piece_index, offset, flags, se);
+		return default_storage::writev(bufs, piece_index, offset, flags, se);
 	}
 
-	virtual ~test_storage() {}
+	~test_storage() override = default;
 
 	int m_written;
 	int m_limit;
-	mutex m_mutex;
+	std::mutex m_mutex;
 };
 
-storage_interface* test_storage_constructor(storage_params const& params)
+storage_interface* test_storage_constructor(storage_params const& params, file_pool& pool)
 {
-	return new test_storage(params);
+	return new test_storage(params, pool);
 }
 
 void test_transfer(int proxy_type, settings_pack const& sett
 	, bool test_disk_full = false
 	, storage_mode_t storage_mode = storage_mode_sparse)
 {
-	static int listen_port = 0;
-
 	char const* test_name[] = {"no", "SOCKS4", "SOCKS5", "SOCKS5 password", "HTTP", "HTTP password"};
 
-	fprintf(stderr, "\n\n  ==== TESTING %s proxy ==== disk-full: %s\n\n\n"
+	std::printf("\n\n  ==== TESTING %s proxy ==== disk-full: %s\n\n\n"
 		, test_name[proxy_type], test_disk_full ? "true": "false");
 
 	// in case the previous run was terminated
@@ -163,7 +155,6 @@ void test_transfer(int proxy_type, settings_pack const& sett
 
 	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:49075");
 	lt::session ses2(pack);
-	listen_port += 10;
 
 	int proxy_port = 0;
 	if (proxy_type)
@@ -175,6 +166,7 @@ void test_transfer(int proxy_type, settings_pack const& sett
 		pack.set_str(settings_pack::proxy_password, "testpass");
 		pack.set_int(settings_pack::proxy_type, proxy_type);
 		pack.set_int(settings_pack::proxy_port, proxy_port);
+		pack.set_bool(settings_pack::force_proxy, true);
 
 		// test resetting the proxy in quick succession.
 		// specifically the udp_socket connecting to a new
@@ -182,10 +174,8 @@ void test_transfer(int proxy_type, settings_pack const& sett
 		// in progress.
 		pack.set_str(settings_pack::proxy_hostname, "5.6.7.8");
 		ses1.apply_settings(pack);
-
 		pack.set_str(settings_pack::proxy_hostname, "127.0.0.1");
 		ses1.apply_settings(pack);
-		ses2.apply_settings(pack);
 	}
 
 	pack = sett;
@@ -215,6 +205,7 @@ void test_transfer(int proxy_type, settings_pack const& sett
 
 	pack.set_bool(settings_pack::allow_multiple_connections_per_ip, false);
 
+	// TODO: these settings_pack tests belong in their own test
 	pack.set_int(settings_pack::unchoke_slots_limit, 0);
 	ses1.apply_settings(pack);
 	TEST_CHECK(ses1.get_settings().get_int(settings_pack::unchoke_slots_limit) == 0);
@@ -234,19 +225,19 @@ void test_transfer(int proxy_type, settings_pack const& sett
 
 	create_directory("tmp1_transfer", ec);
 	std::ofstream file("tmp1_transfer/temporary");
-	boost::shared_ptr<torrent_info> t = ::create_torrent(&file, 16 * 1024, 13, false);
+	std::shared_ptr<torrent_info> t = ::create_torrent(&file, "temporary", 32 * 1024, 13, false);
 	file.close();
 
 	TEST_CHECK(exists(combine_path("tmp1_transfer", "temporary")));
 
 	add_torrent_params addp(&test_storage_constructor);
-	addp.flags &= ~add_torrent_params::flag_paused;
-	addp.flags &= ~add_torrent_params::flag_auto_managed;
+	addp.flags &= ~torrent_flags::paused;
+	addp.flags &= ~torrent_flags::auto_managed;
 
 	add_torrent_params params;
 	params.storage_mode = storage_mode;
-	params.flags &= ~add_torrent_params::flag_paused;
-	params.flags &= ~add_torrent_params::flag_auto_managed;
+	params.flags &= ~torrent_flags::paused;
+	params.flags &= ~torrent_flags::auto_managed;
 
 	wait_for_listen(ses1, "ses1");
 	wait_for_listen(ses2, "ses2");
@@ -254,7 +245,7 @@ void test_transfer(int proxy_type, settings_pack const& sett
 	peer_disconnects = 0;
 
 	// test using piece sizes smaller than 16kB
-	boost::tie(tor1, tor2, ignore) = setup_transfer(&ses1, &ses2, 0
+	std::tie(tor1, tor2, ignore) = setup_transfer(&ses1, &ses2, nullptr
 		, true, false, true, "_transfer", 8 * 1024, &t, false, test_disk_full?&addp:&params);
 
 	int num_pieces = tor2.torrent_file()->num_pieces();
@@ -264,7 +255,6 @@ void test_transfer(int proxy_type, settings_pack const& sett
 	// to make sure it can handle switching paths
 	bool test_move_storage = false;
 
-	tracker_responses = 0;
 	int upload_mode_timer = 0;
 
 	wait_for_downloading(ses2, "ses2");
@@ -274,8 +264,8 @@ void test_transfer(int proxy_type, settings_pack const& sett
 		torrent_status st1 = tor1.status();
 		torrent_status st2 = tor2.status();
 
-		print_alerts(ses1, "ses1", true, true, true, &on_alert);
-		print_alerts(ses2, "ses2", true, true, true, &on_alert);
+		print_alerts(ses1, "ses1", true, true, &on_alert);
+		print_alerts(ses2, "ses2", true, true, &on_alert);
 
 		if (i % 10 == 0)
 		{
@@ -287,7 +277,7 @@ void test_transfer(int proxy_type, settings_pack const& sett
 			test_move_storage = true;
 			tor1.move_storage("tmp1_transfer_moved");
 			tor2.move_storage("tmp2_transfer_moved");
-			std::cerr << "moving storage" << std::endl;
+			std::cout << "moving storage" << std::endl;
 		}
 
 		// wait 10 loops before we restart the torrent. This lets
@@ -295,7 +285,9 @@ void test_transfer(int proxy_type, settings_pack const& sett
 		// back into upload mode) before we restart it.
 
 		// TODO: factor out the disk-full test into its own unit test
-		if (test_disk_full && st2.upload_mode && ++upload_mode_timer > 10)
+		if (test_disk_full
+			&& !(tor2.flags() & torrent_flags::upload_mode)
+			&& ++upload_mode_timer > 10)
 		{
 			test_disk_full = false;
 			((test_storage*)tor2.get_storage_impl())->set_limit(16 * 1024 * 1024);
@@ -304,29 +296,29 @@ void test_transfer(int proxy_type, settings_pack const& sett
 			// jobs failing right after, putting us back in upload mode. So,
 			// give the disk some time to fail all disk jobs before resetting
 			// upload mode to false
-			test_sleep(500);
+			std::this_thread::sleep_for(lt::milliseconds(500));
 
 			// then we need to drain the alert queue, so the peer_disconnects
 			// counter doesn't get incremented by old alerts
-			print_alerts(ses1, "ses1", true, true, true, &on_alert);
-			print_alerts(ses2, "ses2", true, true, true, &on_alert);
+			print_alerts(ses1, "ses1", true, true, &on_alert);
+			print_alerts(ses2, "ses2", true, true, &on_alert);
 
-			std::string err = tor2.status().error;
-			fprintf(stderr, "error: \"%s\"\n", err.c_str());
-			TEST_CHECK(err.empty());
-			tor2.set_upload_mode(false);
+			lt::error_code err = tor2.status().errc;
+			std::printf("error: \"%s\"\n", err.message().c_str());
+			TEST_CHECK(!err);
+			tor2.unset_flags(torrent_flags::upload_mode);
 
 			// at this point we probably disconnected the seed
 			// so we need to reconnect as well
-			fprintf(stderr, "%s: reconnecting peer\n", time_now_string());
+			std::printf("%s: reconnecting peer\n", time_now_string());
 			error_code ec;
 			tor2.connect_peer(tcp::endpoint(address::from_string("127.0.0.1", ec)
 				, ses1.listen_port()));
 
 			TEST_CHECK(tor2.status().is_finished == false);
-			fprintf(stderr, "disconnects: %d\n", peer_disconnects);
+			std::printf("disconnects: %d\n", peer_disconnects);
 			TEST_CHECK(peer_disconnects >= 2);
-			fprintf(stderr, "%s: discovered disk full mode. Raise limit and disable upload-mode\n", time_now_string());
+			std::printf("%s: discovered disk full mode. Raise limit and disable upload-mode\n", time_now_string());
 			peer_disconnects = 0;
 			continue;
 		}
@@ -337,14 +329,14 @@ void test_transfer(int proxy_type, settings_pack const& sett
 			|| st1.state == torrent_status::checking_files);
 		TEST_CHECK(st2.state == torrent_status::downloading
 			|| st2.state == torrent_status::checking_resume_data
-			|| (test_disk_full && !st2.error.empty()));
+			|| (test_disk_full && st2.errc));
 
 		if (!test_disk_full && peer_disconnects >= 2) break;
 
 		// if nothing is being transferred after 2 seconds, we're failing the test
 //		if (!test_disk_full && st1.upload_payload_rate == 0 && i > 20) break;
 
-		test_sleep(100);
+		std::this_thread::sleep_for(lt::milliseconds(100));
 	}
 
 	TEST_CHECK(tor2.status().is_seeding);
@@ -365,9 +357,10 @@ void cleanup()
 	remove_all("tmp2_transfer_moved", ec);
 }
 
+#ifndef TORRENT_NO_DEPRECATE
 TORRENT_TEST(no_contiguous_buffers)
 {
-	using namespace libtorrent;
+	using namespace lt;
 
 	// test no contiguous_recv_buffers
 	settings_pack p;
@@ -376,69 +369,51 @@ TORRENT_TEST(no_contiguous_buffers)
 
 	cleanup();
 }
+#endif
 
 	// test with all kinds of proxies
-TORRENT_TEST(no_proxy)
-{
-	using namespace libtorrent;
-	test_transfer(settings_pack::none, settings_pack());
-	cleanup();
-}
-
-TORRENT_TEST(socks4)
-{
-	using namespace libtorrent;
-	test_transfer(settings_pack::socks4, settings_pack());
-	cleanup();
-}
-
-TORRENT_TEST(socks5)
-{
-	using namespace libtorrent;
-	test_transfer(settings_pack::socks5, settings_pack());
-	cleanup();
-}
-
 TORRENT_TEST(socks5_pw)
 {
-	using namespace libtorrent;
+	using namespace lt;
 	test_transfer(settings_pack::socks5_pw, settings_pack());
 	cleanup();
 }
 
 TORRENT_TEST(http)
 {
-	using namespace libtorrent;
+	using namespace lt;
 	test_transfer(settings_pack::http, settings_pack());
 	cleanup();
 }
 
 TORRENT_TEST(http_pw)
 {
-	using namespace libtorrent;
+	using namespace lt;
 	test_transfer(settings_pack::http_pw, settings_pack());
 	cleanup();
 }
 /*
 TORRENT_TEST(i2p)
 {
-	using namespace libtorrent;
+	using namespace lt;
 	test_transfer(settings_pack::i2p_proxy, settings_pack());
 	cleanup();
 }
-*/
+
+// this test is too flaky. Move it to a sim
 TORRENT_TEST(disk_full)
 {
-	using namespace libtorrent;
+	using namespace lt;
 	// test with a (simulated) full disk
 	test_transfer(0, settings_pack(), true);
 
 	cleanup();
 }
+*/
 
 TORRENT_TEST(allow_fast)
 {
-	using namespace libtorrent;
+	using namespace lt;
 	// test allowed fast
 	settings_pack p;
 	p.set_int(settings_pack::allowed_fast_set_size, 2000);
@@ -447,24 +422,37 @@ TORRENT_TEST(allow_fast)
 	cleanup();
 }
 
+TORRENT_TEST(coalesce_reads)
+{
+	using namespace lt;
+	// test allowed fast
+	settings_pack p;
+	p.set_int(settings_pack::read_cache_line_size, 16);
+	p.set_bool(settings_pack::coalesce_reads, true);
+	test_transfer(0, p, false);
+
+	cleanup();
+}
+
+TORRENT_TEST(coalesce_writes)
+{
+	using namespace lt;
+	// test allowed fast
+	settings_pack p;
+	p.set_bool(settings_pack::coalesce_writes, true);
+	test_transfer(0, p, false);
+
+	cleanup();
+}
+
+
 TORRENT_TEST(allocate)
 {
-	using namespace libtorrent;
+	using namespace lt;
 	// test storage_mode_allocate
-	fprintf(stderr, "full allocation mode\n");
+	std::printf("full allocation mode\n");
 	test_transfer(0, settings_pack(), false, storage_mode_allocate);
 
 	cleanup();
 }
-
-#ifndef TORRENT_NO_DEPRECATE
-TORRENT_TEST(compact)
-{
-	using namespace libtorrent;
-	fprintf(stderr, "compact mode\n");
-	test_transfer(0, settings_pack(), false, storage_mode_compact);
-
-	cleanup();
-}
-#endif
 

@@ -1,6 +1,6 @@
 ACLOCAL_AMFLAGS = -I m4
 
-#DISTCHECK_CONFIGURE_FLAGS = --enable-tests
+AM_DISTCHECK_CONFIGURE_FLAGS = --enable-tests=yes
 
 SUBDIRS = include/libtorrent src examples test bindings tools
 
@@ -10,26 +10,16 @@ DOCS_IMAGES = \
   docs/cwnd_thumb.png             \
   docs/delays.png                 \
   docs/delays_thumb.png           \
-  docs/disk_access.png            \
-  docs/disk_buffer_before_optimization.png  \
-  docs/disk_buffer.png            \
-  docs/disk_buffer_sample.png     \
-  docs/disk_io.png                \
   docs/hacking.html               \
-  docs/im_thumb.jpg               \
   docs/merkle_tree.png            \
   docs/our_delay_base.png         \
   docs/our_delay_base_thumb.png   \
   docs/read_disk_buffers.png      \
   docs/read_disk_buffers.diagram  \
-  docs/session_stats_peers.png    \
   docs/storage.png                \
   docs/todo.html                  \
   docs/write_disk_buffers.png     \
   docs/write_disk_buffers.diagram \
-  docs/ziptorrent_thumb.gif       \
-  docs/disk_access_elevator.png   \
-  docs/disk_access_no_elevator.png\
   docs/ip_id_v4.png               \
   docs/ip_id_v6.png               \
   docs/hash_distribution.png      \
@@ -39,8 +29,11 @@ DOCS_IMAGES = \
   docs/troubleshooting_thumb.png  \
   docs/hacking.diagram            \
   docs/hacking.png                \
+  docs/disk_cache.diagram         \
+  docs/disk_cache.png             \
   docs/utp_stack.diagram          \
   docs/utp_stack.png              \
+  docs/bitcoin.png                \
   docs/style.css                  \
   docs/rst.css                    \
   docs/img/bg.png                 \
@@ -91,20 +84,23 @@ DOCS_PAGES = \
   docs/udp_tracker_protocol.rst   \
   docs/utp.rst                    \
   docs/streaming.rst              \
+  docs/tutorial.rst               \
+  docs/tutorial.html              \
   docs/reference-Alerts.html      \
+  docs/reference-Bdecoding.html   \
   docs/reference-Bencoding.html   \
   docs/reference-Core.html        \
   docs/reference-Create_Torrents.html \
   docs/reference-Custom_Storage.html \
+  docs/reference-ed25519.html     \
   docs/reference-Error_Codes.html \
   docs/reference-Filter.html      \
   docs/reference-Plugins.html     \
-  docs/reference-Session.html     \
   docs/reference-Settings.html    \
   docs/reference-Storage.html     \
-  docs/reference-Time.html        \
   docs/reference-Utility.html     \
-  docs/reference.html
+  docs/reference.html             \
+  docs/single-page-ref.html
 
 ED25519_SOURCE = \
   ed25519/readme.md \
@@ -113,8 +109,7 @@ ED25519_SOURCE = \
   ed25519/src/fixedint.h \
   ed25519/src/ge.h \
   ed25519/src/precomp_data.h \
-  ed25519/src/sc.h \
-  ed25519/src/sha512.h
+  ed25519/src/sc.h
 
 EXTRA_DIST = \
   Jamfile \

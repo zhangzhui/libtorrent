@@ -78,7 +78,11 @@ class http_handler(SimpleHTTPServer.SimpleHTTPRequestHandler):
 			s.end_headers()
 		elif s.path.startswith('/announce'):
 			s.send_response(200)
-			response = 'd8:intervali1800e8:completei1e10:incompletei1e5:peers0:e'
+			response = 'd8:intervali1800e8:completei1e10:incompletei1e' + \
+				'12:min intervali' + min_interval + 'e' + \
+				'5:peers12:AAAABBCCCCDD' + \
+				'6:peers618:EEEEEEEEEEEEEEEEFF' + \
+				'e'
 			s.send_header("Content-Length", "%d" % len(response))
 			s.send_header("Connection", "close")
 			s.end_headers()
@@ -98,7 +102,7 @@ class http_handler(SimpleHTTPServer.SimpleHTTPRequestHandler):
 				filename = os.path.normpath(s.path[1:s.path.find('seed?') + 4])
 				print 'filename = %s' % filename
 				f = open(filename, 'rb')
-				f.seek(piece * 64 * 1024 + int(ranges[0]))
+				f.seek(piece * 32 * 1024 + int(ranges[0]))
 				data = f.read(int(ranges[1]) - int(ranges[0]) + 1)
 				f.close()
 
@@ -179,6 +183,7 @@ if __name__ == '__main__':
 	chunked_encoding = sys.argv[2] != '0'
 	use_ssl = sys.argv[3] != '0'
 	keepalive = sys.argv[4] != '0'
+	min_interval = sys.argv[5]
 
 	http_handler.protocol_version = 'HTTP/1.1'
 	httpd = http_server_with_timeout(('127.0.0.1', port), http_handler)

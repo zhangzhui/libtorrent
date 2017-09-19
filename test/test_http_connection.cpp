@@ -43,7 +43,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <iostream>
 #include <boost/optional.hpp>
 
-using namespace libtorrent;
+using namespace lt;
 
 io_service ios;
 resolver res(ios);
@@ -57,12 +57,11 @@ char data_buffer[4000];
 
 void print_http_header(http_parser const& p)
 {
-	std::cerr << time_now_string() << " < " << p.status_code() << " " << p.message() << std::endl;
+	std::cout << time_now_string() << " < " << p.status_code() << " " << p.message() << std::endl;
 
-	for (std::multimap<std::string, std::string>::const_iterator i
-		= p.headers().begin(), end(p.headers().end()); i != end; ++i)
+	for (auto const& i : p.headers())
 	{
-		std::cerr << time_now_string() << " < " << i->first << ": " << i->second << std::endl;
+		std::cout << time_now_string() << " < " << i.first << ": " << i.second << std::endl;
 	}
 }
 
@@ -71,26 +70,26 @@ void http_connect_handler(http_connection& c)
 	++connect_handler_called;
 	TEST_CHECK(c.socket().is_open());
 	error_code ec;
-	std::cerr << time_now_string() << " connected to: " << print_endpoint(c.socket().remote_endpoint(ec))
-		<< std::endl;
+	std::cout << time_now_string() << " connected to: "
+		<< print_endpoint(c.socket().remote_endpoint(ec)) << std::endl;
 // this is not necessarily true when using a proxy and proxying hostnames
 //	TEST_CHECK(c.socket().remote_endpoint(ec).address() == address::from_string("127.0.0.1", ec));
 }
 
 void http_handler(error_code const& ec, http_parser const& parser
-	, char const* data, int size, http_connection& c)
+	, span<char const> data, http_connection& c)
 {
 	++handler_called;
-	data_size = size;
+	data_size = data.size();
 	g_error_code = ec;
-	TORRENT_ASSERT(size == 0 || parser.finished());
+	TORRENT_ASSERT(data.empty() || parser.finished());
 
 	if (parser.header_finished())
 	{
 		http_status = parser.status_code();
 		if (http_status == 200)
 		{
-			TEST_CHECK(memcmp(data, data_buffer, size) == 0);
+			TEST_CHECK(memcmp(data.data(), data_buffer, data.size()) == 0);
 		}
 	}
 	print_http_header(parser);
@@ -106,34 +105,35 @@ void reset_globals()
 }
 
 void run_test(std::string const& url, int size, int status, int connected
-	, boost::optional<error_code> ec, proxy_settings const& ps
+	, boost::optional<error_code> ec, aux::proxy_settings const& ps
 	, std::string const& auth = std::string())
 {
 	reset_globals();
 
-	std::cerr << " ===== TESTING: " << url << " =====" << std::endl;
+	std::cout << " ===== TESTING: " << url << " =====" << std::endl;
 
-	std::cerr << time_now_string()
+	std::cout << time_now_string()
 		<< " expecting: size: " << size
 		<< " status: " << status
 		<< " connected: " << connected
 		<< " error: " << (ec?ec->message():"no error") << std::endl;
 
-	boost::shared_ptr<http_connection> h(new http_connection(ios
-		, res, &::http_handler, true, 1024*1024, &::http_connect_handler));
-	h->get(url, seconds(1), 0, &ps, 5, "test/user-agent", address_v4::any()
-		, 0, auth);
+	std::shared_ptr<http_connection> h = std::make_shared<http_connection>(ios
+		, res, &::http_handler, true, 1024*1024, &::http_connect_handler);
+	h->get(url, seconds(1), 0, &ps, 5, "test/user-agent", address(address_v4::any())
+		, resolver_flags{}, auth);
 	ios.reset();
 	error_code e;
 	ios.run(e);
-	if (e) std::cerr << time_now_string() << " run failed: " << e.message() << std::endl;
+	if (e) std::cout << time_now_string() << " run failed: " << e.message() << std::endl;
 
-	std::cerr << time_now_string() << " connect_handler_called: " << connect_handler_called << std::endl;
-	std::cerr << time_now_string() << " handler_called: " << handler_called << std::endl;
-	std::cerr << time_now_string() << " status: " << http_status << std::endl;
-	std::cerr << time_now_string() << " size: " << data_size << std::endl;
-	std::cerr << time_now_string() << " expected-size: " << size << std::endl;
-	std::cerr << time_now_string() << " error_code: " << g_error_code.message() << std::endl;
+	std::string const n = time_now_string();
+	std::cout << n << " connect_handler_called: " << connect_handler_called << std::endl;
+	std::cout << n << " handler_called: " << handler_called << std::endl;
+	std::cout << n << " status: " << http_status << std::endl;
+	std::cout << n << " size: " << data_size << std::endl;
+	std::cout << n << " expected-size: " << size << std::endl;
+	std::cout << n << " error_code: " << g_error_code.message() << std::endl;
 	TEST_CHECK(connect_handler_called == connected);
 	TEST_CHECK(handler_called == 1);
 	TEST_CHECK(data_size == size || size == -1);
@@ -143,16 +143,16 @@ void run_test(std::string const& url, int size, int status, int connected
 
 void write_test_file()
 {
-	std::srand(std::time(0));
+	std::srand(unsigned(std::time(nullptr)));
 	std::generate(data_buffer, data_buffer + sizeof(data_buffer), &std::rand);
 	error_code ec;
-	file test_file("test_file", file::write_only, ec);
+	file test_file("test_file", open_mode::write_only, ec);
 	TEST_CHECK(!ec);
-	if (ec) fprintf(stderr, "file error: %s\n", ec.message().c_str());
-	file::iovec_t b = { data_buffer, 3216};
-	test_file.writev(0, &b, 1, ec);
+	if (ec) std::printf("file error: %s\n", ec.message().c_str());
+	iovec_t b = { data_buffer, 3216};
+	test_file.writev(0, b, ec);
 	TEST_CHECK(!ec);
-	if (ec) fprintf(stderr, "file error: %s\n", ec.message().c_str());
+	if (ec) std::printf("file error: %s\n", ec.message().c_str());
 	test_file.close();
 }
 
@@ -171,10 +171,10 @@ void run_suite(std::string const& protocol
 	// starting the web server will also generate test_file.gz (from test_file)
 	// so it has to happen after we write test_file
 	int port = start_web_server(protocol == "https"
-		, flags & flag_chunked_encoding
-		, flags & flag_keepalive);
+		, (flags & flag_chunked_encoding) != 0
+		, (flags & flag_keepalive) != 0);
 
-	proxy_settings ps;
+	aux::proxy_settings ps;
 	ps.hostname = "127.0.0.1";
 	ps.username = "testuser";
 	ps.password = "testpass";
@@ -186,7 +186,7 @@ void run_suite(std::string const& protocol
 	typedef boost::optional<error_code> err;
 
 	char url[256];
-	snprintf(url, sizeof(url), "%s://127.0.0.1:%d/", protocol.c_str(), port);
+	std::snprintf(url, sizeof(url), "%s://127.0.0.1:%d/", protocol.c_str(), port);
 	std::string url_base(url);
 
 	run_test(url_base + "relative/redirect", 3216, 200, 2, error_code(), ps);
@@ -201,46 +201,35 @@ void run_suite(std::string const& protocol
 	run_test(url_base + "password_protected", 3216, 200, 1, error_code(), ps
 		, "testuser:testpass");
 
+	// try a very long path
+	std::string path;
+	for (int i = 0; i < 6000; ++i)
+	{
+		path += static_cast<char>(i % 26) + 'a';
+	}
+	run_test(url_base + path, 0, 404, 1, err(), ps);
+
 	// only run the tests to handle NX_DOMAIN if we have a proper internet
 	// connection that doesn't inject false DNS responses (like Comcast does)
 	hostent* h = gethostbyname("non-existent-domain.se");
-	printf("gethostbyname(\"non-existent-domain.se\") = %p. h_errno = %d\n", h, h_errno);
-	if (h == 0 && h_errno == HOST_NOT_FOUND)
+	std::printf("gethostbyname(\"non-existent-domain.se\") = %p. h_errno = %d\n"
+		, static_cast<void*>(h), h_errno);
+	if (h == nullptr && h_errno == HOST_NOT_FOUND)
 	{
-		// if we're going through an http proxy, we won't get the same error as if the hostname
-		// resolution failed
-		if ((ps.type == settings_pack::http || ps.type == settings_pack::http_pw) && protocol != "https")
-			run_test(protocol + "://non-existent-domain.se/non-existing-file", -1, 502, 1, err(), ps);
-		else
-			run_test(protocol + "://non-existent-domain.se/non-existing-file", -1, -1, 0, err(), ps);
+		run_test(protocol + "://non-existent-domain.se/non-existing-file", -1, -1, 0, err(), ps);
 	}
 	if (ps.type != settings_pack::none)
 		stop_proxy(ps.port);
 	stop_web_server();
 }
 
-TORRENT_TEST(no_proxy) { run_suite("http", settings_pack::none); }
-TORRENT_TEST(socks4) { run_suite("http", settings_pack::socks4); }
-TORRENT_TEST(socks5) { run_suite("http", settings_pack::socks5); }
-TORRENT_TEST(socks5_pw) { run_suite("http", settings_pack::socks5_pw); }
-TORRENT_TEST(http) { run_suite("http", settings_pack::http); }
-TORRENT_TEST(http_pw) { run_suite("http", settings_pack::http_pw); }
-
 #ifdef TORRENT_USE_OPENSSL
 TORRENT_TEST(no_proxy_ssl) { run_suite("https", settings_pack::none); }
-TORRENT_TEST(socks4_ssl) { run_suite("https", settings_pack::socks4); }
-TORRENT_TEST(socks5_ssl) { run_suite("https", settings_pack::socks5); }
-TORRENT_TEST(socks5_pw_ssl) { run_suite("https", settings_pack::socks5_pw); }
 TORRENT_TEST(http_ssl) { run_suite("https", settings_pack::http); }
 TORRENT_TEST(http_pw_ssl) { run_suite("https", settings_pack::http_pw); }
 #endif // USE_OPENSSL
 
-TORRENT_TEST(chunked_encoding)
-{
-	run_suite("http", settings_pack::none, flag_chunked_encoding | flag_keepalive);
-}
 TORRENT_TEST(no_keepalive)
 {
 	run_suite("http", settings_pack::none, 0);
 }
-

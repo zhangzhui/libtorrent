@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2015, Arvid Norberg
+Copyright (c) 2003-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -35,20 +35,25 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/config.hpp"
 
+#ifndef TORRENT_NO_DEPRECATE
 #include "libtorrent/aux_/disable_warnings_push.hpp"
-
 #include <boost/optional.hpp>
-
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
+#endif
 
 #include "libtorrent/peer_id.hpp"
 #include "libtorrent/fingerprint.hpp"
 
-namespace libtorrent
-{
+// TODO: hide this declaration when deprecated functions are disabled, and
+// remove its internal use
+namespace libtorrent {
 
-	// TODO: hide these declarations when deprecaated functions are disabled, and
-	// expose them internally in a header under aux_.
+namespace aux {
+
+	TORRENT_EXTRA_EXPORT
+	std::string identify_client_impl(const peer_id& p);
+
+}
 
 	// these functions don't really need to be public. This mechanism of
 	// advertising client software and version is also out-dated.
@@ -56,9 +61,23 @@ namespace libtorrent
 	// This function can can be used to extract a string describing a client
 	// version from its peer-id. It will recognize most clients that have this
 	// kind of identification in the peer-id.
-	TORRENT_DEPRECATED_EXPORT TORRENT_DEPRECATED
+	TORRENT_DEPRECATED_EXPORT
 	std::string identify_client(const peer_id& p);
 
+#ifndef TORRENT_NO_DEPRECATE
+
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#ifdef _MSC_VER
+#pragma warning(push, 1)
+#pragma warning(disable: 4996)
+#endif
 	// Returns an optional fingerprint if any can be identified from the peer
 	// id. This can be used to automate the identification of clients. It will
 	// not be able to identify peers with non- standard encodings. Only Azureus
@@ -67,7 +86,18 @@ namespace libtorrent
 	boost::optional<fingerprint>
 		client_fingerprint(peer_id const& p);
 
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
+#endif // TORRENT_NO_DEPRECATE
+
 }
 
 #endif // TORRENT_IDENTIFY_CLIENT_HPP_INCLUDED
-

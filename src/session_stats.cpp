@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2012-2015, Arvid Norberg
+Copyright (c) 2012-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -31,12 +31,16 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "libtorrent/session_stats.hpp" // for stats_metric
-#include "libtorrent/aux_/session_interface.hpp" // for stats counter names
+#include "libtorrent/aux_/vector.hpp"
 #include "libtorrent/performance_counters.hpp" // for counters
-#include <boost/bind.hpp>
 
-namespace libtorrent
-{
+#include <cstring>
+#include <algorithm>
+
+namespace libtorrent {
+
+namespace {
+
 
 	struct stats_metric_impl
 	{
@@ -45,8 +49,8 @@ namespace libtorrent
 	};
 
 #define METRIC(category, name) { #category "." #name, counters:: name },
-	static const stats_metric_impl metrics[] =
-	{
+	aux::array<stats_metric_impl, counters::num_counters> const metrics
+	({{
 		// ``error_peers`` is the total number of peer disconnects
 		// caused by an error (not initiated by this client) and
 		// disconnected initiated by this client (``disconnected_peers``).
@@ -163,6 +167,7 @@ namespace libtorrent
 		METRIC(net, on_lsd_peer_counter)
 		METRIC(net, on_udp_counter)
 		METRIC(net, on_accept_counter)
+		METRIC(net, on_disk_queue_counter)
 		METRIC(net, on_disk_counter)
 
 		// total number of bytes sent and received by the session
@@ -176,7 +181,7 @@ namespace libtorrent
 		METRIC(net, recv_tracker_bytes)
 
 		// the number of sockets currently waiting for upload and download
-		// bandwidht from the rate limiter.
+		// bandwidth from the rate limiter.
 		METRIC(net, limiter_up_queue)
 		METRIC(net, limiter_down_queue)
 
@@ -215,9 +220,9 @@ namespace libtorrent
 		METRIC(ses, num_queued_download_torrents)
 		METRIC(ses, num_error_torrents)
 
-		// the number of torrents that are currently loaded
-		METRIC(ses, num_loaded_torrents)
-		METRIC(ses, num_pinned_torrents)
+		// the number of torrents that don't have the
+		// IP filter applied to them.
+		METRIC(ses, non_filter_torrents)
 
 		// these count the number of times a piece has passed the
 		// hash check, the number of times a piece was successfully
@@ -230,10 +235,12 @@ namespace libtorrent
 		METRIC(ses, num_have_pieces)
 		METRIC(ses, num_total_pieces_added)
 
+#ifndef TORRENT_NO_DEPRECATE
 		// this counts the number of times a torrent has been
 		// evicted (only applies when `dynamic loading of torrent files`_
 		// is enabled).
 		METRIC(ses, torrent_evicted_counter)
+#endif
 
 		// the number of allowed unchoked peers
 		METRIC(ses, num_unchoke_slots)
@@ -311,6 +318,10 @@ namespace libtorrent
 		METRIC(picker, interesting_piece_picks)
 		METRIC(picker, hash_fail_piece_picks)
 
+		// These gauges indicate how many blocks are currently in use as dirty
+		// disk blocks (``write_cache_blocks``) and read cache blocks,
+		// respectively. deprecates ``cache_status::read_cache_size``.
+		// The sum of these gauges deprecates ``cache_status::cache_size``.
 		METRIC(disk, write_cache_blocks)
 		METRIC(disk, read_cache_blocks)
 
@@ -318,16 +329,25 @@ namespace libtorrent
 		// peer until we're sending the response back on the socket.
 		METRIC(disk, request_latency)
 
+		// ``disk_blocks_in_use`` indicates how many disk blocks are currently in
+		// use, either as dirty blocks waiting to be written or blocks kept around
+		// in the hope that a peer will request it or in a peer send buffer. This
+		// gauge deprecates ``cache_status::total_used_buffers``.
 		METRIC(disk, pinned_blocks)
 		METRIC(disk, disk_blocks_in_use)
+
+		// ``queued_disk_jobs`` is the number of disk jobs currently queued,
+		// waiting to be executed by a disk thread. Deprecates
+		// ``cache_status::job_queue_length``.
 		METRIC(disk, queued_disk_jobs)
 		METRIC(disk, num_running_disk_jobs)
 		METRIC(disk, num_read_jobs)
 		METRIC(disk, num_write_jobs)
 		METRIC(disk, num_jobs)
+		METRIC(disk, blocked_disk_jobs)
+
 		METRIC(disk, num_writing_threads)
 		METRIC(disk, num_running_threads)
-		METRIC(disk, blocked_disk_jobs)
 
 		// the number of bytes we have sent to the disk I/O
 		// thread for writing. Every time we hear back from
@@ -343,19 +363,23 @@ namespace libtorrent
 		METRIC(disk, arc_write_size)
 		METRIC(disk, arc_volatile_size)
 
-		// the number of blocks written and read from disk in total. A block is
-		// 16 kiB.
+		// the number of blocks written and read from disk in total. A block is 16
+		// kiB. ``num_blocks_written`` and ``num_blocks_read`` deprecates
+		// ``cache_status::blocks_written`` and ``cache_status::blocks_read`` respectively.
 		METRIC(disk, num_blocks_written)
 		METRIC(disk, num_blocks_read)
 
 		// the total number of blocks run through SHA-1 hashing
 		METRIC(disk, num_blocks_hashed)
-		
+
 		// the number of blocks read from the disk cache
+		// Deprecates ``cache_info::blocks_read_hit``.
 		METRIC(disk, num_blocks_cache_hits)
-		
+
 		// the number of disk I/O operation for reads and writes. One disk
 		// operation may transfer more then one block.
+		// These counters deprecates ``cache_status::writes`` and
+		// ``cache_status::reads``.
 		METRIC(disk, num_write_ops)
 		METRIC(disk, num_read_ops)
 
@@ -382,7 +406,6 @@ namespace libtorrent
 		METRIC(disk, num_fenced_save_resume_data)
 		METRIC(disk, num_fenced_rename_file)
 		METRIC(disk, num_fenced_stop_torrent)
-		METRIC(disk, num_fenced_cache_piece)
 		METRIC(disk, num_fenced_flush_piece)
 		METRIC(disk, num_fenced_flush_hashed)
 		METRIC(disk, num_fenced_flush_storage)
@@ -417,6 +440,16 @@ namespace libtorrent
 		METRIC(dht, dht_messages_in)
 		METRIC(dht, dht_messages_out)
 
+		// the number of incoming DHT requests that were dropped. There are a few
+		// different reasons why incoming DHT packets may be dropped:
+		//
+		// 1. there wasn't enough send quota to respond to them.
+		// 2. the Denial of service logic kicked in, blocking the peer
+		// 3. ignore_dark_internet is enabled, and the packet came from a
+		//    non-public IP address
+		// 4. the bencoding of the message was invalid
+		METRIC(dht, dht_messages_in_dropped)
+
 		// the number of outgoing messages that failed to be
 		// sent
 		METRIC(dht, dht_messages_out_dropped)
@@ -439,12 +472,16 @@ namespace libtorrent
 		METRIC(dht, dht_get_out)
 		METRIC(dht, dht_put_in)
 		METRIC(dht, dht_put_out)
+		METRIC(dht, dht_sample_infohashes_in)
+		METRIC(dht, dht_sample_infohashes_out)
 
 		// the number of failed incoming DHT requests by kind of request
 		METRIC(dht, dht_invalid_announce)
 		METRIC(dht, dht_invalid_get_peers)
+		METRIC(dht, dht_invalid_find_node)
 		METRIC(dht, dht_invalid_put)
 		METRIC(dht, dht_invalid_get)
+		METRIC(dht, dht_invalid_sample_infohashes)
 
 		// uTP counters. Each counter represents the number of time each event
 		// has occurred.
@@ -467,6 +504,7 @@ namespace libtorrent
 		METRIC(utp, num_utp_connected)
 		METRIC(utp, num_utp_fin_sent)
 		METRIC(utp, num_utp_close_wait)
+		METRIC(utp, num_utp_deleted)
 
 		// the buffer sizes accepted by
 		// socket send and receive calls respectively.
@@ -515,15 +553,15 @@ namespace libtorrent
 		METRIC(sock_bufs, socket_recv_size20)
 
 		// ... more
-	};
+	}});
 #undef METRIC
+	} // anonymous namespace
 
 	std::vector<stats_metric> session_stats_metrics()
 	{
-		std::vector<stats_metric> stats;
-		const int num = sizeof(metrics)/sizeof(metrics[0]);
-		stats.resize(num);
-		for (int i = 0; i < num; ++i)
+		aux::vector<stats_metric> stats;
+		stats.resize(metrics.size());
+		for (int i = 0; i < metrics.end_index(); ++i)
 		{
 			stats[i].name = metrics[i].name;
 			stats[i].value_index = metrics[i].value_index;
@@ -533,14 +571,13 @@ namespace libtorrent
 		return stats;
 	}
 
-	int find_metric_idx(char const* name)
+	int find_metric_idx(string_view name)
 	{
-		stats_metric_impl const* end = metrics + sizeof(metrics)/sizeof(metrics[0]);
-		stats_metric_impl const* i = std::find_if(metrics, end , boost::bind(&strcmp
-				, boost::bind(&stats_metric_impl::name, _1), name) == 0);
-		if (i == end) return -1;
+		auto const i = std::find_if(std::begin(metrics), std::end(metrics)
+			, [name](stats_metric_impl const& metr)
+			{ return metr.name == name; });
+
+		if (i == std::end(metrics)) return -1;
 		return i->value_index;
 	}
-
 }
-

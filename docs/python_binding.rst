@@ -83,7 +83,7 @@ asio::tcp::endpoint
 	The endpoint type is represented as a tuple of a string (as the address) and an int for
 	the port number. E.g. ``('127.0.0.1', 6881)`` represents the localhost port 6881.
 
-libtorrent::time_duration
+lt::time_duration
 	The time duration is represented as a number of seconds in a regular integer.
 
 The following functions takes a reference to a container that is filled with
@@ -98,15 +98,18 @@ a list of entries.
 ``create_torrent::add_node()`` takes two arguments, one string and one integer,
 instead of a pair. The string is the address and the integer is the port.
 
-``session::set_settings()`` not only accepts a ``session_settings`` object, but also
-a dictionary with keys matching the names of the members of the ``session_settings`` struct.
-When calling ``set_settings``, the dictionary does not need to have every settings set,
-keys that are not present, are set to their default value.
+``session::apply_settings()`` accepts a dictionary with keys matching the names
+of settings in settings_pack.
+When calling ``apply_settings``, the dictionary does not need to have every settings set,
+keys that are not present are not updated.
 
-For backwards compatibility, ``session::settings()`` still returns a ``session_settings``
-struct. To get a python dictionary of the settings, call ``session::get_settings``.
+To get a python dictionary of the settings, call ``session::get_settings``.
 
 .. _`library reference`: reference.html
+
+Retrieving session statistics in Python is more convenient than that in C++.
+The statistics are stored as an array in ``session_stats_alert``, which will be posted after calling ``post_session_stats()`` in the ``session`` object.
+In order to interpret the statistics array, in C++ it is required to call ``session_stats_metrics()`` to get the indices of these metrics, while in Python it can be done using ``session_stats_alert.values["NAME_OF_METRIC"]``, where ``NAME_OF_METRIC`` is the name of a metric.
 
 For an example python program, see ``client.py`` in the ``bindings/python``
 directory.
@@ -122,9 +125,9 @@ A very simple example usage of the module would be something like this::
 	e = lt.bdecode(open("test.torrent", 'rb').read())
 	info = lt.torrent_info(e)
 
-	params = { save_path: '.', \
-		storage_mode: lt.storage_mode_t.storage_mode_sparse, \
-		ti: info }
+	params = { 'save_path': '.', \
+		'storage_mode': lt.storage_mode_t.storage_mode_sparse, \
+		'ti': info }
 	h = ses.add_torrent(params)
 
 	s = h.status()

@@ -5,7 +5,7 @@
 
 AC_PREREQ([2.63])
 
-AC_INIT([libtorrent-rasterbar],[1.1.0],[arvid@libtorrent.org],
+AC_INIT([libtorrent-rasterbar],[1.2.0],[arvid@libtorrent.org],
         [libtorrent-rasterbar],[http://www.libtorrent.org])
 AC_CONFIG_SRCDIR([src/torrent.cpp])
 AC_CONFIG_AUX_DIR([build-aux])
@@ -14,6 +14,9 @@ AC_CONFIG_MACRO_DIR([m4])
 # Silencing build output (automake-1.11)
 m4_ifdef([AM_SILENT_RULES],[AM_SILENT_RULES([yes])])
 
+# Change ar argument to 'rc' to silence the warning:
+#     ar: `u' modifier ignored since `D' is the default (see `U')
+m4_divert_text([DEFAULTS], [: "${AR_FLAGS=rc}"])
 
 ###############################################################################
 dnl ---------------------------------------------------------------------------
@@ -41,7 +44,7 @@ dnl  increment AGE, Otherwise AGE is reset to 0. If CURRENT has changed,
 dnl  REVISION is set to 0, otherwise REVISION is incremented.
 dnl ---------------------------------------------------------------------------
 
-m4_define([VERSION_INFO_CURRENT],[9])
+m4_define([VERSION_INFO_CURRENT],[10])
 m4_define([VERSION_INFO_REVISION],[0])
 m4_define([VERSION_INFO_AGE],[0])
 INTERFACE_VERSION_INFO=VERSION_INFO_CURRENT:VERSION_INFO_REVISION:VERSION_INFO_AGE
@@ -79,7 +82,7 @@ AC_CANONICAL_TARGET
 AS_ECHO
 AS_ECHO "Initializing Automake:"
 AM_INIT_AUTOMAKE([1.11 foreign])
-
+AM_MAINTAINER_MODE([enable])
 
 AS_ECHO
 AS_ECHO "Initializing Libtool:"
@@ -99,7 +102,7 @@ AX_PTHREAD()
 LIBS="$PTHREAD_LIBS $LIBS"
 CFLAGS="$PTHREAD_CFLAGS $CFLAGS"
 CC="$PTHREAD_CC"
-CXXFLAGS="$CXXFLAGS -ftemplate-depth=120"
+CXXFLAGS="$CXXFLAGS -ftemplate-depth=512 -Wno-format-zero-length"
 
 AS_ECHO "Checking for visibility support:"
 AC_CACHE_CHECK([for __attribute__((visibility("hidden")))],
@@ -117,23 +120,17 @@ AC_CACHE_CHECK([for __attribute__((visibility("hidden")))],
 AS_ECHO
 AS_ECHO "Checking for boost libraries:"
 
-AX_BOOST_BASE([1.47])
+AX_BOOST_BASE([1.54])
+
+AX_CXX_COMPILE_STDCXX_11([noext], [mandatory])
 
 AX_BOOST_SYSTEM()
 AS_IF([test -z "$BOOST_SYSTEM_LIB"],
       [AC_MSG_ERROR(Boost.System library not found. Try using --with-boost-system=lib)])
 
-AX_BOOST_CHRONO()
-AS_IF([test -z "$BOOST_CHRONO_LIB"],
-      [AC_MSG_ERROR(Boost.Chrono library not found. Try using --with-boost-chrono=lib)])
-
-AX_BOOST_RANDOM()
-AS_IF([test -z "$BOOST_RANDOM_LIB"],
-      [AC_MSG_ERROR(Boost.Random library not found. Try using --with-boost-random=lib)])
-
 CPPFLAGS="$BOOST_CPPFLAGS $CPPFLAGS"
 LDFLAGS="$BOOST_LDFLAGS $LDFLAGS"
-LIBS="$BOOST_CHRONO_LIB $BOOST_RANDOM_LIB $LIBS"
+LIBS="$BOOST_SYSTEM_LIB $LIBS"
 
 ###############################################################################
 # Checking for functions and other stuffs
@@ -172,9 +169,9 @@ AC_ARG_ENABLE(
   [logging],
   [AS_HELP_STRING(
     [--enable-logging],
-    [enable logging to disk (use value "verbose" to enable verbose peer wire logging or "errors" limit logging to errors ) [default=no]])],
+    [enable logging alerts [default=yes]])],
   [[ARG_ENABLE_LOGGING=$enableval]],
-  [[ARG_ENABLE_LOGGING=no]]
+  [[ARG_ENABLE_LOGGING=yes]]
 )
 
 AC_ARG_ENABLE(
@@ -196,7 +193,7 @@ AC_ARG_ENABLE(
   [dht],
   [AS_HELP_STRING(
     [--enable-dht],
-    [enable dht support (use value "logging" to add extra logging) [default=yes]])],
+    [enable dht support [default=yes]])],
   [[ARG_ENABLE_DHT=$enableval]],
   [[ARG_ENABLE_DHT=yes]]
 )
@@ -220,15 +217,6 @@ AC_ARG_ENABLE(
 )
 
 AC_ARG_ENABLE(
-  [pool-allocators],
-  [AS_HELP_STRING(
-    [--enable-pool-allocators],
-    [enable pool allocators for send buffers [default=yes]])],
-  [[ARG_ENABLE_POOL_ALLOC=$enableval]],
-  [[ARG_ENABLE_POOL_ALLOC=yes]]
-)
-
-AC_ARG_ENABLE(
   [invariant-checks],
   [AS_HELP_STRING(
     [--enable-invariant-checks],
@@ -248,15 +236,6 @@ AC_ARG_ENABLE(
     [enable deprecated functions in the API [default=yes]])],
   [[ARG_ENABLE_DEPRECATED=$enableval]],
   [[ARG_ENABLE_DEPRECATED=yes]]
-)
-
-AC_ARG_ENABLE(
-  [disk-stats],
-  [AS_HELP_STRING(
-    [--enable-disk-stats],
-    [enable disk activity logging feature [default=no]])],
-  [[ARG_ENABLE_DISK_STATS=$enableval]],
-  [[ARG_ENABLE_DISK_STATS=no]]
 )
 
 AC_ARG_ENABLE(
@@ -320,15 +299,15 @@ AC_MSG_CHECKING([whether debug build should be enabled])
 AS_CASE(["$ARG_ENABLE_DEBUG"],
   ["yes"], [
       AC_MSG_RESULT([yes])
-      AC_DEFINE([TORRENT_DEBUG],[1],[Define to enable debug code.])
-      COMPILETIME_OPTIONS="$COMPILETIME_OPTIONS -DTORRENT_DEBUG "
-      DEBUGFLAGS="-g"
+      AC_DEFINE([TORRENT_USE_ASSERTS],[1],[Define to enable debug code.])
+      COMPILETIME_OPTIONS="$COMPILETIME_OPTIONS -DTORRENT_USE_ASSERTS"
+      DEBUGFLAGS="-Og"
    ],
   ["no"], [
       AC_MSG_RESULT([no])
       AC_DEFINE([NDEBUG],[1],[Define to disable debug code.])
       #COMPILETIME_OPTIONS="$COMPILETIME_OPTIONS -DNDEBUG "
-      DEBUGFLAGS="-Os"
+      DEBUGFLAGS="-g0 -Os"
    ],
   [AC_MSG_RESULT([$ARG_ENABLE_DEBUG])
    AC_MSG_ERROR([Unknown option "$ARG_ENABLE_DEBUG". Use either "yes" or "no".])]
@@ -338,19 +317,16 @@ AC_MSG_CHECKING([whether invariant check should be enabled]) #depends: $ac_arg_e
 AS_CASE(["$ARG_ENABLE_INVARIANT"],
   ["yes"|"on"], [
       AC_MSG_RESULT([yes])
-      AS_IF([test "x$ac_arg_enable_debug" = "xno"],
-            [AC_MSG_ERROR([invariant-checks: this setting only affects debug build. Try using --enable-debug.])])
+      AC_DEFINE([TORRENT_USE_INVARIANT_CHECKS],[1],[Define to enable internal invariant checks.])
     ],
   ["no"|"off"], [
       AC_MSG_RESULT([no])
-      AS_IF([test "x$ac_arg_enable_debug" = "xyes"],
-            [AC_DEFINE([TORRENT_DISABLE_INVARIANT_CHECKS],[1],[Define to disable internal invariant checks. Asserts are still enabled while debug is on.])])
+      AC_DEFINE([TORRENT_USE_INVARIANT_CHECKS],[0],[Define to disable internal invariant checks. Asserts are still enabled while debug is on.])
     ],
   ["full"], [
       AC_MSG_RESULT([full])
-      AS_IF([test "x$ac_arg_enable_debug" = "xyes"],
-            [AC_DEFINE([TORRENT_EXPENSIVE_INVARIANT_CHECKS],[1],[Define to enable extra expensive invariant checks.])],
-            [AC_MSG_ERROR([invariant-checks: this setting only affects debug build. Try using --enable-debug.])])
+      AC_DEFINE([TORRENT_USE_INVARIANT_CHECKS],[1],[Define to enable internal invariant checks.])
+      AC_DEFINE([TORRENT_EXPENSIVE_INVARIANT_CHECKS],[1],[Define to enable extra expensive invariant checks.]),
     ],
   [AC_MSG_RESULT([$ARG_ENABLE_INVARIANT])
    AC_MSG_ERROR([Unknown option "$ARG_ENABLE_INVARIANT". Use either "yes", "no" or "full".])]
@@ -363,24 +339,11 @@ AS_CASE(["$ARG_ENABLE_LOGGING"],
     ],
   ["no"|"none"], [
       AC_MSG_RESULT([no])
-      AC_DEFINE([TORRENT_DISABLE_LOGGING],[1],[Define to enable support for logging alerts])
+      AC_DEFINE([TORRENT_DISABLE_LOGGING],[1],[Define to disable support for logging alerts])
       COMPILETIME_OPTIONS="$COMPILETIME_OPTIONS -DTORRENT_DISABLE_LOGGING "
     ],
   [AC_MSG_RESULT([$ARG_ENABLE_LOGGING])
    AC_MSG_ERROR([Unknown option "$ARG_ENABLE_LOGGING". Use either "yes" or "no"])]
-)
-
-AC_MSG_CHECKING([whether disk activity logging should be enabled])
-AS_CASE(["$ARG_ENABLE_DISK_STATS"],
-  ["yes"|"on"], [
-      AC_MSG_RESULT([yes])
-      AC_DEFINE([TORRENT_DISK_STATS],[1],[Define to create a log of all disk activities.])
-    ],
-  ["no"|"off"], [
-      AC_MSG_RESULT([no])
-    ],
-  [AC_MSG_RESULT([$ARG_ENABLE_DISK_STATS])
-   AC_MSG_ERROR([Unknown option "$ARG_ENABLE_DISK_STATS". Use either "yes" or "no".])]
 )
 
 AS_ECHO
@@ -394,7 +357,8 @@ AS_CASE(["$ARG_ENABLE_ENCRYPTION"],
 
       AX_CHECK_OPENSSL([
           AC_DEFINE([TORRENT_USE_OPENSSL],[1],[Define to use OpenSSL support.])
-          COMPILETIME_OPTIONS="$COMPILETIME_OPTIONS -DTORRENT_USE_OPENSSL "
+          AC_DEFINE([TORRENT_USE_LIBCRYPTO],[1],[Define to use libcrypto from OpenSSL.])
+          COMPILETIME_OPTIONS="$COMPILETIME_OPTIONS -DTORRENT_USE_OPENSSL -DTORRENT_USE_LIBCRYPTO "
         ], [
           AC_MSG_ERROR([OpenSSL library not found. Try using --with-openssl=DIR or disabling encryption at all.])
       ])
@@ -418,26 +382,8 @@ AS_CASE(["$ARG_ENABLE_DHT"],
       AC_DEFINE([TORRENT_DISABLE_DHT],[1],[Define to disable the DHT support.])
       COMPILETIME_OPTIONS="$COMPILETIME_OPTIONS -DTORRENT_DISABLE_DHT "
     ],
-  ["logging"], [
-      AC_MSG_RESULT([logging])
-      AC_DEFINE([TORRENT_DHT_VERBOSE_LOGGING],[1],[Define to enable DHT support with verbose logging.])
-      COMPILETIME_OPTIONS="$COMPILETIME_OPTIONS -DTORRENT_DHT_VERBOSE_LOGGING "
-    ],
   [AC_MSG_RESULT([$ARG_ENABLE_DHT])
-   AC_MSG_ERROR([Unknown option "$ARG_ENABLE_DHT". Use either "yes", "no" or "logging".])]
-)
-
-AC_MSG_CHECKING([whether pool allocators should be enabled])
-AS_CASE(["$ARG_ENABLE_POOL_ALLOC"],
-  ["yes"|"on"], [
-      AC_MSG_RESULT([yes])
-    ],
-  ["no"|"off"], [
-      AC_MSG_RESULT([no])
-      AC_DEFINE([TORRENT_DISABLE_POOL_ALLOCATOR],[1],[Define to disable use of boost::pool for pool allocators.])
-    ],
-  [AC_MSG_RESULT([$ARG_ENABLE_POOL_ALLOC])
-   AC_MSG_ERROR([Unknown option "$ARG_ENABLE_POOL_ALLOC". Use either "yes" or "no".])]
+   AC_MSG_ERROR([Unknown option "$ARG_ENABLE_DHT". Use either "yes" or "no".])]
 )
 
 AS_IF([test "x$ac_cv_hidden_visibility_attribute" = "xyes"], [
@@ -482,6 +428,8 @@ AS_CASE(["$ARG_ENABLE_PYTHON_BINDING"],
 
       AS_IF([test -z "$BOOST_PYTHON_LIB"],
             [AC_MSG_ERROR([Boost.Python library not found. Try using --with-boost-python=lib.])])
+
+      BOOST_PYTHON_LIB="-l$BOOST_PYTHON_LIB"
     ],
   ["no"], [
       AC_MSG_RESULT([no])
@@ -529,12 +477,8 @@ AM_CONDITIONAL([WITH_OPENSSL], [test "x$ARG_ENABLE_ENCRYPTION" = "xyes" -o "x$AR
 # Other useful stuff
 ###############################################################################
 
-# this works around a bug in asio in boost-1.39
-# see: https://svn.boost.org/trac/boost/ticket/3095
-AC_DEFINE([BOOST_ASIO_HASH_MAP_BUCKETS],[1021],[Define to fix a wrong behavior in boost 1.39.])
-COMPILETIME_OPTIONS="$COMPILETIME_OPTIONS -DBOOST_ASIO_HASH_MAP_BUCKETS=1021 "
-
-COMPILETIME_OPTIONS="$COMPILETIME_OPTIONS -msse4.2 "
+AC_DEFINE([BOOST_ASIO_HAS_STD_CHRONO],[1],[Define to make sure asio uses std::chrono.])
+COMPILETIME_OPTIONS="$COMPILETIME_OPTIONS -DBOOST_ASIO_HAS_STD_CHRONO=1 "
 
 AC_DEFINE([BOOST_EXCEPTION_DISABLE],[1],[Define to disable the boost.exception features.])
 COMPILETIME_OPTIONS="$COMPILETIME_OPTIONS -DBOOST_EXCEPTION_DISABLE "
@@ -556,11 +500,14 @@ AC_SUBST(DEBUGFLAGS)
 AC_SUBST(PYTHON_INSTALL_PARAMS)
 AC_SUBST(COMPILETIME_OPTIONS)
 
+# Disable deprecated warnings for the Python binding builds.
+PYTHON_CXXFLAGS="${PYTHON_CXXFLAGS} -Wno-deprecated-declarations"
+AC_SUBST(PYTHON_CXXFLAGS)
 
-# Try to guess real svn revision if any, fallback to hardcoded otherwise
-SVN_REVISION=`svn info 2>/dev/null | sed -n -e '/^URL\:.*libtorrent.svn.sourceforge.net/,$!d;s,^Revision\: \([[0-9]]*\)$,\1,p'`
-AS_IF([test -z "$SVN_REVISION"],
-      [SVN_REVISION=`sed -n -e 's/^#define LIBTORRENT_REVISION \"\$Rev\: \([0-9]*\) \$\" $/\1/p' include/libtorrent/version.hpp`])
+# Try to guess real git revision if any, fallback to hardcoded otherwise
+GIT_REVISION=`git log -1 --format=format:%h 2>/dev/null`
+AS_IF([test -z "$GIT_REVISION"],
+      [GIT_REVISION=`sed -n -e "s/^#define LIBTORRENT_REVISION \"\([0-9a-z]*\)\"$/\1/p" $(dirname $0)/include/libtorrent/version.hpp`])
 
 
 ###############################################################################
@@ -581,6 +528,7 @@ AC_CONFIG_FILES(
   [bindings/python/Makefile]
   [bindings/python/link_flags]
   [bindings/python/compile_flags]
+  [bindings/python/compile_cmd]
   [libtorrent-rasterbar.pc]
   [libtorrent-rasterbar-cmake.pc]
 )
@@ -603,7 +551,7 @@ cat > config.report << END
 Package:
   name:                 ${PACKAGE_NAME}
   version:              ${PACKAGE_VERSION}
-  svn revision:         ${SVN_REVISION}
+  git revision:         ${GIT_REVISION}
 
 Build environment:
   build system:         ${build}
@@ -622,13 +570,11 @@ Build options:
   deprecated functions: ${ARG_ENABLE_DEPRECATED:-yes}
   debug build:          ${ARG_ENABLE_DEBUG:-no}
   invariant checks:     ${ARG_ENABLE_INVARIANT:-no}
-  logging support:      ${ARG_ENABLE_LOGGING:-no}
-  disk statistics:      ${ARG_ENABLE_DISK_STATS:-no}
+  logging support:      ${ARG_ENABLE_LOGGING:-yes}
 
 Features:
   encryption support:   ${ARG_ENABLE_ENCRYPTION:-yes}
   dht support:          ${ARG_ENABLE_DHT:-yes}
-  pool allocators:      ${ARG_ENABLE_POOL_ALLOC:-yes}
 
 Extra builds:
   examples:             ${ARG_ENABLE_EXAMPLES:-no}
@@ -644,8 +590,6 @@ Boost libraries:
   CPPFlags:             ${BOOST_CPPFLAGS}
   LDFlags:              ${BOOST_LDFLAGS}
   boost.system:         ${BOOST_SYSTEM_LIB}
-  boost.chrono:         ${BOOST_CHRONO_LIB}
-  boost.random:         ${BOOST_RANDOM_LIB}
 END
 
 AS_IF([test "x$ARG_ENABLE_PYTHON_BINDING" = "xyes"], [
@@ -693,7 +637,7 @@ OpenSSL library:
   OpenSSL Libs:         ${OPENSSL_LIBS}
   OpenSSL LDFlags:      ${OPENSSL_LDFLAGS}
   OpenSSL Includes:     ${OPENSSL_INCLUDES}
-END 
+END
 ])
 
 cat config.report

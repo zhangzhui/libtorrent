@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2013-2015, Arvid Norberg
+Copyright (c) 2013-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,19 +34,17 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_PERFORMANCE_COUNTERS_HPP_INCLUDED
 
 #include "libtorrent/config.hpp"
-#include "libtorrent/thread.hpp"
+#include "libtorrent/aux_/array.hpp"
 
-#include "libtorrent/aux_/disable_warnings_push.hpp"
+#include <cstdint>
+#include <atomic>
+#include <mutex>
 
-#include <boost/cstdint.hpp>
-#include <boost/atomic.hpp>
+namespace libtorrent {
 
-#include "libtorrent/aux_/disable_warnings_pop.hpp"
-
-namespace libtorrent
-{
 	struct TORRENT_EXTRA_EXPORT counters
 	{
+		// TODO: move this out of counters
 		enum stats_counter_t
 		{
 			// the number of peers that were disconnected this
@@ -133,7 +131,9 @@ namespace libtorrent
 			on_disk_queue_counter,
 			on_disk_counter,
 
+#ifndef TORRENT_NO_DEPRECATE
 			torrent_evicted_counter,
+#endif
 
 			// bittorrent message counters
 			// TODO: should keepalives be in here too?
@@ -217,6 +217,7 @@ namespace libtorrent
 			recv_redundant_bytes,
 
 			dht_messages_in,
+			dht_messages_in_dropped,
 			dht_messages_out,
 			dht_messages_out_dropped,
 			dht_bytes_in,
@@ -234,11 +235,15 @@ namespace libtorrent
 			dht_get_out,
 			dht_put_in,
 			dht_put_out,
+			dht_sample_infohashes_in,
+			dht_sample_infohashes_out,
 
 			dht_invalid_announce,
 			dht_invalid_get_peers,
+			dht_invalid_find_node,
 			dht_invalid_put,
 			dht_invalid_get,
+			dht_invalid_sample_infohashes,
 
 			// uTP counters.
 			utp_packet_loss,
@@ -319,8 +324,7 @@ namespace libtorrent
 		{
 			num_checking_torrents = num_stats_counters,
 			num_stopped_torrents,
-			// upload_only means finished
-			num_upload_only_torrents,
+			num_upload_only_torrents, // upload_only means finished
 			num_downloading_torrents,
 			num_seeding_torrents,
 			num_queued_seeding_torrents,
@@ -331,11 +335,7 @@ namespace libtorrent
 			// IP filter applied to them.
 			non_filter_torrents,
 
-			// counters related to evicting torrents
-			num_loaded_torrents,
-			num_pinned_torrents,
-
-			// these counter indices deliberatly
+			// these counter indices deliberately
 			// match the order of socket type IDs
 			// defined in socket_type.hpp.
 			num_tcp_peers,
@@ -348,18 +348,42 @@ namespace libtorrent
 			num_ssl_http_proxy_peers,
 			num_ssl_utp_peers,
 
+			// the number of peer connections that are half-open (i.e. in the
+			// process of completing a connection attempt) and fully connected.
+			// These states are mutually exclusive (a connection cannot be in both
+			// states simultaneously).
 			num_peers_half_open,
 			num_peers_connected,
+
+			// the number of peers interested in us (``up_interested``) and peers
+			// we are interested in (``down_interested``).
 			num_peers_up_interested,
 			num_peers_down_interested,
+
+			// the total number of unchoked peers (``up_unchoked_all``), the number
+			// of peers unchoked via the optimistic unchoke
+			// (``up_unchoked_optimistic``) and peers unchoked via the
+			// reciprocation (regular) unchoke mechanism (``up_unchoked``).
+			// and the number of peers that have unchoked us (``down_unchoked).
 			num_peers_up_unchoked_all,
 			num_peers_up_unchoked_optimistic,
 			num_peers_up_unchoked,
 			num_peers_down_unchoked,
+
+			// the number of peers with at least one piece request pending,
+			// downloading (``down_requests``) or uploading (``up_requests``)
 			num_peers_up_requests,
 			num_peers_down_requests,
+
+			// the number of peers that have at least one outstanding disk request,
+			// either reading (``up_disk``) or writing (``down_disk``).
 			num_peers_up_disk,
 			num_peers_down_disk,
+
+			// the number of peers in end-game mode. End game mode is where there
+			// are no blocks that we have not sent any requests to download. In ths
+			// mode, blocks are allowed to be requested from more than one peer at
+			// at time.
 			num_peers_end_game,
 
 			write_cache_blocks,
@@ -388,7 +412,6 @@ namespace libtorrent
 			num_fenced_save_resume_data,
 			num_fenced_rename_file,
 			num_fenced_stop_torrent,
-			num_fenced_cache_piece,
 			num_fenced_flush_piece,
 			num_fenced_flush_hashed,
 			num_fenced_flush_storage,
@@ -440,11 +463,11 @@ namespace libtorrent
 		counters& operator=(counters const&);
 
 		// returns the new value
-		boost::int64_t inc_stats_counter(int c, boost::int64_t value = 1);
-		boost::int64_t operator[](int i) const;
+		std::int64_t inc_stats_counter(int c, std::int64_t value = 1);
+		std::int64_t operator[](int i) const;
 
-		void set_value(int c, boost::int64_t value);
-		void blend_stats_counter(int c, boost::int64_t value, int ratio);
+		void set_value(int c, std::int64_t value);
+		void blend_stats_counter(int c, std::int64_t value, int ratio);
 
 	private:
 
@@ -452,16 +475,15 @@ namespace libtorrent
 		// TODO: restore these to regular integers. Instead have one copy
 		// of the counters per thread and collect them at convenient
 		// synchronization points
-#if BOOST_ATOMIC_LLONG_LOCK_FREE == 2
-		boost::atomic<boost::int64_t> m_stats_counter[num_counters];
+#ifdef ATOMIC_LLONG_LOCK_FREE
+		aux::array<std::atomic<std::int64_t>, num_counters> m_stats_counter;
 #else
 		// if the atomic type is't lock-free, use a single lock instead, for
 		// the whole array
-		mutable mutex m_mutex;
-		boost::int64_t m_stats_counter[num_counters];
+		mutable std::mutex m_mutex;
+		aux::array<std::int64_t, num_counters> m_stats_counter;
 #endif
 	};
 }
 
 #endif
-

@@ -31,12 +31,12 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <vector>
-#include <stdio.h> // for tmpfile()
+
 #include "test.hpp"
 
 unit_test_t _g_unit_tests[1024];
 int _g_num_unit_tests = 0;
-int _g_test_failures = 0;
+int _g_test_failures = 0; // flushed at start of every unit
 int _g_test_idx = 0;
 
 static std::vector<std::string> failure_strings;
@@ -49,8 +49,8 @@ int test_counter()
 void report_failure(char const* err, char const* file, int line)
 {
 	char buf[500];
-	snprintf(buf, sizeof(buf), "\x1b[41m***** %s:%d \"%s\" *****\x1b[0m\n", file, line, err);
-	fprintf(stderr, "\n%s\n", buf);
+	std::snprintf(buf, sizeof(buf), "\x1b[41m***** %s:%d \"%s\" *****\x1b[0m\n", file, line, err);
+	std::fprintf(stderr, "\n%s\n", buf);
 	failure_strings.push_back(buf);
 	++_g_test_failures;
 }
@@ -60,11 +60,12 @@ int print_failures()
 	int longest_name = 0;
 	for (int i = 0; i < _g_num_unit_tests; ++i)
 	{
-		int len = strlen(_g_unit_tests[i].name);
+		int len = int(strlen(_g_unit_tests[i].name));
 		if (len > longest_name) longest_name = len;
 	}
 
-	fprintf(stderr, "\n\n");
+	std::printf("\n\n");
+	int total_num_failures = 0;
 
 	for (int i = 0; i < _g_num_unit_tests; ++i)
 	{
@@ -72,22 +73,24 @@ int print_failures()
 
 		if (_g_unit_tests[i].num_failures == 0)
 		{
-			fprintf(stderr, "\x1b[32m[%-*s] ***PASS***\n"
+			std::printf("\x1b[32m[%-*s] ***PASS***\n"
 				, longest_name, _g_unit_tests[i].name);
 		}
 		else
 		{
-			fprintf(stderr, "\x1b[31m[%-*s] %d FAILURES\n"
+			total_num_failures += _g_unit_tests[i].num_failures;
+			std::printf("\x1b[31m[%-*s] %d FAILURES\n"
 				, longest_name
 				, _g_unit_tests[i].name
 				, _g_unit_tests[i].num_failures);
 		}
 	}
 
-	fprintf(stderr, "\x1b[0m");
+	std::printf("\x1b[0m");
 
-	if (_g_test_failures > 0)
-		fprintf(stderr, "\n\n\x1b[41m   == %d TEST(S) FAILED ==\x1b[0m\n\n\n", _g_test_failures);
-	return _g_test_failures;
+	if (total_num_failures > 0)
+		std::printf("\n\n\x1b[41m   == %d TEST(S) FAILED ==\x1b[0m\n\n\n"
+			, total_num_failures);
+	return total_num_failures;
 }
 

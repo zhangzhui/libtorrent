@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2005-2015, Arvid Norberg
+Copyright (c) 2005-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -33,23 +33,14 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef TORRENT_CONFIG_HPP_INCLUDED
 #define TORRENT_CONFIG_HPP_INCLUDED
 
-#define _FILE_OFFSET_BITS 64
+#include "libtorrent/aux_/disable_warnings_push.hpp"
 
-#if !defined _MSC_VER || _MSC_VER >= 1600
-#ifndef __STDC_LIMIT_MACROS
-#define __STDC_LIMIT_MACROS 1
-#endif
-#ifndef __STDC_CONSTANT_MACROS
-#define __STDC_CONSTANT_MACROS 1
-#endif
-#endif
+#define _FILE_OFFSET_BITS 64
 
 #include <boost/config.hpp>
 #include <boost/asio/detail/config.hpp>
-#include <boost/version.hpp>
-#include <boost/detail/endian.hpp>
-#include <stdio.h> // for snprintf
-#include <limits.h> // for IOV_MAX
+
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
 
 #include "libtorrent/export.hpp"
 
@@ -57,39 +48,34 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <linux/version.h> // for LINUX_VERSION_CODE and KERNEL_VERSION
 #endif // __linux
 
-#if defined TORRENT_DEBUG_BUFFERS && !defined TORRENT_DISABLE_POOL_ALLOCATOR
-#error TORRENT_DEBUG_BUFFERS only works if you also disable pool allocators with TORRENT_DISABLE_POOL_ALLOCATOR
-#endif
-
 #if !defined BOOST_ASIO_SEPARATE_COMPILATION && !defined BOOST_ASIO_DYN_LINK
 #define BOOST_ASIO_SEPARATE_COMPILATION
 #endif
 
-#ifndef _MSC_VER
-#ifndef __STDC_FORMAT_MACROS
-#define __STDC_FORMAT_MACROS 1
-#endif
-#include <inttypes.h> // for PRId64 et.al.
+#if defined __MINGW64__ || defined __MINGW32__
+// GCC warns on format codes that are incompatible with glibc, which the windows
+// format codes are. So we need to disable those for mingw targets
+#pragma GCC diagnostic ignored "-Wformat"
+#pragma GCC diagnostic ignored "-Wformat-extra-args"
 #endif
 
-#ifndef PRId64
-// MinGW uses microsofts runtime
-#if defined _MSC_VER || defined __MINGW32__
-#define PRId64 "I64d"
-#define PRIu64 "I64u"
-#define PRIx64 "I64x"
-#define PRIu32 "u"
-#else
-#define PRId64 "lld"
-#define PRIu64 "llu"
-#define PRIx64 "llx"
-#define PRIu32 "u"
-#endif
-#endif
+// ====== CLANG ========
+
+#if defined __clang__
+
+# if !defined TORRENT_BUILDING_LIBRARY
+// TODO: figure out which version of clang this is supported in
+#  define TORRENT_DEPRECATED_ENUM __attribute__ ((deprecated))
+#  define TORRENT_DEPRECATED_MEMBER __attribute__ ((deprecated))
+# endif
 
 // ======= GCC =========
 
-#if defined __GNUC__
+#elif defined __GNUC__
+
+#ifdef _GLIBCXX_CONCEPT_CHECKS
+#define TORRENT_COMPLETE_TYPES_REQUIRED 1
+#endif
 
 // deprecation markup is only enabled when libtorrent
 // headers are included by clients, not while building
@@ -98,26 +84,23 @@ POSSIBILITY OF SUCH DAMAGE.
 #  define TORRENT_DEPRECATED __attribute__ ((deprecated))
 # endif
 
+# if __GNUC__ >= 6 && !defined TORRENT_BUILDING_LIBRARY
+#  define TORRENT_DEPRECATED_ENUM __attribute__ ((deprecated))
+#  define TORRENT_DEPRECATED_MEMBER __attribute__ ((deprecated))
+# endif
+
 // ======= SUNPRO =========
 
 #elif defined __SUNPRO_CC
 
-// SunPRO seems to have an overly-strict
-// definition of POD types and doesn't
-// seem to allow boost::array in unions
-#define TORRENT_BROKEN_UNIONS 1
+#define TORRENT_COMPLETE_TYPES_REQUIRED 1
 
 // ======= MSVC =========
 
 #elif defined BOOST_MSVC
 
-#pragma warning(disable: 4258)
-#pragma warning(disable: 4251)
-
 // class X needs to have dll-interface to be used by clients of class Y
 #pragma warning(disable:4251)
-// '_vsnprintf': This function or variable may be unsafe
-#pragma warning(disable:4996)
 
 // deprecation markup is only enabled when libtorrent
 // headers are included by clients, not while building
@@ -126,6 +109,12 @@ POSSIBILITY OF SUCH DAMAGE.
 # define TORRENT_DEPRECATED __declspec(deprecated)
 #endif
 
+// auto and decltype(auto) return types supports since MSVS2015
+// https://msdn.microsoft.com/en-us/library/hh567368.aspx
+// we need to force C++14 feature due VS2017 inability to parse C++11 syntax
+#if defined(_MSC_VER) && (_MSC_VER > 1900)
+#define TORRENT_AUTO_RETURN_TYPES 1
+#endif
 #endif
 
 
@@ -136,9 +125,7 @@ POSSIBILITY OF SUCH DAMAGE.
 // ==== AMIGA ===
 #if defined __AMIGA__ || defined __amigaos__ || defined __AROS__
 #define TORRENT_AMIGA
-#define TORRENT_USE_MLOCK 0
 #define TORRENT_USE_IPV6 0
-#define TORRENT_USE_BOOST_THREAD 0
 #define TORRENT_USE_IOSTREAM 0
 // set this to 1 to disable all floating point operations
 // (disables some float-dependent APIs)
@@ -157,18 +144,16 @@ POSSIBILITY OF SUCH DAMAGE.
 // the locale is always utf-8
 #if defined __APPLE__
 
-# define TORRENT_USE_OSATOMIC 1
 # ifndef TORRENT_USE_ICONV
 #  define TORRENT_USE_ICONV 0
 #  define TORRENT_USE_LOCALE 0
 # endif
 #include <AvailabilityMacros.h>
-
-#define TORRENT_USE_PURGABLE_CONTROL 1
+#include <TargetConditionals.h>
 
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
 // on OSX, use the built-in common crypto for built-in
-# if !defined TORRENT_USE_OPENSSL && !defined TORRENT_USE_GCRYPT
+# if !defined TORRENT_USE_LIBCRYPTO && !defined TORRENT_USE_LIBGCRYPT
 #  define TORRENT_USE_COMMONCRYPTO 1
 # endif // TORRENT_USE_OPENSSL
 #endif // MAC_OS_X_VERSION_MIN_REQUIRED
@@ -178,14 +163,21 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_USE_EXECINFO 1
 #endif
 
+#define TORRENT_USE_SYSTEMCONFIGURATION 1
+
+#if TARGET_OS_IPHONE
+#define TORRENT_USE_SC_NETWORK_REACHABILITY 1
+#endif
+
 #else // __APPLE__
 // FreeBSD has a reasonable iconv signature
 // unless we're on glibc
 #ifndef __GLIBC__
-# define TORRENT_ICONV_ARG (const char**)
+# define TORRENT_ICONV_ARG(x) (x)
 #endif
 #endif // __APPLE__
 
+#define TORRENT_USE_DEV_RANDOM 1
 #define TORRENT_HAVE_MMAP 1
 
 #define TORRENT_HAS_FALLOCATE 0
@@ -199,7 +191,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #elif defined __linux__
 #define TORRENT_LINUX
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,30)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,30) && !defined __ANDROID__
 # define TORRENT_USE_PREADV 1
 # define TORRENT_USE_PREAD 0
 #else
@@ -209,21 +201,27 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #define TORRENT_HAVE_MMAP 1
 #define TORRENT_USE_NETLINK 1
+#define TORRENT_USE_IFADDRS 0
 #define TORRENT_USE_IFCONF 1
 #define TORRENT_HAS_SALEN 0
+#define TORRENT_USE_FDATASYNC 1
 
 // ===== ANDROID ===== (almost linux, sort of)
 #if defined __ANDROID__
 #define TORRENT_ANDROID
 #define TORRENT_HAS_FALLOCATE 0
 #define TORRENT_USE_ICONV 0
-#define TORRENT_USE_IFADDRS 0
 #define TORRENT_USE_MEMALIGN 1
-#define TORRENT_USE_FDATASYNC 0
 #else // ANDROID
-#define TORRENT_USE_IFADDRS 1
 #define TORRENT_USE_POSIX_MEMALIGN 1
-#define TORRENT_USE_FDATASYNC 1
+
+// posix_fallocate() is available under this condition
+#if _XOPEN_SOURCE >= 600 || _POSIX_C_SOURCE >= 200112L
+#define TORRENT_HAS_FALLOCATE 1
+#else
+#define TORRENT_HAS_FALLOCATE 0
+#endif
+
 #endif // ANDROID
 
 #if defined __GLIBC__ && ( defined __x86_64__ || defined __i386 \
@@ -232,7 +230,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #endif
 
 // ==== MINGW ===
-#elif defined __MINGW32__
+#elif defined __MINGW32__ || defined __MINGW64__
 #define TORRENT_MINGW
 #define TORRENT_WINDOWS
 #ifndef TORRENT_USE_ICONV
@@ -244,7 +242,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_USE_GETADAPTERSADDRESSES 1
 #define TORRENT_HAS_SALEN 0
 #define TORRENT_USE_GETIPFORWARDTABLE 1
-#define TORRENT_USE_INTERLOCKED_ATOMIC 1
 #ifndef TORRENT_USE_UNC_PATHS
 # define TORRENT_USE_UNC_PATHS 1
 #endif
@@ -253,11 +250,29 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_USE_PWRITEV 1
 
 // ==== WINDOWS ===
-#elif defined WIN32
+#elif defined _WIN32
 #define TORRENT_WINDOWS
 #ifndef TORRENT_USE_GETIPFORWARDTABLE
 # define TORRENT_USE_GETIPFORWARDTABLE 1
 #endif
+
+# if !defined TORRENT_USE_LIBCRYPTO && !defined TORRENT_USE_LIBGCRYPT
+// unless some other crypto library has been specified, default to the native
+// windows CryptoAPI
+#define TORRENT_USE_CRYPTOAPI 1
+
+#ifdef NTDDI_VERSION
+# if (NTDDI_VERSION > NTDDI_WINXPSP2)
+#  define TORRENT_USE_CRYPTOAPI_SHA_512 1
+# endif
+#else // NTDDI_VERSION not defined so use simple _WIN32_WINNT check
+# if _WIN32_WINNT >= 0x0600
+#  define TORRENT_USE_CRYPTOAPI_SHA_512 1
+# endif
+#endif
+
+#endif
+
 #define TORRENT_USE_GETADAPTERSADDRESSES 1
 #define TORRENT_HAS_SALEN 0
 // windows has its own functions to convert
@@ -267,7 +282,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #endif
 #define TORRENT_USE_RLIMIT 0
 #define TORRENT_HAS_FALLOCATE 0
-#define TORRENT_USE_INTERLOCKED_ATOMIC 1
 #ifndef TORRENT_USE_UNC_PATHS
 # define TORRENT_USE_UNC_PATHS 1
 #endif
@@ -287,20 +301,16 @@ POSSIBILITY OF SUCH DAMAGE.
 // ==== SOLARIS ===
 #elif defined sun || defined __sun
 #define TORRENT_SOLARIS
-#define TORRENT_COMPLETE_TYPES_REQUIRED 1
 #define TORRENT_USE_IFCONF 1
 #define TORRENT_HAS_SALEN 0
 #define TORRENT_HAS_SEM_RELTIMEDWAIT 1
 #define TORRENT_HAVE_MMAP 1
-#define TORRENT_USE_SOLARIS_ATOMIC 1
 
 // ==== BEOS ===
 #elif defined __BEOS__ || defined __HAIKU__
 #define TORRENT_BEOS
 #include <storage/StorageDefs.h> // B_PATH_NAME_LENGTH
 #define TORRENT_HAS_FALLOCATE 0
-#define TORRENT_USE_MLOCK 0
-#define TORRENT_USE_BEOS_ATOMIC 1
 #ifndef TORRENT_USE_ICONV
 #define TORRENT_USE_ICONV 0
 #endif
@@ -317,9 +327,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_HAS_FALLOCATE 0
 #define TORRENT_USE_IFCONF 1
 #define TORRENT_USE_SYSCTL 1
-#define TORRENT_USE_MLOCK 0
 #define TORRENT_USE_IPV6 0
-#define TORRENT_ICONV_ARG (const char**)
+#define TORRENT_ICONV_ARG(x) (x)
 #define TORRENT_USE_WRITEV 0
 #define TORRENT_USE_READV 0
 
@@ -334,130 +343,26 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_BSD
 #endif
 
-#if defined __GNUC__ && !(defined TORRENT_USE_OSATOMIC \
-	|| defined TORRENT_USE_INTERLOCKED_ATOMIC \
-	|| defined TORRENT_USE_BEOS_ATOMIC \
-	|| defined TORRENT_USE_SOLARIS_ATOMIC)
-// atomic operations in GCC were introduced in 4.1.1
-# if (__GNUC__ >= 4 && __GNUC_MINOR__ >= 1 && __GNUC_PATCHLEVEL__ >= 1) || __GNUC__ > 4
-#  define TORRENT_USE_GCC_ATOMIC 1
-# endif
-#endif
-
-// on windows, NAME_MAX refers to Unicode characters
-// on linux it refers to bytes (utf-8 encoded)
-// TODO: Make this count Unicode characters instead of bytes on windows
-
-// windows
-#if defined FILENAME_MAX
-#define TORRENT_MAX_PATH FILENAME_MAX
-
-// beos
-#elif defined B_PATH_NAME_LENGTH
-#define TORRENT_MAX_PATH B_PATH_NAME_LENGTH
-
-// solaris
-#elif defined MAXPATH
-#define TORRENT_MAX_PATH MAXPATH
-
-// posix
-#elif defined NAME_MAX
-#define TORRENT_MAX_PATH NAME_MAX
-
-// none of the above
-#else
-// this is the maximum number of characters in a
-// path element / filename on windows
-#define TORRENT_MAX_PATH 255
-
-#ifdef _MSC_VER
-#pragma message ( "unknown platform, assuming the longest path is 255" )
-#else
-#warning "unknown platform, assuming the longest path is 255"
-#endif
-
-#endif
-
 #define TORRENT_UNUSED(x) (void)(x)
-
-#if (defined _MSC_VER && _MSC_VER < 1900) && !defined TORRENT_MINGW
-
-#include <stdarg.h>
-
-// internal
-#ifdef __cplusplus
-inline
-#else
-static
-#endif
-int snprintf(char* buf, int len, char const* fmt, ...)
-{
-	va_list lp;
-	int ret;
-	va_start(lp, fmt);
-	ret = _vsnprintf(buf, len, fmt, lp);
-	va_end(lp);
-	if (ret < 0) { buf[len-1] = 0; ret = len-1; }
-	return ret;
-}
-
-#define strtoll _strtoi64
-#endif
 
 // at the highest warning level, clang actually warns about functions
 // that could be marked noreturn.
 #if defined __clang__ || defined __GNUC__
 #define TORRENT_NO_RETURN __attribute((noreturn))
+#elif _MSC_VER
+#define TORRENT_NO_RETURN __declspec(noreturn)
 #else
 #define TORRENT_NO_RETURN
 #endif
 
-#ifdef _GLIBCXX_USE_NOEXCEPT
-#define TORRENT_EXCEPTION_THROW_SPECIFIER _GLIBCXX_USE_NOEXCEPT
-#else
-#if __cplusplus <= 199711L || defined BOOST_NO_CXX11_NOEXCEPT
-#define TORRENT_EXCEPTION_THROW_SPECIFIER throw()
-#else
-#define TORRENT_EXCEPTION_THROW_SPECIFIER noexcept
-#endif
-#endif // __GLIBC__
-
-#if __cplusplus <= 199711L || defined BOOST_NO_CXX11_FINAL
-#define TORRENT_FINAL
-#else
-#define TORRENT_FINAL final
-#endif
-
-#if __cplusplus <= 199711L || defined BOOST_NO_CXX11_FINAL
-#define TORRENT_OVERRIDE
-#else
-#define TORRENT_OVERRIDE override
-#endif
-
 #ifndef TORRENT_ICONV_ARG
-#define TORRENT_ICONV_ARG (char**)
+#define TORRENT_ICONV_ARG(x) const_cast<char**>(x)
 #endif
 
 #if defined __GNUC__ || defined __clang__
-#define TORRENT_FORMAT(fmt, ellipsis) __attribute__((format(printf, fmt, ellipsis)))
+#define TORRENT_FORMAT(fmt, ellipsis) __attribute__((__format__(__printf__, fmt, ellipsis)))
 #else
 #define TORRENT_FORMAT(fmt, ellipsis)
-#endif
-
-#ifndef TORRENT_USE_INTERLOCKED_ATOMIC
-#define TORRENT_USE_INTERLOCKED_ATOMIC 0
-#endif
-
-#ifndef TORRENT_USE_GCC_ATOMIC
-#define TORRENT_USE_GCC_ATOMIC 0
-#endif
-
-#ifndef TORRENT_USE_OSATOMIC
-#define TORRENT_USE_OSATOMIC 0
-#endif
-
-#ifndef TORRENT_USE_BEOS_ATOMIC
-#define TORRENT_USE_BEOS_ATOMIC 0
 #endif
 
 // libiconv presence detection is not implemented yet
@@ -505,17 +410,9 @@ int snprintf(char* buf, int len, char const* fmt, ...)
 #define TORRENT_USE_LOCALE 0
 #endif
 
-#ifndef TORRENT_BROKEN_UNIONS
-#define TORRENT_BROKEN_UNIONS 0
+#if defined BOOST_NO_STD_WSTRING
+#error your C++ standard library appears to be missing std::wstring. This type is required on windows
 #endif
-
-#ifndef TORRENT_USE_WSTRING
-#if !defined BOOST_NO_STD_WSTRING
-#define TORRENT_USE_WSTRING 1
-#else
-#define TORRENT_USE_WSTRING 0
-#endif // BOOST_NO_STD_WSTRING
-#endif // TORRENT_USE_WSTRING
 
 #ifndef TORRENT_HAS_FALLOCATE
 #define TORRENT_HAS_FALLOCATE 1
@@ -525,8 +422,36 @@ int snprintf(char* buf, int len, char const* fmt, ...)
 #define TORRENT_DEPRECATED
 #endif
 
+#ifndef TORRENT_DEPRECATED_ENUM
+#define TORRENT_DEPRECATED_ENUM
+#endif
+
+#ifndef TORRENT_DEPRECATED_MEMBER
+#define TORRENT_DEPRECATED_MEMBER
+#endif
+
 #ifndef TORRENT_USE_COMMONCRYPTO
 #define TORRENT_USE_COMMONCRYPTO 0
+#endif
+
+#ifndef TORRENT_USE_SYSTEMCONFIGURATION
+#define TORRENT_USE_SYSTEMCONFIGURATION 0
+#endif
+
+#ifndef TORRENT_USE_SC_NETWORK_REACHABILITY
+#define TORRENT_USE_SC_NETWORK_REACHABILITY 0
+#endif
+
+#ifndef TORRENT_USE_CRYPTOAPI
+#define TORRENT_USE_CRYPTOAPI 0
+#endif
+
+#ifndef TORRENT_USE_CRYPTOAPI_SHA_512
+#define TORRENT_USE_CRYPTOAPI_SHA_512 0
+#endif
+
+#ifndef TORRENT_USE_DEV_RANDOM
+#define TORRENT_USE_DEV_RANDOM 0
 #endif
 
 #ifndef TORRENT_HAVE_MMAP
@@ -557,10 +482,6 @@ int snprintf(char* buf, int len, char const* fmt, ...)
 #define TORRENT_USE_IPV6 1
 #endif
 
-#ifndef TORRENT_USE_MLOCK
-#define TORRENT_USE_MLOCK 1
-#endif
-
 // if preadv() exists, we assume pwritev() does as well
 #ifndef TORRENT_USE_PREADV
 #define TORRENT_USE_PREADV 0
@@ -583,40 +504,12 @@ int snprintf(char* buf, int len, char const* fmt, ...)
 #endif
 #endif
 
-// whether function-local static variables are thread safe. In c++11 and later
-// they are (except msvc)
-#ifndef TORRENT_THREADSAFE_STATIC
-#if __cplusplus < 199711L || (defined _MSC_VER && _MSC_VER <= 1800)
-#define TORRENT_THREADSAFE_STATIC 0
-#else
-#define TORRENT_THREADSAFE_STATIC 1
-#endif
-#endif
-
-// if set to true, piece picker will use less RAM
-// but only support up to ~260000 pieces in a torrent
-#ifndef TORRENT_COMPACT_PICKER
-#define TORRENT_COMPACT_PICKER 0
-#endif
-
 #ifndef TORRENT_USE_I2P
 #define TORRENT_USE_I2P 1
 #endif
 
-#ifndef TORRENT_HAS_BOOST_UNORDERED
-#define TORRENT_HAS_BOOST_UNORDERED 1
-#endif
-
-#ifndef TORRENT_USE_PURGABLE_CONTROL
-#define TORRENT_USE_PURGABLE_CONTROL 0
-#endif
-
-#if !defined TORRENT_IOV_MAX
-#ifdef IOV_MAX
-#define TORRENT_IOV_MAX IOV_MAX
-#else
-#define TORRENT_IOV_MAX INT_MAX
-#endif
+#ifndef TORRENT_AUTO_RETURN_TYPES
+#define TORRENT_AUTO_RETURN_TYPES 0
 #endif
 
 #if !defined(TORRENT_READ_HANDLER_MAX_SIZE)
@@ -637,25 +530,6 @@ int snprintf(char* buf, int len, char const* fmt, ...)
 # endif
 #endif
 
-#if defined _MSC_VER && _MSC_VER <= 1200
-// this is here to provide a standard-conforming for
-// keyword for old versions of msvc. The pragmas are
-// there to silence the warning it produces by using
-// a constant as conditional
-#define for \
-	__pragma( warning(push) ) \
-	__pragma( warning(disable:4127) ) \
-	if (false) {} else \
-	__pragma( warning(pop) )
-	for
-#endif
-
-#if TORRENT_BROKEN_UNIONS
-#define TORRENT_UNION struct
-#else
-#define TORRENT_UNION union
-#endif
-
 #if defined __GNUC__
 #define TORRENT_FUNCTION __PRETTY_FUNCTION__
 #else
@@ -667,17 +541,10 @@ int snprintf(char* buf, int len, char const* fmt, ...)
 // builds have asserts if they are explicitly enabled by
 // the release_asserts macro.
 #ifndef TORRENT_USE_ASSERTS
-#if defined TORRENT_DEBUG || defined TORRENT_RELEASE_ASSERTS
-#define TORRENT_USE_ASSERTS 1
-#else
 #define TORRENT_USE_ASSERTS 0
-#endif
 #endif // TORRENT_USE_ASSERTS
 
-#if defined TORRENT_DEBUG && TORRENT_USE_ASSERTS \
-	&& !defined TORRENT_DISABLE_INVARIANT_CHECKS
-#define TORRENT_USE_INVARIANT_CHECKS 1
-#else
+#ifndef TORRENT_USE_INVARIANT_CHECKS
 #define TORRENT_USE_INVARIANT_CHECKS 0
 #endif
 
@@ -704,7 +571,7 @@ int snprintf(char* buf, int len, char const* fmt, ...)
 #if (defined _M_AMD64 || defined _M_IX86 || defined _M_X64 \
 	|| defined __amd64__ || defined __i386 || defined __i386__ \
 	|| defined __x86_64__ || defined __x86_64) \
-	&& (defined __GNUC__ || defined _MSC_VER)
+	&& (defined __GNUC__ || (defined _MSC_VER && _MSC_VER >= 1600))
 #define TORRENT_HAS_SSE 1
 #else
 #define TORRENT_HAS_SSE 0
@@ -712,6 +579,55 @@ int snprintf(char* buf, int len, char const* fmt, ...)
 
 #endif // TORRENT_HAS_SSE
 
+#if (defined __arm__ || defined __aarch64__)
+#define TORRENT_HAS_ARM 1
+#else
+#define TORRENT_HAS_ARM 0
+#endif // TORRENT_HAS_ARM
+
+#ifndef __has_builtin
+#define __has_builtin(x) 0  // for non-clang compilers
+#endif
+
+#if (TORRENT_HAS_SSE && defined __GNUC__)
+#	define TORRENT_HAS_BUILTIN_CLZ 1
+#elif (TORRENT_HAS_ARM && defined __GNUC__ && !defined __clang__)
+#	define TORRENT_HAS_BUILTIN_CLZ 1
+#elif (defined __clang__ && __has_builtin(__builtin_clz))
+#	define TORRENT_HAS_BUILTIN_CLZ 1
+#else
+#	define TORRENT_HAS_BUILTIN_CLZ 0
+#endif // TORRENT_HAS_BUILTIN_CLZ
+
+#if (TORRENT_HAS_SSE && defined __GNUC__)
+#	define TORRENT_HAS_BUILTIN_CTZ 1
+#elif (TORRENT_HAS_ARM && defined __GNUC__ && !defined __clang__)
+#	define TORRENT_HAS_BUILTIN_CTZ 1
+#elif (defined __clang__ && __has_builtin(__builtin_ctz))
+#	define TORRENT_HAS_BUILTIN_CTZ 1
+#else
+#	define TORRENT_HAS_BUILTIN_CTZ 0
+#endif // TORRENT_HAS_BUILTIN_CTZ
+
+#if TORRENT_HAS_ARM && defined __ARM_NEON
+#	define TORRENT_HAS_ARM_NEON 1
+#else
+#	define TORRENT_HAS_ARM_NEON 0
+#endif // TORRENT_HAS_ARM_NEON
+
+#if TORRENT_HAS_ARM && defined __ARM_FEATURE_CRC32
+#	define TORRENT_HAS_ARM_CRC32 1
+#else
+#if defined TORRENT_FORCE_ARM_CRC32
+#	define TORRENT_HAS_ARM_CRC32 1
+#else
+#	define TORRENT_HAS_ARM_CRC32 0
+#endif
+#endif // TORRENT_HAS_ARM_CRC32
+
+namespace libtorrent {}
+
+// create alias
+namespace lt = libtorrent;
 
 #endif // TORRENT_CONFIG_HPP_INCLUDED
-

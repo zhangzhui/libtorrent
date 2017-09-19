@@ -3,7 +3,7 @@ libtorrent API Documentation
 ============================
 
 :Author: Arvid Norberg, arvid@libtorrent.org
-:Version: 1.1.0
+:Version: 1.2.0
 
 .. contents:: Table of contents
   :depth: 1
@@ -37,14 +37,24 @@ The basic usage is as follows:
 * save session state (see save_state())
 * destruct session object
 
-Each class and function is described in this manual.
+Each class and function is described in this manual, you may want to have a
+look at the tutorial_ as well.
+
+.. _tutorial: tutorial.html
 
 For a description on how to create torrent files, see create_torrent.
 
 .. _make_torrent: make_torrent.html
 
-things to keep in mind
-======================
+forward declarations
+====================
+
+Forward declaring types from the libtorrent namespace is discouraged as it may
+break in future releases. Instead include ``libtorrent/fwd.hpp`` for forward
+declarations of all public types in libtorrent.
+
+trouble shooting
+================
 
 A common problem developers are facing is torrents stopping without explanation.
 Here is a description on which conditions libtorrent will stop your torrents,
@@ -52,7 +62,7 @@ how to find out about it and what to do about it.
 
 Make sure to keep track of the paused state, the error state and the upload
 mode of your torrents. By default, torrents are auto-managed, which means
-libtorrent will pause them, unpause them, scrape them and take them out
+libtorrent will pause, resume, scrape them and take them out
 of upload-mode automatically.
 
 Whenever a torrent encounters a fatal error, it will be stopped, and the
@@ -69,6 +79,11 @@ mode, trying to write things to the disk again. This means torrent will recover
 from certain disk errors if the problem is resolved. If the torrent is not
 auto managed, you have to call set_upload_mode() to turn
 downloading back on again.
+
+For a more detailed guide on how to trouble shoot performance issues, see
+troubleshooting_
+
+.. _troubleshooting: troubleshooting.html
 
 network primitives
 ==================
@@ -103,10 +118,8 @@ Many functions in libtorrent have two versions, one that throws exceptions on
 errors and one that takes an ``error_code`` reference which is filled with the
 error code on errors.
 
-There is one exception class that is used for errors in libtorrent, it is based
-on boost.system's ``error_code`` class to carry the error code.
-
-For more information, see libtorrent_exception and error_code_enum.
+On exceptions, libtorrent will throw ``boost::system::system_error`` exceptions
+carrying an ``error_code`` describing the underlying error.
 
 translating error codes
 -----------------------
@@ -116,7 +129,7 @@ for system errors. That is, errors that belong to the generic or system category
 
 Errors that belong to the libtorrent error category are not localized however, they
 are only available in english. In order to translate libtorrent errors, compare the
-error category of the ``error_code`` object against ``libtorrent::get_libtorrent_category()``,
+error category of the ``error_code`` object against ``lt::libtorrent_category()``,
 and if matches, you know the error code refers to the list above. You can provide
 your own mapping from error code to string, which is localized. In this case, you
 cannot rely on ``error_code::message()`` to generate your strings.
@@ -130,7 +143,7 @@ Here's a simple example of how to translate error codes:
 
 	std::string error_code_to_string(boost::system::error_code const& ec)
 	{
-		if (ec.category() != libtorrent::get_libtorrent_category())
+		if (ec.category() != lt::libtorrent_category())
 		{
 			return ec.message();
 		}
@@ -171,63 +184,207 @@ The format of the magnet URI is:
 
 **magnet:?xt=urn:btih:** *Base16 encoded info-hash* [ **&dn=** *name of download* ] [ **&tr=** *tracker URL* ]*
 
+In order to download *just* the metadata (.torrent file) from a magnet link, set
+file priorities to 0 in add_torrent_params::file_priorities. It's OK to set the
+priority for more files than what is in the torrent. It may not be trivial to
+know how many files a torrent has before the metadata has been downloaded.
+Additional file priorities will be ignored. By setting a large number of files
+to priority 0, chances are that they will all be set to 0 once the metadata is
+received (and we know how many files there are).
+
+In this case, when the metadata is received from the swarm, the torrent will
+still be running, but it will disconnect the majority of peers (since connections
+to peers that already have the metadata are redundant). It will keep seeding the
+*metadata* only.
+
 queuing
 =======
 
-libtorrent supports *queuing*. Which means it makes sure that a limited number of
-torrents are being downloaded at any given time, and once a torrent is completely
-downloaded, the next in line is started.
+libtorrent supports *queuing*. Queuing is a mechanism to automatically pause and
+resume torrents based on certain criteria. The criteria depends on the overall
+state the torrent is in (checking, downloading or seeding).
 
-Torrents that are *auto managed* are subject to the queuing and the active
-torrents limits. To make a torrent auto managed, set add_torrent_params::flag_auto_managed
-when adding the torrent (see async_add_torrent() and add_torrent()).
+To opt-out of the queuing logic, make sure your torrents are added with the
+add_torrent_params::flag_auto_managed bit *cleared*. Or call
+``torrent_handle::auto_managed(false)`` on the torrent handle.
 
-The limits of the number of downloading and seeding torrents are controlled via
-settings_pack::active_downloads, settings_pack::active_seeds and settings_pack::active_limit in
-settings_pack. These limits takes non auto managed torrents into account as
-well. If there are more non-auto managed torrents being downloaded than the
-settings_pack::active_downloads setting, any auto managed torrents will be queued until
-torrents are removed so that the number drops below the limit.
+The overall purpose of the queuing logic is to improve performance under arbitrary
+torrent downloading and seeding load. For example, if you want to download 100
+torrents on a limited home connection, you improve performance by downloading
+them one at a time (or maybe two at a time), over downloading them all in
+parallel. The benefits are:
+
+* the average completion time of a torrent is half of what it would be if all
+  downloaded in parallel.
+* The amount of upload capacity is more likely to reach the *reciprocation rate*
+  of your peers, and is likely to improve your *return on investment* (download
+  to upload ratio)
+* your disk I/O load is likely to be more local which may improve I/O
+  performance and decrease fragmentation.
+
+There are fundamentally 3 seaparate queues:
+
+* checking torrents
+* downloading torrents
+* seeding torrents
+
+Every torrent that is not seeding has a queue number associated with it, this is
+its place in line to be started. See torrent_status::queue_position.
+
+On top of the limits of each queue, there is an over arching limit, set in
+settings_pack::active_limit. The auto manager will never start more than this
+number of torrents (with one exception described below). Non-auto-managed
+torrents are exempt from this logic, and not counted.
 
 At a regular interval, torrents are checked if there needs to be any
 re-ordering of which torrents are active and which are queued. This interval
 can be controlled via settings_pack::auto_manage_interval.
 
 For queuing to work, resume data needs to be saved and restored for all
-torrents. See save_resume_data().
+torrents. See torrent_handle::save_resume_data().
 
-downloading
------------
+queue position
+--------------
 
-Torrents that are currently being downloaded or incomplete (with bytes still to
-download) are queued. The torrents in the front of the queue are started to be
-actively downloaded and the rest are ordered with regards to their queue
-position. Any newly added torrent is placed at the end of the queue. Once a
-torrent is removed or turns into a seed, its queue position is -1 and all
+The torrents in the front of the queue are started and the rest are ordered by
+their queue position. Any newly added torrent is placed at the end of the queue.
+Once a torrent is removed or turns into a seed, its queue position is -1 and all
 torrents that used to be after it in the queue, decreases their position in
 order to fill the gap.
 
-The queue positions are always in a sequence without any gaps.
+The queue positions are always contiguous, in a sequence without any gaps.
 
 Lower queue position means closer to the front of the queue, and will be
 started sooner than torrents with higher queue positions.
 
 To query a torrent for its position in the queue, or change its position, see:
-queue_position(), queue_position_up(), queue_position_down(),
-queue_position_top() and queue_position_bottom().
+torrent_handle::queue_position(), torrent_handle::queue_position_up(),
+torrent_handle::queue_position_down(), torrent_handle::queue_position_top()
+and torrent_handle::queue_position_bottom().
 
-seeding
--------
+checking queue
+--------------
 
-Auto managed seeding torrents are rotated, so that all of them are allocated a
-fair amount of seeding. Torrents with fewer completed *seed cycles* are
-prioritized for seeding. A seed cycle is completed when a torrent meets either
-the share ratio limit (uploaded bytes / downloaded bytes), the share time ratio
-(time seeding / time downloaing) or seed time limit (time seeded).
+The checking queue affects torrents in the torrent_status::checking or
+torrent_status::allocating state that are auto-managed.
+
+The checking queue will make sure that (of the torrents in its queue) no more than
+settings_pack::active_checking_limit torrents are started at any given time.
+Once a torrent completes checking and moves into a diffferent state, the next in
+line will be started for checking.
+
+Any torrent added force-started or force-stopped (i.e. the auto managed flag is
+*not* set), will not be subject to this limit and they will all check
+independently and in parallel.
+
+Once a torrent completes the checking of its files, or fastresume data, it will
+be put in the queue for downloading and potentially start downloading immediately.
+In order to add a torrent and check its files without starting the download, it
+can be added in ``stop_when_ready`` mode.
+See add_torrent_params::flag_stop_when_ready. This flag will stop the torrent
+once it is ready to start downloading.
+
+This is conceptually the same as waiting for the ``torrent_checked_alert`` and
+then call::
+
+	h.auto_managed(false);
+	h.pause();
+
+With the important distinction that it entirely avoids the brief window where
+the torrent is in downloading state.
+
+downloading queue
+-----------------
+
+Similarly to the checking queue, the downloading queue will make sure that no
+more than settings_pack::active_downloads torrents are in the downloading
+state at any given time.
+
+The torrent_status::queue_position is used again here to determine who is next
+in line to be started once a downloading torrent completes or is stopped/removed.
+
+seeding queue
+-------------
+
+The seeding queue does not use torrent_status::queue_position to determine which
+torrent to seed. Instead, it estimates the *demand* for the torrent to be
+seeded. A torrent with few other seeds and many downloaders is assumed to have a
+higher demand of more seeds than one with many seeds and few downloaders.
+
+It limits the number of started seeds to settings_pack::active_seeds.
+
+On top of this basic bias, *seed priority* can be controller by specifying a
+seed ratio (the upload to download ratio), a seed-time ratio (the download
+time to seeding time ratio) and a seed-time (the absolute time to be seeding a
+torrent). Until all those targets are hit, the torrent will be prioritized for
+seeding.
+
+Among torrents that have met their seed target, torrents where we don't know of
+any other seed take strict priority.
+
+In order to avoid flapping, torrents that were started less than 30 minutes ago
+also have priority to keep seeding.
+
+Finally, for torrents where none of the above apply, they are prioritized based
+on the download to seed ratio.
 
 The relevant settings to control these limits are
 settings_pack::share_ratio_limit, settings_pack::seed_time_ratio_limit and
 settings_pack::seed_time_limit.
+
+queuing options
+---------------
+
+In addition to simply starting and stopping torrents, the queuing mechanism can
+have more fine grained control of the resources used by torrents.
+
+half-started torrents
+.....................
+
+In addition to the downloading and seeding limits, there are limits on *actions*
+torrents perform. The downloading and seeding limits control whether peers are
+allowed at all, and if peers are not allowed, torrents are stopped and don't do
+anything. If peers are allowed, torrents may:
+
+1. announce to trackers
+2. announce to the DHT
+3. announce to local peer discovery (local service discovery)
+
+Each of those actions are associated with a cost and hence may need a separate
+limit. These limits are controlled by settings_pack::active_tracker_limit,
+settings_pack::active_dht_limit and settings_pack::active_lsd_limit
+respectively.
+
+Specifically, announcing to a tracker is typically cheaper than
+announcing to the DHT. ``active_dht_limit`` will limit the number of
+torrents that are allowed to announce to the DHT. The highest priority ones
+will, and the lower priority ones won't. The will still be considered started
+though, and any incoming peers will still be accepted.
+
+If you do not wish to impose such limits (basically, if you do not wish to have
+half-started torrents) make sure to set these limits to -1 (infinite).
+
+prefer seeds
+............
+
+In the case where ``active_downloads`` + ``active_seeds`` > ``active_limit``,
+there's an ambiguity whether the downloads should be satisfied first or the
+seeds. To disambiguate this case, the settings_pack::auto_manage_prefer_seeds
+determines whether seeds are preferred or not.
+
+inactive torrents
+.................
+
+Torrents that are not transferring any bytes (downloading or uploading) have a
+relatively low cost to be started. It's possible to exempt such torrents from
+the download and seed queues by setting settings_pack::dont_count_slow_torrents
+to true.
+
+Since it sometimes may take a few minutes for a newly started torrent to find
+peers and be unchoked, or find peers that are interested in requesting data,
+torrents are not considered inactive immadiately. There must be an extended
+period of no transfers before it is considered inactive and exempt from the
+queuing limits.
 
 fast resume
 ===========
@@ -241,11 +398,12 @@ fast-resume data. The fast-resume data also contains information about which
 blocks, in the unfinished pieces, were downloaded, so it will not have to
 start from scratch on the partially downloaded pieces.
 
-To use the fast-resume data you simply give it to async_add_torrent() and
-add_torrent(), and it will skip the time consuming checks. It may have to do
+To use the fast-resume data you pass it to read_resume_data(), which will return
+an add_torrent_params object. Fields of this object can then be altered before
+passing it to async_add_torrent() or add_torrent().
+The session will then skip the time consuming checks. It may have to do
 the checking anyway, if the fast-resume data is corrupt or doesn't fit the
-storage for that torrent, then it will not trust the fast-resume data and just
-do the checking.
+storage for that torrent.
 
 file format
 -----------
@@ -256,33 +414,13 @@ The file format is a bencoded dictionary containing the following fields:
 | ``file-format``          | string: "libtorrent resume file"                             |
 |                          |                                                              |
 +--------------------------+--------------------------------------------------------------+
-| ``file-version``         | integer: 1                                                   |
-|                          |                                                              |
-+--------------------------+--------------------------------------------------------------+
 | ``info-hash``            | string, the info hash of the torrent this data is saved for. |
-|                          |                                                              |
-+--------------------------+--------------------------------------------------------------+
-| ``blocks per piece``     | integer, the number of blocks per piece. Must be: piece_size |
-|                          | / (16 * 1024). Clamped to be within the range [1, 256]. It   |
-|                          | is the number of blocks per (normal sized) piece. Usually    |
-|                          | each block is 16 * 1024 bytes in size. But if piece size is  |
-|                          | greater than 4 megabytes, the block size will increase.      |
 |                          |                                                              |
 +--------------------------+--------------------------------------------------------------+
 | ``pieces``               | A string with piece flags, one character per piece.          |
 |                          | Bit 1 means we have that piece.                              |
 |                          | Bit 2 means we have verified that this piece is correct.     |
 |                          | This only applies when the torrent is in seed_mode.          |
-+--------------------------+--------------------------------------------------------------+
-| ``slots``                | list of integers. The list maps slots to piece indices. It   |
-|                          | tells which piece is on which slot. If piece index is -2 it  |
-|                          | means it is free, that there's no piece there. If it is -1,  |
-|                          | means the slot isn't allocated on disk yet. The pieces have  |
-|                          | to meet the following requirement:                           |
-|                          |                                                              |
-|                          | If there's a slot at the position of the piece index,        |
-|                          | the piece must be located in that slot.                      |
-|                          |                                                              |
 +--------------------------+--------------------------------------------------------------+
 | ``total_uploaded``       | integer. The number of bytes that have been uploaded in      |
 |                          | total for this torrent.                                      |
@@ -295,14 +433,6 @@ The file format is a bencoded dictionary containing the following fields:
 +--------------------------+--------------------------------------------------------------+
 | ``seeding_time``         | integer. The number of seconds this torrent has been active  |
 |                          | and seeding.                                                 |
-+--------------------------+--------------------------------------------------------------+
-| ``num_seeds``            | integer. An estimate of the number of seeds on this torrent  |
-|                          | when the resume data was saved. This is scrape data or based |
-|                          | on the peer list if scrape data is unavailable.              |
-+--------------------------+--------------------------------------------------------------+
-| ``num_downloaders``      | integer. An estimate of the number of downloaders on this    |
-|                          | torrent when the resume data was last saved. This is used as |
-|                          | an initial estimate until we acquire up-to-date scrape info. |
 +--------------------------+--------------------------------------------------------------+
 | ``upload_rate_limit``    | integer. In case this torrent has a per-torrent upload rate  |
 |                          | limit, this is that limit. In bytes per second.              |
@@ -357,21 +487,29 @@ The file format is a bencoded dictionary containing the following fields:
 |                          | especially useful when moving torrents with move_storage()   |
 |                          | since this will be updated.                                  |
 +--------------------------+--------------------------------------------------------------+
-| ``peers``                | list of dictionaries. Each dictionary has the following      |
-|                          | layout:                                                      |
-|                          |                                                              |
-|                          | +----------+-----------------------------------------------+ |
-|                          | | ``ip``   | string, the ip address of the peer. This is   | |
-|                          | |          | not a binary representation of the ip         | |
-|                          | |          | address, but the string representation. It    | |
-|                          | |          | may be an IPv6 string or an IPv4 string.      | |
-|                          | +----------+-----------------------------------------------+ |
-|                          | | ``port`` | integer, the listen port of the peer          | |
-|                          | +----------+-----------------------------------------------+ |
-|                          |                                                              |
-|                          | These are the local peers we were connected to when this     |
-|                          | fast-resume data was saved.                                  |
-|                          |                                                              |
+| ``peers``                | string. This string contains IPv4 and port pairs of peers we |
+|                          | were connected to last session. The endpoints are in compact |
+|                          | representation. 4 bytes IPv4 address followed by 2 bytes     |
+|                          | port. Hence, the length of this string should be divisible   |
+|                          | by 6.                                                        |
++--------------------------+--------------------------------------------------------------+
+| ``banned_peers``         | string. This string has the same format as ``peers`` but     |
+|                          | instead represent IPv4 peers that we have banned.            |
++--------------------------+--------------------------------------------------------------+
+| ``peers6``               | string. This string contains IPv6 and port pairs of peers we |
+|                          | were connected to last session. The endpoints are in compact |
+|                          | representation. 16 bytes IPv6 address followed by 2 bytes    |
+|                          | port. The length of this string should be divisible by 18.   |
++--------------------------+--------------------------------------------------------------+
+| ``banned_peers6``        | string. This string has the same format as ``peers6`` but    |
+|                          | instead represent IPv6 peers that we have banned.            |
++--------------------------+--------------------------------------------------------------+
+| ``info``                 | If this field is present, it should be the info-dictionary   |
+|                          | of the torrent this resume data is for. Its SHA-1 hash must  |
+|                          | match the one in the ``info-hash`` field. When present,      |
+|                          | the torrent is loaded from here, meaning the torrent can be  |
+|                          | added purely from resume data (no need to load the .torrent  |
+|                          | file separately). This may have performance advantages.      |
 +--------------------------+--------------------------------------------------------------+
 | ``unfinished``           | list of dictionaries. Each dictionary represents an          |
 |                          | piece, and has the following layout:                         |
@@ -390,20 +528,8 @@ The file format is a bencoded dictionary containing the following fields:
 |                          | +-------------+--------------------------------------------+ |
 |                          |                                                              |
 +--------------------------+--------------------------------------------------------------+
-| ``file sizes``           | list where each entry corresponds to a file in the file list |
-|                          | in the metadata. Each entry has a list of two values, the    |
-|                          | first value is the size of the file in bytes, the second     |
-|                          | is the time stamp when the last time someone wrote to it.    |
-|                          | This information is used to compare with the files on disk.  |
-|                          | All the files must match exactly this information in order   |
-|                          | to consider the resume data as current. Otherwise a full     |
-|                          | re-check is issued.                                          |
-+--------------------------+--------------------------------------------------------------+
-| ``allocation``           | The allocation mode for the storage. Can be either ``full``  |
-|                          | or ``compact``. If this is full, the file sizes and          |
-|                          | timestamps are disregarded. Pieces are assumed not to have   |
-|                          | moved around even if the files have been modified after the  |
-|                          | last resume data checkpoint.                                 |
+| ``allocation``           | The allocation mode for the storage. Can be either           |
+|                          | ``allocate`` or ``sparse``.                                  |
 +--------------------------+--------------------------------------------------------------+
 
 storage allocation
@@ -418,16 +544,6 @@ There are two modes in which storage (files on disk) are allocated in libtorrent
 
 2. The *sparse allocation*, sparse files are used, and pieces are downloaded
    directly to where they belong. This is the recommended (and default) mode.
-
-In previous versions of libtorrent, a 3rd mode was supported, *compact
-allocation*. Support for this is deprecated and will be removed in future
-versions of libtorrent. It's still described in here for completeness.
-
-The allocation mode is selected when a torrent is started. It is passed as an
-argument to session::add_torrent() or session::async_add_torrent().
-
-The decision to use full allocation or compact allocation typically depends on
-whether any files have priority 0 and if the filesystem supports sparse files.
 
 sparse allocation
 -----------------
@@ -448,7 +564,7 @@ It will of course still check for existing pieces and fast resume data. The main
 drawbacks of this mode are:
 
  * It may take longer to start the torrent, since it will need to fill the files
-   with zeroes. This delay is linear to the size of the download.
+   with zeros. This delay is linear to the size of the download.
 
  * The download may occupy unnecessary disk space between download sessions.
 
@@ -463,61 +579,6 @@ The benefits of this mode are:
 
  * No risk of a download failing because of a full disk during download, once
    all files have been created.
-
-compact allocation
-------------------
-
-.. note::
-	Support for compact allocation has been removed from libttorrent
-
-The compact allocation will only allocate as much storage as it needs to keep
-the pieces downloaded so far. This means that pieces will be moved around to be
-placed at their final position in the files while downloading (to make sure the
-completed download has all its pieces in the correct place). So, the main
-drawbacks are:
-
- * More disk operations while downloading since pieces are moved around.
-
- * Potentially more fragmentation in the filesystem.
-
- * Cannot be used while having files with priority 0.
-
-The benefits though, are:
-
- * No startup delay, since the files don't need allocating.
-
- * The download will not use unnecessary disk space.
-
- * Disk caches perform much better than in full allocation and raises the
-   download speed limit imposed by the disk.
-
- * Works well on filesystems that don't support sparse files.
-
-The algorithm that is used when allocating pieces and slots isn't very
-complicated. For the interested, a description follows.
-
-storing a piece:
-
-1. let **A** be a newly downloaded piece, with index **n**.
-2. let **s** be the number of slots allocated in the file we're
-   downloading to. (the number of pieces it has room for).
-3. if **n** >= **s** then allocate a new slot and put the piece there.
-4. if **n** < **s** then allocate a new slot, move the data at
-   slot **n** to the new slot and put **A** in slot **n**.
-
-allocating a new slot:
-
-1. if there's an unassigned slot (a slot that doesn't
-   contain any piece), return that slot index.
-2. append the new slot at the end of the file (or find an unused slot).
-3. let **i** be the index of newly allocated slot
-4. if we have downloaded piece index **i** already (to slot **j**) then
-
-   1. move the data at slot **j** to slot **i**.
-   2. return slot index **j** as the newly allocated free slot.
-
-5. return **i** as the newly allocated slot.
-
 
 HTTP seeding
 ============
@@ -537,45 +598,12 @@ torrent, only that filename is appended. If the torrent is a multi-file
 torrent, the torrent's name '/' the file name is appended. This is the same
 directory structure that libtorrent will download torrents into.
 
+There is limited support for HTTP redirects. In case some files are redirected
+to *different hosts*, the files must be piece aligned or padded to be piece
+aligned.
+
 .. _`BEP 17`: http://bittorrent.org/beps/bep_0017.html
 .. _`BEP 19`: http://bittorrent.org/beps/bep_0019.html
-
-dynamic loading of torrent files
-================================
-
-libtorrent has a feature that can unload idle torrents from memory. The purpose
-of this is to support being active on many more torrents than the RAM permits.
-This is useful for both embedded devices that have limited RAM and servers
-seeding tens of thousands of torrents.
-
-The most significant parts of loaded torrents that use RAM are the piece
-hashes (20 bytes per piece) and the file list. The entire info-dictionary
-of the .torrent file is kept in RAM.
-
-In order to activate the dynamic loading of torrent files, set the load
-function on the session. See set_load_function().
-
-When a load function is set on the session, the dynamic load/unload
-feature is enabled. Torrents are kept in an LRU. Every time an operation
-is performed, on a torrent or from a peer, that requires the metadata of
-the torrent to be loaded, the torrent is bumped up in the LRU. When a torrent
-is paused or queued, it is demoted to the least recently used torrent in
-the LRU, since it's a good candidate for eviction.
-
-To configure how many torrents are allowed to be loaded at the same time,
-set settings_pack::active_loaded_limit on the session.
-
-Torrents can be exempt from being unloaded by being *pinned*. Pinned torrents
-still count against the limit, but are never considered for eviction.
-You can either pin a torrent when adding it, in ``add_torrent_params``
-(see async_add_torrent() and add_torrent()), or after ading it with the
-set_pinned() function on torrent_handle.
-
-Torrents that start out without metadata (e.g. magnet links or http downloads)
-are automatically pinned. This is important in order to give the client a
-chance to save the metadata to disk once it's received (see metadata_received_alert).
-
-Once the metadata is saved to disk, it might make sense to unpin the torrent.
 
 piece picker
 ============
@@ -728,7 +756,7 @@ class*. There are a few default peer classes that are always created:
 
 * global - all peers belong to this class, except peers on the local network
 * local peers - all peers on the local network belongs to this class TCP peers
-* - all peers connected over TCP belong to this class
+* tcp class - all peers connected over TCP belong to this class
 
 The TCP peers class is used by the uTP/TCP balancing logic, if it's enabled, to
 throttle TCP peers. The global and local classes are used to adjust the global
@@ -737,7 +765,9 @@ rate limits.
 When the rate limits are adjusted for a specific torrent, a class is created
 implicitly for that torrent.
 
-The default peer class IDs are defined as enums in the ``session`` class::
+The default peer class IDs are defined as enums in the ``session`` class:
+
+.. code:: c++
 
 	enum {
 		global_peer_class_id,
@@ -757,6 +787,64 @@ Peer classes are configured with the set_peer_class() get_peer_class() calls.
 Custom peer classes can be assigned to torrents, with the ??? call, in which
 case all its peers will belong to the class. They can also be assigned based on
 the peer's IP address. See set_peer_class_filter() for more information.
+
+peer class examples
+-------------------
+
+Here are a few examples of common peer class operations.
+
+To make the global rate limit apply to local peers as well, update the IP-filter
+based peer class assignment:
+
+.. code:: c++
+
+		std::uint32_t const mask = 1 << lt::session::global_peer_class_id;
+		ip_filter f;
+
+		// for every IPv4 address, assign the global peer class
+		f.add_rule(address_v4::from_string("0.0.0.0")
+			, address_v4::from_string("255.255.255.255")
+			, mask);
+
+		// for every IPv6 address, assign the global peer class
+		f.add_rule(address_v6::from_string("::")
+			, address_v6::from_string("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
+			, mask);
+		ses.set_peer_class_filter(f);
+
+To make uTP sockets exempt from rate limiting:
+
+.. code:: c++
+
+	peer_class_type_filter flt;
+	// filter out the global and local peer class for uTP sockets, if these
+	// classes are set by the IP filter
+	flt.disallow(peer_class_type_filter::utp_socket, session::global_peer_class_id);
+	flt.disallow(peer_class_type_filter::utp_socket, session::local_peer_class_id);
+
+	// this filter should not add the global or local peer class to utp sockets
+	flt.remove(peer_class_type_filter::utp_socket, session::global_peer_class_id);
+	flt.remove(peer_class_type_filter::utp_socket, session::local_peer_class_id);
+
+	ses.set_peer_class_type_filter(flt);
+
+To make all peers on the internal network unthrottled:
+
+.. code:: c++
+
+		std::uint32_t const mask = 1 << lt::session::global_peer_class_id;
+		ip_filter f;
+
+		// for every IPv4 address, assign the global peer class
+		f.add_rule(address_v4::from_string("0.0.0.0")
+			, address_v4::from_string("255.255.255.255")
+			, mask);
+
+		// for every address on the local metwork, set the mastk to 0
+		f.add_rule(address_v4::from_string("10.0.0.0")
+			, address_v4::from_string("10.255.255.255")
+			, 0);
+		ses.set_peer_class_filter(f);
 
 SSL torrents
 ============

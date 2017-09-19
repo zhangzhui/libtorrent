@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2011-2015, Arvid Norberg
+Copyright (c) 2011-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,13 +34,13 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_PEER_CLASS_SET_HPP_INCLUDED
 
 #include "libtorrent/peer_class.hpp"
-#include <boost/array.hpp>
+#include "libtorrent/aux_/array.hpp"
 
 namespace libtorrent {
 
 	// this represents an object that can have many peer classes applied
 	// to it. Most notably, peer connections and torrents derive from this.
-	struct peer_class_set
+	struct TORRENT_EXTRA_EXPORT peer_class_set
 	{
 		peer_class_set() : m_size(0) {}
 		void add_class(peer_class_pool& pool, peer_class_t c);
@@ -56,15 +56,14 @@ namespace libtorrent {
 	private:
 
 		// the number of elements used in the m_class array
-		boost::uint8_t m_size;
+		std::int8_t m_size;
 
 		// if this object belongs to any peer-class, this vector contains all
 		// class IDs. Each ID refers to a an entry in m_ses.m_peer_classes which
 		// holds the metadata about the class. Classes affect bandwidth limits
 		// among other things
-		boost::array<peer_class_t, 15> m_class;
+		aux::array<peer_class_t, 15> m_class;
 	};
 }
 
 #endif // TORRENT_PEER_CLASS_SET_HPP_INCLUDED
-

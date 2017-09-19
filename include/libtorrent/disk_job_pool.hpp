@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2010-2015, Arvid Norberg
+Copyright (c) 2010-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,24 +34,23 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_DISK_JOB_POOL
 
 #include "libtorrent/config.hpp"
-#include "libtorrent/thread.hpp"
+#include "libtorrent/disk_io_job.hpp" // for job_action_t
+#include <mutex>
 
 #include "libtorrent/aux_/disable_warnings_push.hpp"
-
-#include <boost/pool/object_pool.hpp>
-
+#include <boost/pool/pool.hpp>
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
-namespace libtorrent
-{
+namespace libtorrent {
+
 	struct disk_io_job;
 
-	struct disk_job_pool
+	struct TORRENT_EXTRA_EXPORT disk_job_pool
 	{
 		disk_job_pool();
 		~disk_job_pool();
 
-		disk_io_job* allocate_job(int type);
+		disk_io_job* allocate_job(job_action_t type);
 		void free_job(disk_io_job* j);
 		void free_jobs(disk_io_job** j, int num);
 
@@ -68,7 +67,7 @@ namespace libtorrent
 		// total number of in-use write jobs
 		int m_write_jobs;
 
-		mutex m_job_mutex;
+		std::mutex m_job_mutex;
 		boost::pool<> m_job_pool;
 	};
 }

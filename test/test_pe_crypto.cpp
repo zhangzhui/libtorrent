@@ -37,83 +37,78 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/pe_crypto.hpp"
 #include "libtorrent/session.hpp"
 #include "libtorrent/random.hpp"
+#include "libtorrent/span.hpp"
+#include "libtorrent/buffer.hpp"
 
 #include "setup_transfer.hpp"
 #include "test.hpp"
 
 #if !defined(TORRENT_DISABLE_ENCRYPTION) && !defined(TORRENT_DISABLE_EXTENSIONS)
 
-void test_enc_handler(libtorrent::crypto_plugin* a, libtorrent::crypto_plugin* b)
+
+void test_enc_handler(lt::crypto_plugin& a, lt::crypto_plugin& b)
 {
-#ifdef TORRENT_USE_VALGRIND
-	const int repcount = 10;
-#else
-	const int repcount = 128;
-#endif
+	int const repcount = 128;
 	for (int rep = 0; rep < repcount; ++rep)
 	{
-		int buf_len = rand() % (512 * 1024);
-		char* buf = new char[buf_len];
-		char* cmp_buf = new char[buf_len];
+		int const buf_len = rand() % (512 * 1024);
+		std::vector<char> buf(buf_len);
+		std::vector<char> cmp_buf(buf_len);
 
-		std::generate(buf, buf + buf_len, &std::rand);
-		std::memcpy(cmp_buf, buf, buf_len);
+		std::generate(buf.begin(), buf.end(), &std::rand);
+		std::copy(buf.begin(), buf.end(), cmp_buf.begin());
 
-		using namespace boost::asio;
-		std::vector<mutable_buffer> iovec;
-		iovec.push_back(mutable_buffer(buf, buf_len));
-		a->encrypt(iovec);
-		TEST_CHECK(!std::equal(buf, buf + buf_len, cmp_buf));
-		TEST_CHECK(iovec.empty());
-		int consume = 0;
-		int produce = buf_len;
-		int packet_size = 0;
-		iovec.push_back(mutable_buffer(buf, buf_len));
-		b->decrypt(iovec, consume, produce, packet_size);
-		TEST_CHECK(std::equal(buf, buf + buf_len, cmp_buf));
-		TEST_CHECK(iovec.empty());
-		TEST_EQUAL(consume, 0);
-		TEST_EQUAL(produce, buf_len);
-		TEST_EQUAL(packet_size, 0);
+		using namespace lt::aux;
 
-		iovec.push_back(mutable_buffer(buf, buf_len));
-		b->encrypt(iovec);
-		TEST_CHECK(!std::equal(buf, buf + buf_len, cmp_buf));
-		TEST_CHECK(iovec.empty());
-		consume = 0;
-		produce = buf_len;
-		packet_size = 0;
-		iovec.push_back(mutable_buffer(buf, buf_len));
-		a->decrypt(iovec, consume, produce, packet_size);
-		TEST_CHECK(std::equal(buf, buf + buf_len, cmp_buf));
-		TEST_CHECK(iovec.empty());
-		TEST_EQUAL(consume, 0);
-		TEST_EQUAL(produce, buf_len);
-		TEST_EQUAL(packet_size, 0);
+		{
+			lt::span<char> iovec(&buf[0], buf_len);
+			int next_barrier;
+			lt::span<lt::span<char const>> iovec_out;
+			std::tie(next_barrier, iovec_out) = a.encrypt(iovec);
+			TEST_CHECK(buf != cmp_buf);
+			TEST_EQUAL(iovec_out.size(), 0);
+			TEST_EQUAL(next_barrier, buf_len);
+		}
 
-		delete[] buf;
-		delete[] cmp_buf;
+		{
+			int consume = 0;
+			int produce = 0;
+			int packet_size = 0;
+			lt::span<char> iovec(&buf[0], buf_len);
+			std::tie(consume, produce, packet_size) = b.decrypt(iovec);
+			TEST_CHECK(buf == cmp_buf);
+			TEST_EQUAL(consume, 0);
+			TEST_EQUAL(produce, buf_len);
+			TEST_EQUAL(packet_size, 0);
+		}
+
+		{
+			lt::span<char> iovec(&buf[0], buf_len);
+			int next_barrier;
+			lt::span<lt::span<char const>> iovec_out;
+			std::tie(next_barrier, iovec_out) = b.encrypt(iovec);
+			TEST_EQUAL(iovec_out.size(), 0);
+			TEST_CHECK(buf != cmp_buf);
+			TEST_EQUAL(next_barrier, buf_len);
+
+			int consume = 0;
+			int produce = 0;
+			int packet_size = 0;
+			lt::span<char> iovec2(&buf[0], buf_len);
+			std::tie(consume, produce, packet_size) = a.decrypt(iovec2);
+			TEST_CHECK(buf == cmp_buf);
+			TEST_EQUAL(consume, 0);
+			TEST_EQUAL(produce, buf_len);
+			TEST_EQUAL(packet_size, 0);
+		}
 	}
-}
-
-void print_key(char const* key)
-{
-	for (int i = 0;i < 96; ++i)
-	{
-		printf("%02x ", unsigned(key[i]));
-	}
-	printf("\n");
 }
 
 TORRENT_TEST(diffie_hellman)
 {
-	using namespace libtorrent;
+	using namespace lt;
 
-#ifdef TORRENT_USE_VALGRIND
-	const int repcount = 10;
-#else
 	const int repcount = 128;
-#endif
 
 	for (int rep = 0; rep < repcount; ++rep)
 	{
@@ -122,45 +117,44 @@ TORRENT_TEST(diffie_hellman)
 		DH1.compute_secret(DH2.get_local_key());
 		DH2.compute_secret(DH1.get_local_key());
 
-		TEST_CHECK(std::equal(DH1.get_secret(), DH1.get_secret() + 96, DH2.get_secret()));
-		if (!std::equal(DH1.get_secret(), DH1.get_secret() + 96, DH2.get_secret()))
+		TEST_EQUAL(DH1.get_secret(), DH2.get_secret());
+		if (!DH1.get_secret() != DH2.get_secret())
 		{
-			printf("DH1 local: ");
-			print_key(DH1.get_local_key());
+			std::printf("DH1 local: ");
+			std::cout << DH1.get_local_key() << std::endl;
 
-			printf("DH2 local: ");
-			print_key(DH2.get_local_key());
+			std::printf("DH2 local: ");
+			std::cout << DH2.get_local_key() << std::endl;
 
-			printf("DH1 shared_secret: ");
-			print_key(DH1.get_secret());
+			std::printf("DH1 shared_secret: ");
+			std::cout << DH1.get_secret() << std::endl;
 
-			printf("DH2 shared_secret: ");
-			print_key(DH2.get_secret());
+			std::printf("DH2 shared_secret: ");
+			std::cout << DH2.get_secret() << std::endl;
 		}
 	}
 }
 
 TORRENT_TEST(rc4)
 {
-	using namespace libtorrent;
+	using namespace lt;
 
 	sha1_hash test1_key = hasher("test1_key",8).final();
 	sha1_hash test2_key = hasher("test2_key",8).final();
 
-	fprintf(stderr, "testing RC4 handler\n");
+	std::printf("testing RC4 handler\n");
 	rc4_handler rc41;
-	rc41.set_incoming_key(&test2_key[0], 20);
-	rc41.set_outgoing_key(&test1_key[0], 20);
+	rc41.set_incoming_key(test2_key);
+	rc41.set_outgoing_key(test1_key);
 	rc4_handler rc42;
-	rc42.set_incoming_key(&test1_key[0], 20);
-	rc42.set_outgoing_key(&test2_key[0], 20);
-	test_enc_handler(&rc41, &rc42);
+	rc42.set_incoming_key(test1_key);
+	rc42.set_outgoing_key(test2_key);
+	test_enc_handler(rc41, rc42);
 }
 
 #else
 TORRENT_TEST(disabled)
 {
-	fprintf(stderr, "PE test not run because it's disabled\n");
+	std::printf("PE test not run because it's disabled\n");
 }
 #endif
-

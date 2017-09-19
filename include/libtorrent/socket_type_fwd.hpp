@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2009-2015, Arvid Norberg
+Copyright (c) 2009-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -33,8 +33,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef TORRENT_SOCKET_TYPE_FWD_HPP
 #define TORRENT_SOCKET_TYPE_FWD_HPP
 
-namespace libtorrent
-{
+namespace libtorrent {
+
 	struct socket_type;
 }
 

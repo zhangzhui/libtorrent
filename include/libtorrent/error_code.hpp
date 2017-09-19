@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2008-2015, Arvid Norberg
+Copyright (c) 2008-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -33,30 +33,22 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef TORRENT_ERROR_CODE_HPP_INCLUDED
 #define TORRENT_ERROR_CODE_HPP_INCLUDED
 
-#include <boost/version.hpp>
 #include "libtorrent/config.hpp"
-#include "libtorrent/string_util.hpp" // for allocate_string_copy
-#include <stdlib.h> // free
 
 #include "libtorrent/aux_/disable_warnings_push.hpp"
-
-#if defined TORRENT_WINDOWS || defined TORRENT_CYGWIN
-// asio assumes that the windows error codes are defined already
-#include <winsock2.h>
-#endif
-
 #include <boost/system/error_code.hpp>
-
+#include <boost/system/system_error.hpp>
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
+#include "libtorrent/units.hpp"
+#include "libtorrent/operations.hpp"
 
-namespace libtorrent
-{
+namespace libtorrent {
 
 	namespace errors
 	{
 		// libtorrent uses boost.system's ``error_code`` class to represent
 		// errors. libtorrent has its own error category
-		// get_libtorrent_category() whith the error codes defined by
+		// libtorrent_category() with the error codes defined by
 		// error_code_enum.
 		enum error_code_enum
 		{
@@ -110,7 +102,7 @@ namespace libtorrent
 			invalid_entry_type,
 			// The specified URI does not contain a valid info-hash
 			missing_info_hash_in_uri,
-			// One of the files in the torrent was unexpectadly small. This
+			// One of the files in the torrent was unexpectedly small. This
 			// might be caused by files being changed by an external process
 			file_too_short,
 			// The URL used an unknown protocol. Currently ``http`` and
@@ -121,7 +113,7 @@ namespace libtorrent
 			url_parse_error,
 			// The peer sent a 'piece' message of length 0
 			peer_sent_empty_piece,
-			// A bencoded structure was currupt and failed to be parsed
+			// A bencoded structure was corrupt and failed to be parsed
 			parse_failed,
 			// The fast resume file was missing or had an invalid file version
 			// tag
@@ -215,7 +207,7 @@ namespace libtorrent
 			invalid_reject,
 			// The peer sent an invalid allow fast-message
 			invalid_allow_fast,
-			// The peer sent an invalid extesion message ID
+			// The peer sent an invalid extension message ID
 			invalid_extended,
 			// The peer sent an invalid message ID
 			invalid_message,
@@ -259,7 +251,7 @@ namespace libtorrent
 			// The web seed redirected to a path that no longer matches the
 			// .torrent directory structure
 			invalid_redirection,
-			// The connection was closed becaused it redirected to a different
+			// The connection was closed because it redirected to a different
 			// URL
 			redirecting,
 			// The HTTP range header is invalid
@@ -313,7 +305,7 @@ namespace libtorrent
 			// This happens for magnet links before they have downloaded the
 			// metadata, and also torrents added by URL.
 			no_metadata,
-			// The peer sent an invalid ``dont_have`` message. The dont have
+			// The peer sent an invalid ``dont_have`` message. The don't have
 			// message is an extension to allow peers to advertise that the
 			// no longer has a piece they previously had.
 			invalid_dont_have,
@@ -329,6 +321,10 @@ namespace libtorrent
 			// peer was banned because its listen port is within a banned port
 			// range, as specified by the port_filter.
 			banned_by_port_filter,
+			// The session_handle is not referring to a valid session_impl
+			invalid_session_handle,
+			// the listen socket associated with this request was closed
+			invalid_listen_socket,
 
 
 			// The NAT-PMP router responded with an unsupported protocol version
@@ -364,7 +360,7 @@ namespace libtorrent
 			// The 'blocks per piece' entry is invalid in the resume data file
 			invalid_blocks_per_piece,
 			// The resume file is missing the 'slots' entry, which is required
-			// for torrents with compact allocation
+			// for torrents with compact allocation. *DEPRECATED*
 			missing_slots,
 			// The resume file contains more slots than the torrent
 			too_many_slots,
@@ -375,7 +371,7 @@ namespace libtorrent
 			// The pieces on disk needs to be re-ordered for the specified
 			// allocation mode. This happens if you specify sparse allocation
 			// and the files on disk are using compact storage. The pieces needs
-			// to be moved to their right position
+			// to be moved to their right position. *DEPRECATED*
 			pieces_need_reorder,
 			// this error is returned when asking to save resume data and
 			// specifying the flag to only save when there's anything new to save
@@ -441,6 +437,9 @@ namespace libtorrent
 			overflow,
 #endif
 
+			// random number generation failed
+			no_entropy = 200,
+
 			// the number of error codes
 			error_code_max
 		};
@@ -475,50 +474,30 @@ namespace libtorrent
 
 	// return the instance of the libtorrent_error_category which
 	// maps libtorrent error codes to human readable error messages.
-	TORRENT_EXPORT boost::system::error_category& get_libtorrent_category();
+	TORRENT_EXPORT boost::system::error_category& libtorrent_category();
 
 	// returns the error_category for HTTP errors
-	TORRENT_EXPORT boost::system::error_category& get_http_category();
+	TORRENT_EXPORT boost::system::error_category& http_category();
 
-	using boost::system::error_code;
-
-	// hidden
-	inline boost::system::error_category const& system_category()
-#if BOOST_VERSION < 104400
-	{ return boost::system::get_system_category(); }
-#else
-	{ return boost::system::system_category(); }
-#endif
-
-	// hidden
-	inline boost::system::error_category const& get_posix_category()
-#if BOOST_VERSION < 103600
-	{ return boost::system::get_posix_category(); }
-#elif BOOST_VERSION < 104400
-	{ return boost::system::get_generic_category(); }
-#else
-	{ return boost::system::generic_category(); }
-#endif // BOOST_VERSION < 103600
+	using error_code = boost::system::error_code;
+	using error_condition = boost::system::error_condition;
 
 	// internal
-	inline boost::system::error_category const& generic_category()
-	{ return get_posix_category(); }
+	using boost::system::generic_category;
+	using boost::system::system_category;
+
+	using system_error = boost::system::system_error;
 
 #ifndef BOOST_NO_EXCEPTIONS
-	struct TORRENT_EXPORT libtorrent_exception: std::exception
-	{
-		libtorrent_exception(error_code const& s): m_error(s), m_msg(0) {}
-		virtual const char* what() const TORRENT_EXCEPTION_THROW_SPECIFIER;
-		virtual ~libtorrent_exception() TORRENT_EXCEPTION_THROW_SPECIFIER;
-#if __cplusplus >= 201103L
-		libtorrent_exception(libtorrent_exception const& st) = default;
-		libtorrent_exception& operator=(libtorrent_exception const& st) = default;
+#ifndef TORRENT_NO_DEPRECATE
+	TORRENT_DEPRECATED
+	inline boost::system::error_category& get_libtorrent_category()
+	{ return libtorrent_category(); }
+
+	TORRENT_DEPRECATED
+	inline boost::system::error_category& get_http_category()
+	{ return http_category(); }
 #endif
-		error_code error() const { return m_error; }
-	private:
-		error_code m_error;
-		mutable char* m_msg;
-	};
 #endif
 
 	// used by storage to return errors
@@ -526,54 +505,31 @@ namespace libtorrent
 	// error happened on
 	struct TORRENT_EXPORT storage_error
 	{
-		storage_error(): file(-1), operation(0) {}
-		storage_error(error_code e): ec(e), file(-1), operation(0) {}
+		storage_error(): file_idx(-1), operation(operation_t::unknown) {}
+		explicit storage_error(error_code e): ec(e), file_idx(-1), operation(operation_t::unknown) {}
 
-		operator bool() const { return ec.value() != 0; }
+		explicit operator bool() const { return ec.value() != 0; }
 
 		// the error that occurred
 		error_code ec;
 
+		file_index_t file() const { return file_index_t(file_idx); }
+		void file(file_index_t f) { file_idx = static_cast<int>(f); }
+
 		// the file the error occurred on
-		boost::int32_t file:24;
+		std::int32_t file_idx:24;
 
 		// A code from file_operation_t enum, indicating what
 		// kind of operation failed.
-		boost::uint32_t operation:8;
+		operation_t operation;
 
-		enum file_operation_t {
-			none,
-			stat,
-			mkdir,
-			open,
-			rename,
-			remove,
-			copy,
-			read,
-			write,
-			fallocate,
-			alloc_cache_piece,
-			partfile_move,
-			partfile_read,
-			partfile_write,
-			check_resume,
-			hard_link
-		};
-
+#ifndef TORRENT_NO_DEPRECATE
 		// Returns a string literal representing the file operation
 		// that failed. If there were no failure, it returns
 		// an empty string.
-		char const* operation_str() const
-		{
-			char const* ops[] =
-			{
-				"", "stat", "mkdir", "open", "rename", "remove", "copy"
-				, "read", "write", "fallocate", "allocate cache piece"
-				, "partfile move", "partfile read", "partfile write"
-				, "check resume", "hard_link"
-			};
-			return ops[operation];
-		}
+		char const* operation_str() const TORRENT_DEPRECATED_MEMBER
+		{ return operation_name(operation); }
+#endif
 	};
 
 }
@@ -583,15 +539,8 @@ namespace boost { namespace system {
 	template<> struct is_error_code_enum<libtorrent::errors::error_code_enum>
 	{ static const bool value = true; };
 
-	template<> struct is_error_condition_enum<libtorrent::errors::error_code_enum>
-	{ static const bool value = true; };
-
 	template<> struct is_error_code_enum<libtorrent::errors::http_errors>
-	{ static const bool value = true; };
-
-	template<> struct is_error_condition_enum<libtorrent::errors::http_errors>
 	{ static const bool value = true; };
 } }
 
 #endif
-

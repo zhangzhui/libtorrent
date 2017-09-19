@@ -34,20 +34,27 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/alert.hpp"
 #include "settings.hpp"
 
-using namespace libtorrent;
+using namespace lt;
 
-libtorrent::settings_pack settings()
+lt::settings_pack settings()
 {
-	const int mask = alert::all_categories
+	auto const mask = alert::all_categories
 		& ~(alert::progress_notification
 			| alert::performance_warning
-			| alert::stats_notification);
+			| alert::stats_notification
+			| alert::picker_log_notification);
 
 	settings_pack pack;
 	pack.set_bool(settings_pack::enable_lsd, false);
 	pack.set_bool(settings_pack::enable_natpmp, false);
 	pack.set_bool(settings_pack::enable_upnp, false);
 	pack.set_bool(settings_pack::enable_dht, false);
+	pack.set_str(settings_pack::dht_bootstrap_nodes, "");
+
+	pack.set_bool(settings_pack::prefer_rc4, false);
+	pack.set_int(settings_pack::in_enc_policy, settings_pack::pe_disabled);
+	pack.set_int(settings_pack::out_enc_policy, settings_pack::pe_disabled);
+	pack.set_int(settings_pack::allowed_enc_level, settings_pack::pe_both);
 
 	pack.set_int(settings_pack::alert_mask, mask);
 
@@ -57,6 +64,10 @@ libtorrent::settings_pack settings()
 	// we use 0 threads (disk I/O operations will be performed in the network
 	// thread) to be simulator friendly.
 	pack.set_int(settings_pack::aio_threads, 0);
+#endif
+
+#ifndef TORRENT_NO_DEPRECATE
+	pack.set_int(settings_pack::half_open_limit, 1);
 #endif
 
 	return pack;

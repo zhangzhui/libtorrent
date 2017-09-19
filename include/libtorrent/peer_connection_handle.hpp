@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2015, Arvid Norberg, Steven Siloti
+Copyright (c) 2015-2016, Arvid Norberg, Steven Siloti
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -37,36 +37,34 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/peer_id.hpp"
 #include "libtorrent/operations.hpp"
 #include "libtorrent/alert_types.hpp"
+#include "libtorrent/peer_connection.hpp" // for connection_type
+#include "libtorrent/error_code.hpp"
 
-namespace libtorrent
-{
+namespace libtorrent {
 
-class peer_connection;
 class bt_peer_connection;
 struct torrent_handle;
 struct peer_plugin;
 struct peer_info;
 struct crypto_plugin;
 
-typedef boost::system::error_code error_code;
-
 struct TORRENT_EXPORT peer_connection_handle
 {
-	peer_connection_handle(boost::weak_ptr<peer_connection> impl)
+	explicit peer_connection_handle(std::weak_ptr<peer_connection> impl)
 		: m_connection(impl)
 	{}
 
-	int type() const;
+	connection_type type() const;
 
-	void add_extension(boost::shared_ptr<peer_plugin>);
-	peer_plugin const* find_plugin(char const* type);
+	void add_extension(std::shared_ptr<peer_plugin>);
+	peer_plugin const* find_plugin(string_view type) const;
 
 	bool is_seed() const;
 
 	bool upload_only() const;
 
 	peer_id const& pid() const;
-	bool has_piece(int i) const;
+	bool has_piece(piece_index_t i) const;
 
 	bool is_interesting() const;
 	bool is_choked() const;
@@ -94,6 +92,7 @@ struct TORRENT_EXPORT peer_connection_handle
 
 	bool failed() const;
 
+	bool should_log(peer_log_alert::direction_t direction) const;
 	void peer_log(peer_log_alert::direction_t direction
 		, char const* event, char const* fmt = "", ...) const TORRENT_FORMAT(4,5);
 
@@ -103,28 +102,35 @@ struct TORRENT_EXPORT peer_connection_handle
 
 	bool in_handshake() const;
 
-	void send_buffer(char const* begin, int size, int flags = 0);
+	void send_buffer(char const* begin, int size, std::uint32_t flags = 0);
 
-	time_t last_seen_complete() const;
+	std::time_t last_seen_complete() const;
 	time_point time_of_last_unchoke() const;
 
 	bool operator==(peer_connection_handle const& o) const
-	{ return m_connection.lock() == o.m_connection.lock(); }
+	{ return !lt(m_connection, o.m_connection) && !lt(o.m_connection, m_connection); }
 	bool operator!=(peer_connection_handle const& o) const
-	{ return m_connection.lock() != o.m_connection.lock(); }
+	{ return lt(m_connection, o.m_connection) || lt(o.m_connection, m_connection); }
 	bool operator<(peer_connection_handle const& o) const
-	{ return m_connection.lock() < o.m_connection.lock(); }
+	{ return lt(m_connection, o.m_connection); }
 
-	boost::shared_ptr<peer_connection> native_handle() const
+	std::shared_ptr<peer_connection> native_handle() const
 	{
 		return m_connection.lock();
 	}
 
 private:
-	boost::weak_ptr<peer_connection> m_connection;
+	std::weak_ptr<peer_connection> m_connection;
+
+	// copied from boost::weak_ptr
+	bool lt(std::weak_ptr<peer_connection> const& a
+		, std::weak_ptr<peer_connection> const& b) const
+	{
+		return a.owner_before(b);
+	}
 };
 
-struct TORRENT_EXPORT bt_peer_connection_handle : public peer_connection_handle
+struct TORRENT_EXPORT bt_peer_connection_handle : peer_connection_handle
 {
 	explicit bt_peer_connection_handle(peer_connection_handle pc)
 		: peer_connection_handle(pc)
@@ -135,10 +141,10 @@ struct TORRENT_EXPORT bt_peer_connection_handle : public peer_connection_handle
 
 	bool supports_encryption() const;
 
-	void switch_send_crypto(boost::shared_ptr<crypto_plugin> crypto);
-	void switch_recv_crypto(boost::shared_ptr<crypto_plugin> crypto);
+	void switch_send_crypto(std::shared_ptr<crypto_plugin> crypto);
+	void switch_recv_crypto(std::shared_ptr<crypto_plugin> crypto);
 
-	boost::shared_ptr<bt_peer_connection> native_handle() const;
+	std::shared_ptr<bt_peer_connection> native_handle() const;
 };
 
 } // namespace libtorrent

@@ -31,16 +31,17 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <string>
-#include <boost/cstdint.hpp>
-#include <boost/random/mersenne_twister.hpp>
-#include <boost/random/uniform_int_distribution.hpp>
+#include <cstdint>
+#include <random>
+#include <cinttypes> // for PRId64 et.al.
+
 #include "libtorrent/bdecode.hpp"
 #include "libtorrent/torrent_info.hpp"
 #include "libtorrent/error_code.hpp"
 
-using libtorrent::bdecode_node;
-using boost::random::mt19937;
-using boost::random::uniform_int_distribution;
+using lt::bdecode_node;
+using std::mt19937;
+using std::uniform_int_distribution;
 
 char const* invalid_utf8_sequences[] =
 {
@@ -81,9 +82,9 @@ char const* invalid_utf8_sequences[] =
 "\xed\xaf\xbf\xed\xbf\xbf",
 };
 
-boost::int64_t g_seed;
+std::int64_t g_seed;
 
-void print_ascii_number(std::string& output, boost::int64_t val)
+void print_ascii_number(std::string& output, std::int64_t val)
 {
 	const bool overflow = g_seed == 1;
 	const bool underflow = g_seed == 2;
@@ -113,7 +114,7 @@ void print_ascii_number(std::string& output, boost::int64_t val)
 		if (negative) output += '-';
 		else if (double_negative) output += "--";
 		char buf[50];
-		snprintf(buf, sizeof(buf), "%" PRId64 "", val);
+		std::snprintf(buf, sizeof(buf), "%" PRId64 "", val);
 		output += buf;
 	}
 }
@@ -130,14 +131,14 @@ void print_string(std::string& output, std::string str)
 	}
 
 	const bool random_string = g_seed > 0 && g_seed <= 1000;
-	const int str_seed = g_seed - 1;
+	const int str_seed = int(g_seed) - 1;
 	g_seed -= 1000;
 	if (random_string)
 	{
 		static mt19937 random_engine(str_seed);
-		uniform_int_distribution<boost::uint8_t> d(0, 255);
-		for (int i = 0; i < str.size(); ++i)
-			str[i] = d(random_engine);
+		uniform_int_distribution<> d(0, 255);
+		for (int i = 0; i < int(str.size()); ++i)
+			str[i] = std::uint8_t(d(random_engine));
 
 		print_ascii_number(output, str.size());
 		output += ':';
@@ -165,7 +166,7 @@ void print_terminate(std::string& output)
 	if (!unterminated) output += 'e';
 }
 
-void print_int(std::string& output, boost::int64_t value)
+void print_int(std::string& output, std::int64_t value)
 {
 	const bool double_int = g_seed == 1;
 	g_seed -= 1;
@@ -241,18 +242,18 @@ void render_variant(std::string& out, bdecode_node const& e)
 			print_dict(out);
 			for (int i = 0; i < e.dict_size(); ++i)
 			{
-				std::pair<std::string, bdecode_node> item = e.dict_at(i);
+				std::pair<lt::string_view, bdecode_node> item = e.dict_at(i);
 				const bool duplicate = g_seed == 1;
 				const bool skipped = g_seed == 2;
 				g_seed -= 2;
 				if (duplicate)
 				{
-					print_string(out, item.first);
+					print_string(out, item.first.to_string());
 					render_variant(out, item.second);
 				}
 				if (!skipped)
 				{
-					print_string(out, item.first);
+					print_string(out, item.first.to_string());
 					render_variant(out, item.second);
 				}
 
@@ -279,7 +280,7 @@ void render_variant(std::string& out, bdecode_node const& e)
 			print_int(out, e.int_value());
 			break;
 		case bdecode_node::string_t:
-			print_string(out, e.string_value());
+			print_string(out, e.string_value().to_string());
 			break;
 		default:
 			abort();
@@ -287,27 +288,27 @@ void render_variant(std::string& out, bdecode_node const& e)
 }
 
 int load_file(std::string const& filename, std::vector<char>& v
-	, libtorrent::error_code& ec, int limit = 8000000)
+	, lt::error_code& ec, int limit = 8000000)
 {
 	ec.clear();
 	FILE* f = fopen(filename.c_str(), "rb");
-	if (f == NULL)
+	if (f == nullptr)
 	{
-		ec.assign(errno, boost::system::generic_category());
+		ec.assign(errno, boost::system::system_category());
 		return -1;
 	}
 
 	int r = fseek(f, 0, SEEK_END);
 	if (r != 0)
 	{
-		ec.assign(errno, boost::system::generic_category());
+		ec.assign(errno, boost::system::system_category());
 		fclose(f);
 		return -1;
 	}
 	long s = ftell(f);
 	if (s < 0)
 	{
-		ec.assign(errno, boost::system::generic_category());
+		ec.assign(errno, boost::system::system_category());
 		fclose(f);
 		return -1;
 	}
@@ -321,7 +322,7 @@ int load_file(std::string const& filename, std::vector<char>& v
 	r = fseek(f, 0, SEEK_SET);
 	if (r != 0)
 	{
-		ec.assign(errno, boost::system::generic_category());
+		ec.assign(errno, boost::system::system_category());
 		fclose(f);
 		return -1;
 	}
@@ -333,10 +334,10 @@ int load_file(std::string const& filename, std::vector<char>& v
 		return 0;
 	}
 
-	r = fread(&v[0], 1, v.size(), f);
+	r = int(fread(&v[0], 1, v.size(), f));
 	if (r < 0)
 	{
-		ec.assign(errno, boost::system::generic_category());
+		ec.assign(errno, boost::system::system_category());
 		fclose(f);
 		return -1;
 	}
@@ -351,11 +352,11 @@ int load_file(std::string const& filename, std::vector<char>& v
 int main(int argc, char const* argv[])
 {
 	std::vector<char> buf;
-	libtorrent::error_code ec;
+	lt::error_code ec;
 
 	if (argc < 2)
 	{
-		fprintf(stderr, "usage: fuzz_torrent torrent-file [torrent-file ...]\n");
+		std::fprintf(stderr, "usage: fuzz_torrent torrent-file [torrent-file ...]\n");
 		return 1;
 	}
 
@@ -366,15 +367,15 @@ int main(int argc, char const* argv[])
 		int ret = load_file(*argv, buf, ec);
 		if (ret < 0)
 		{
-			fprintf(stderr, "ERROR loading file: %s\n%s\n"
+			std::fprintf(stderr, "ERROR loading file: %s\n%s\n"
 				, *argv, ec.message().c_str());
 			continue;
 		}
 
 		bdecode_node e;
-		if (buf.size() == 0 || bdecode(&buf[0], &buf[0] + buf.size(), e, ec) != 0)
+		if (buf.empty() || bdecode(&buf[0], &buf[0] + buf.size(), e, ec) != 0)
 		{
-			fprintf(stderr, "ERROR parsing file: %s\n%s\n"
+			std::fprintf(stderr, "ERROR parsing file: %s\n%s\n"
 				, *argv, ec.message().c_str());
 			continue;
 		}
@@ -387,28 +388,28 @@ int main(int argc, char const* argv[])
 			test_buffer.clear();
 			render_variant(test_buffer, e);
 
-			libtorrent::error_code ec;
-			libtorrent::torrent_info t(test_buffer.c_str(), test_buffer.size(), ec);
+			lt::error_code ec;
+			lt::torrent_info t(test_buffer, ec, lt::from_span);
 
 			// TODO: add option to save to file unconditionally (to test other clients)
 			/*
 				{
-				fprintf(stderr, "saving %d\n", i);
+				std::fprintf(stderr, "saving %d\n", i);
 				char filename[100];
-				snprintf(filename, sizeof(filename), "torrents/fuzz-%d.torrent", i);
+				std::snprintf(filename, sizeof(filename), "torrents/fuzz-%d.torrent", i);
 				FILE* f = fopen(filename, "wb+");
 				if (f == 0)
 				{
-				fprintf(stderr, "ERROR saving file: (%d) %s\n", errno, strerror(errno));
+				std::fprintf(stderr, "ERROR saving file: (%d) %s\n", errno, strerror(errno));
 				return 1;
 				}
 				fwrite(test_buffer.c_str(), test_buffer.size(), 1, f);
 				fclose(f);
 				}
-			 */
+			*/
 			if (g_seed > 0) break;
 		}
-		fprintf(stderr, "tested %d variants of %s\n", i, *argv);
+		std::fprintf(stderr, "tested %d variants of %s\n", i, *argv);
 	}
 	return 0;
 }

@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2008-2015, Arvid Norberg
+Copyright (c) 2008-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -30,20 +30,17 @@ POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#include <boost/version.hpp>
-
 #include "libtorrent/config.hpp"
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/string_util.hpp" // for to_string()
-#include "libtorrent/aux_/escape_string.hpp" // for convert_to_native
 
-namespace libtorrent
-{
+namespace libtorrent {
+
 	struct libtorrent_error_category : boost::system::error_category
 	{
-		virtual const char* name() const BOOST_SYSTEM_NOEXCEPT;
-		virtual std::string message(int ev) const BOOST_SYSTEM_NOEXCEPT;
-		virtual boost::system::error_condition default_error_condition(int ev) const BOOST_SYSTEM_NOEXCEPT
+		const char* name() const BOOST_SYSTEM_NOEXCEPT override;
+		std::string message(int ev) const BOOST_SYSTEM_NOEXCEPT override;
+		boost::system::error_condition default_error_condition(int ev) const BOOST_SYSTEM_NOEXCEPT override
 		{ return boost::system::error_condition(ev, *this); }
 	};
 
@@ -171,8 +168,8 @@ namespace libtorrent
 			"invalid SSL certificate",
 			"not an SSL torrent",
 			"banned by port filter",
-			"",
-			"",
+			"invalid session handle used",
+			"listen socket has been closed",
 			"",
 			"",
 			"",
@@ -266,14 +263,18 @@ namespace libtorrent
 			"bencoded nesting depth exceeded",
 			"bencoded item count limit exceeded",
 			"integer overflow",
+			"",
+			"",
+			"",
 #endif
+			"random number generator failed",
 		};
 		if (ev < 0 || ev >= int(sizeof(msgs)/sizeof(msgs[0])))
 			return "Unknown error";
 		return msgs[ev];
 	}
 
-	boost::system::error_category& get_libtorrent_category()
+	boost::system::error_category& libtorrent_category()
 	{
 		static libtorrent_error_category libtorrent_category;
 		return libtorrent_category;
@@ -281,13 +282,13 @@ namespace libtorrent
 
 	struct TORRENT_EXPORT http_error_category : boost::system::error_category
 	{
-		virtual const char* name() const BOOST_SYSTEM_NOEXCEPT
+		const char* name() const BOOST_SYSTEM_NOEXCEPT override
 		{ return "http error"; }
-		virtual std::string message(int ev) const BOOST_SYSTEM_NOEXCEPT
+		std::string message(int ev) const BOOST_SYSTEM_NOEXCEPT override
 		{
 			std::string ret;
-			ret += to_string(ev).elems;
-			ret += " ";
+			ret += to_string(ev).data();
+			ret += ' ';
 			switch (ev)
 			{
 				case errors::cont: ret += "Continue"; break;
@@ -311,43 +312,24 @@ namespace libtorrent
 			}
 			return ret;
 		}
-		virtual boost::system::error_condition default_error_condition(
-			int ev) const BOOST_SYSTEM_NOEXCEPT
+		boost::system::error_condition default_error_condition(
+			int ev) const BOOST_SYSTEM_NOEXCEPT override
 		{ return boost::system::error_condition(ev, *this); }
 	};
 
-	boost::system::error_category& get_http_category()
+	boost::system::error_category& http_category()
 	{
 		static http_error_category http_category;
 		return http_category;
 	}
-
-#ifndef BOOST_NO_EXCEPTIONS
-	const char* libtorrent_exception::what() const TORRENT_EXCEPTION_THROW_SPECIFIER
-	{
-		if (!m_msg)
-		{
-			std::string msg = convert_from_native(m_error.message());
-			m_msg = allocate_string_copy(msg.c_str());
-		}
-
-		return m_msg;
-	}
-
-	libtorrent_exception::~libtorrent_exception() TORRENT_EXCEPTION_THROW_SPECIFIER
-	{
-		free(m_msg);
-	}
-#endif
 
 	namespace errors
 	{
 		// hidden
 		boost::system::error_code make_error_code(error_code_enum e)
 		{
-			return boost::system::error_code(e, get_libtorrent_category());
+			return boost::system::error_code(e, libtorrent_category());
 		}
 	}
 
 }
-

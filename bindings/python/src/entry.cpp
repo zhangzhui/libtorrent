@@ -2,12 +2,12 @@
 // subject to the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 
-#include <boost/python.hpp>
+#include "boost_python.hpp"
 #include <libtorrent/session.hpp>
 #include "bytes.hpp"
 
 using namespace boost::python;
-using namespace libtorrent;
+using namespace lt;
 
 struct entry_to_python
 {
@@ -45,12 +45,21 @@ struct entry_to_python
             return convert(e.list());
         case entry::dictionary_t:
             return convert(e.dict());
+        case entry::preformatted_t:
+        {
+            std::vector<char> const& pre = e.preformatted();
+            list l;
+            for (std::vector<char>::const_iterator i = pre.begin()
+               , end(pre.end()); i != end; ++i)
+               l.append(int(*i));
+            return tuple(l);
+        }
         default:
             return object();
         }
     }
 
-    static PyObject* convert(boost::shared_ptr<entry> const& e)
+    static PyObject* convert(std::shared_ptr<entry> const& e)
     {
         if (!e)
             return incref(Py_None);
@@ -136,6 +145,19 @@ struct entry_from_python
         {
             return entry(extract<entry::integer_type>(e)());
         }
+        else if (extract<tuple>(e).check())
+        {
+            tuple t = extract<tuple>(e);
+
+            std::size_t const length = extract<std::size_t>(t.attr("__len__")());
+            std::vector<char> preformatted(length);
+            for (std::size_t i = 0; i < length; ++i)
+            {
+                preformatted[i] = char(extract<int>(t[i]));
+            }
+
+            return entry(preformatted);
+        }
 
         return entry();
     }
@@ -150,7 +172,7 @@ struct entry_from_python
 
 void bind_entry()
 {
-    to_python_converter<boost::shared_ptr<libtorrent::entry>, entry_to_python>();
+    to_python_converter<std::shared_ptr<lt::entry>, entry_to_python>();
     to_python_converter<entry, entry_to_python>();
     entry_from_python();
 }

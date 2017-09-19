@@ -9,7 +9,7 @@ use-project /torrent : ../.. ;
 
 BOOST_ROOT = [ modules.peek : BOOST_ROOT ] ;
 
-feature visibility : default hidden : composite propagated link-incompatible ;
+feature visibility : default hidden : composite ;
 feature.compose <visibility>hidden : <cflags>-fvisibility=hidden <cxxflags>-fvisibility-inlines-hidden ;
 
 feature libtorrent-link : shared static : composite propagated ;
@@ -52,6 +52,7 @@ rule libtorrent_linking ( properties * )
 
     if ! <target-os>windows in $(properties)
         && <toolset>gcc in $(properties)
+        && <libtorrent-link>static in $(properties)
     {
         result += <libtorrent-python-pic>on ;
     }
@@ -84,20 +85,20 @@ rule libtorrent_linking ( properties * )
     # (the static build of libpthread is not position independent)
     if <boost-link>shared in $(properties) || <target-os>linux in $(properties)
     {
-        result += <library>boost_python/<link>shared ;
+        result += <library>boost_python/<link>shared/<warnings>off ;
     }
     else
     {
-        result += <library>boost_python/<link>static ;
+        result += <library>boost_python/<link>static/<warnings>off ;
     }
 
     if <libtorrent-link>shared in $(properties)
     {
-        result += <library>/torrent//torrent/<link>shared/<boost-link>shared ;
+        result += <library>/torrent//torrent/<link>shared ;
     }
     else
     {
-        result += <library>/torrent//torrent/<link>static/<boost-link>static ;
+        result += <library>/torrent//torrent/<link>static ;
     }
 
     return $(result) ;
@@ -123,10 +124,10 @@ rule my-python-extension ( name : sources * : requirements * : default-build * :
         ] ;
 }
 
-my-python-extension py_libtorrent
+my-python-extension libtorrent
   : # sources
     src/module.cpp
-    src/big_number.cpp
+    src/sha1_hash.cpp
     src/converters.cpp
     src/create_torrent.cpp
     src/fingerprint.cpp
@@ -149,19 +150,28 @@ my-python-extension py_libtorrent
     <include>src
     <toolset>gcc:<cxxflags>-Wno-deprecated-declarations
     <toolset>darwin:<cxxflags>-Wno-deprecated-declarations
-    <toolset>darwin:<cxxflags>-Wno-deprecated-declarations
+    <toolset>darwin:<cxxflags>-Wno-unused-command-line-argument
     <conditional>@libtorrent_linking
+  : # default-build
+    <warnings>all
   : # usage-requirements
-    <conditional>@libtorrent_linking
     <suppress-import-lib>false
   ;
 
 install stage_module
-	: py_libtorrent
-	: <location>.
-	  <install-dependencies>on
-	  <install-type>LIB
-	;
+  : libtorrent
+  : <location>.
+    <install-type>PYTHON_EXTENSION
+  ;
+
+install stage_dependencies
+  : /torrent//torrent
+    boost_python
+  : <location>dependencies
+    <install-dependencies>on
+    <install-type>SHARED_LIB
+  ;
 
 explicit stage_module ;
+explicit stage_dependencies ;
 

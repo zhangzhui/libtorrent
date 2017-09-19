@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2009-2015, Arvid Norberg
+Copyright (c) 2009-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -30,14 +30,15 @@ POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#include <boost/cstdint.hpp>
-#include "libtorrent/bandwidth_queue_entry.hpp"
+#include <cstdint>
 #include <cstring>
 #include <algorithm>
 
-namespace libtorrent
-{
-	bw_request::bw_request(boost::shared_ptr<bandwidth_socket> const& pe
+#include "libtorrent/bandwidth_queue_entry.hpp"
+
+namespace libtorrent {
+
+	bw_request::bw_request(std::shared_ptr<bandwidth_socket> const& pe
 		, int blk, int prio)
 		: peer(pe)
 		, priority(prio)
@@ -61,7 +62,7 @@ namespace libtorrent
 		{
 			if (channel[j]->throttle() == 0) continue;
 			if (channel[j]->tmp == 0) continue;
-			quota = (std::min)(int(boost::int64_t(channel[j]->distribute_quota)
+			quota = (std::min)(int(std::int64_t(channel[j]->distribute_quota)
 				* priority / channel[j]->tmp), quota);
 		}
 		assigned += quota;

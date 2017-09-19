@@ -82,7 +82,7 @@ version_check() {
 	  echo $ECHO_N "  testing $vc_checkprog... " $ECHO_C
     	if $vc_checkprog --version < /dev/null > /dev/null 2>&1; then
 	      vc_actual_version=`$vc_checkprog --version | head -n 1 | \
-                            sed 's/^.*[ 	]\([0-9.]*[a-z]*\).*$/\1/'`
+                            sed 's/^[^0-9]*\([0-9.]*\).*$/\1/'`
 	      if compare_versions $vc_min_version $vc_actual_version; then
 		      echo "found $vc_actual_version"
 		      # set variables
@@ -101,7 +101,7 @@ version_check() {
   if [ "$vc_status" != 0 ]; then
 	  printerr "***Error***: $vc_package $vc_comparator $vc_min_version not found."
   fi
- 
+
   return $vc_status
 }
 
@@ -147,7 +147,7 @@ build_dir=`cat $configure_ac | grep '^AC_CONFIG_AUX_DIR' |
 sed -n -e 's/AC_CONFIG_AUX_DIR(\([^()]*\))/\1/p' | sed -e 's/^\[\(.*\)\]$/\1/' | sed -e 1q`
 
 if [ -n "$build_dir" ]; then
-  mkdir $build_dir
+  mkdir -p $build_dir
 fi
 config_rpath=m4/config.rpath
 echo "Copying $config_rpath to $build_dir"

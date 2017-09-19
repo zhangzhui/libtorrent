@@ -6,8 +6,8 @@
 #define BOOST_PYTHON_USE_GCC_SYMBOL_VISIBILITY 1
 #endif
 
-#include "libtorrent/config.hpp"
 #include <boost/python/module.hpp>
+#include "libtorrent/config.hpp"
 
 void bind_utility();
 void bind_fingerprint();
@@ -29,11 +29,12 @@ void bind_converters();
 void bind_create_torrent();
 void bind_error_code();
 
-BOOST_PYTHON_MODULE(py_libtorrent)
+BOOST_PYTHON_MODULE(libtorrent)
 {
     Py_Initialize();
     PyEval_InitThreads();
 
+    bind_converters();
     bind_error_code();
     bind_utility();
     bind_fingerprint();
@@ -51,6 +52,5 @@ BOOST_PYTHON_MODULE(py_libtorrent)
     bind_peer_info();
     bind_ip_filter();
     bind_magnet_uri();
-    bind_converters();
     bind_create_torrent();
 }

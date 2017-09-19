@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2015, Arvid Norberg
+Copyright (c) 2007-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -35,25 +35,31 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/config.hpp"
 #include "libtorrent/error_code.hpp"
+#include "libtorrent/span.hpp"
 
 #include <vector>
 
-namespace libtorrent
-{
+namespace libtorrent {
 
 	TORRENT_EXTRA_EXPORT void inflate_gzip(
-		char const* in, int size
+		span<char const> in
 		, std::vector<char>& buffer
 		, int maximum_size
 		, error_code& error);
 
 	// get the ``error_category`` for zip errors
-	TORRENT_EXPORT boost::system::error_category& get_gzip_category();
+	TORRENT_EXPORT boost::system::error_category& gzip_category();
+
+#ifndef TORRENT_NO_DEPRECATE
+	TORRENT_DEPRECATED
+	inline boost::system::error_category& get_gzip_category()
+	{ return gzip_category(); }
+#endif
 
 	namespace gzip_errors
 	{
 		// libtorrent uses boost.system's ``error_code`` class to represent errors. libtorrent has
-		// its own error category get_gzip_category() whith the error codes defined by error_code_enum.
+		// its own error category get_gzip_category() with the error codes defined by error_code_enum.
 		enum error_code_enum
 		{
 			// Not an error

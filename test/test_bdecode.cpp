@@ -32,8 +32,9 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "test.hpp"
 #include "libtorrent/bdecode.hpp"
+#include "libtorrent/entry.hpp"
 
-using namespace libtorrent;
+using namespace lt;
 
 // test integer
 TORRENT_TEST(integer)
@@ -42,13 +43,38 @@ TORRENT_TEST(integer)
 	bdecode_node e;
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
-	TEST_CHECK(ret == 0);
-	printf("%s\n", print_entry(e).c_str());
-	std::pair<const char*, int> section = e.data_section();
-	TEST_CHECK(std::memcmp(b, section.first, section.second) == 0);
-	TEST_CHECK(section.second == sizeof(b) - 1);
-	TEST_CHECK(e.type() == bdecode_node::int_t);
-	TEST_CHECK(e.int_value() == 12453);
+	TEST_EQUAL(ret, 0);
+	std::printf("%s\n", print_entry(e).c_str());
+	span<const char> section = e.data_section();
+	TEST_CHECK(std::memcmp(b, section.data(), section.size()) == 0);
+	TEST_EQUAL(section.size(), sizeof(b) - 1);
+	TEST_EQUAL(e.type(), bdecode_node::int_t);
+	TEST_EQUAL(e.int_value(), 12453);
+}
+
+TORRENT_TEST(construct_string)
+{
+	entry e(std::string("abc123"));
+	TEST_EQUAL(e.string(), "abc123");
+}
+
+TORRENT_TEST(construct_string_literal)
+{
+	entry e("abc123");
+	TEST_EQUAL(e.string(), "abc123");
+}
+
+
+TORRENT_TEST(construct_string_view)
+{
+	entry e(string_view("abc123"));
+	TEST_EQUAL(e.string(), "abc123");
+}
+
+TORRENT_TEST(construct_integer)
+{
+	entry e(4);
+	TEST_EQUAL(e.integer(), 4);
 }
 
 // test string
@@ -58,14 +84,35 @@ TORRENT_TEST(string)
 	bdecode_node e;
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
-	TEST_CHECK(ret == 0);
-	printf("%s\n", print_entry(e).c_str());
-	std::pair<const char*, int> section = e.data_section();
-	TEST_CHECK(std::memcmp(b, section.first, section.second) == 0);
-	TEST_CHECK(section.second == sizeof(b) - 1);
-	TEST_CHECK(e.type() == bdecode_node::string_t);
-	TEST_CHECK(e.string_value() == std::string("abcdefghijklmnopqrstuvwxyz"));
-	TEST_CHECK(e.string_length() == 26);
+	TEST_EQUAL(ret, 0);
+	std::printf("%s\n", print_entry(e).c_str());
+	span<const char> section = e.data_section();
+	TEST_CHECK(std::memcmp(b, section.data(), section.size()) == 0);
+	TEST_EQUAL(section.size(), sizeof(b) - 1);
+	TEST_EQUAL(e.type(), bdecode_node::string_t);
+	TEST_EQUAL(e.string_value(), std::string("abcdefghijklmnopqrstuvwxyz"));
+	TEST_EQUAL(e.string_length(), 26);
+}
+
+// test string-prefix
+TORRENT_TEST(string_prefix1)
+{
+	// test edge-case of a string that's nearly too long
+	std::string test;
+	test.resize(1000000 + 8);
+	memcpy(&test[0], "1000000:", 8);
+	// test is a valid bencoded string, that's quite long
+	bdecode_node e;
+	error_code ec;
+	int ret = bdecode(test.c_str(), test.c_str() + test.size(), e, ec);
+	TEST_EQUAL(ret, 0);
+	std::printf("%d bytes string\n", e.string_length());
+	span<const char> section = e.data_section();
+	TEST_CHECK(std::memcmp(test.c_str(), section.data(), section.size()) == 0);
+	TEST_EQUAL(section.size(), test.size());
+	TEST_EQUAL(e.type(), bdecode_node::string_t);
+	TEST_EQUAL(e.string_length(), 1000000);
+	TEST_EQUAL(e.string_ptr(), test.c_str() + 8);
 }
 
 // test list
@@ -75,21 +122,21 @@ TORRENT_TEST(list)
 	bdecode_node e;
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
-	TEST_CHECK(ret == 0);
-	printf("%s\n", print_entry(e).c_str());
-	std::pair<const char*, int> section = e.data_section();
-	TEST_CHECK(std::memcmp(b, section.first, section.second) == 0);
-	TEST_CHECK(section.second == sizeof(b) - 1);
-	TEST_CHECK(e.type() == bdecode_node::list_t);
-	TEST_CHECK(e.list_size() == 2);
-	TEST_CHECK(e.list_at(0).type() == bdecode_node::int_t);
-	TEST_CHECK(e.list_at(1).type() == bdecode_node::string_t);
-	TEST_CHECK(e.list_at(0).int_value() == 12453);
-	TEST_CHECK(e.list_at(1).string_value() == std::string("aaa"));
-	TEST_CHECK(e.list_at(1).string_length() == 3);
+	TEST_EQUAL(ret, 0);
+	std::printf("%s\n", print_entry(e).c_str());
+	span<const char> section = e.data_section();
+	TEST_CHECK(std::memcmp(b, section.data(), section.size()) == 0);
+	TEST_EQUAL(section.size(), sizeof(b) - 1);
+	TEST_EQUAL(e.type(), bdecode_node::list_t);
+	TEST_EQUAL(e.list_size(), 2);
+	TEST_EQUAL(e.list_at(0).type(), bdecode_node::int_t);
+	TEST_EQUAL(e.list_at(1).type(), bdecode_node::string_t);
+	TEST_EQUAL(e.list_at(0).int_value(), 12453);
+	TEST_EQUAL(e.list_at(1).string_value(), std::string("aaa"));
+	TEST_EQUAL(e.list_at(1).string_length(), 3);
 	section = e.list_at(1).data_section();
-	TEST_CHECK(std::memcmp("3:aaa", section.first, section.second) == 0);
-	TEST_CHECK(section.second == 5);
+	TEST_CHECK(std::memcmp("3:aaa", section.data(), section.size()) == 0);
+	TEST_EQUAL(section.size(), 5);
 }
 
 // test dict
@@ -100,21 +147,24 @@ TORRENT_TEST(dict)
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
 	TEST_EQUAL(ret, 0);
-	printf("%s\n", print_entry(e).c_str());
-	std::pair<const char*, int> section = e.data_section();
-	TEST_CHECK(std::memcmp(b, section.first, section.second) == 0);
-	TEST_CHECK(section.second == sizeof(b) - 1);
-	TEST_CHECK(e.type() == bdecode_node::dict_t);
-	TEST_CHECK(e.dict_size() == 4);
-	TEST_CHECK(e.dict_find("a").type() == bdecode_node::int_t);
-	TEST_CHECK(e.dict_find("a").int_value() == 12453);
-	TEST_CHECK(e.dict_find("b").type() == bdecode_node::string_t);
-	TEST_CHECK(e.dict_find("b").string_value() == std::string("aaa"));
-	TEST_CHECK(e.dict_find("b").string_length() == 3);
-	TEST_CHECK(e.dict_find("c").type() == bdecode_node::string_t);
-	TEST_CHECK(e.dict_find("c").string_value() == std::string("bbb"));
-	TEST_CHECK(e.dict_find("c").string_length() == 3);
-	TEST_CHECK(e.dict_find_string_value("X") == "0123456789");
+	std::printf("%s\n", print_entry(e).c_str());
+	span<const char> section = e.data_section();
+	TEST_CHECK(std::memcmp(b, section.data(), section.size()) == 0);
+	TEST_EQUAL(section.size(), sizeof(b) - 1);
+	TEST_EQUAL(e.type(), bdecode_node::dict_t);
+	TEST_EQUAL(e.dict_size(), 4);
+	TEST_EQUAL(e.dict_find("a").type(), bdecode_node::int_t);
+	TEST_EQUAL(e.dict_find("a").int_value(), 12453);
+	TEST_EQUAL(e.dict_find("b").type(), bdecode_node::string_t);
+	TEST_EQUAL(e.dict_find("b").string_value(), std::string("aaa"));
+	TEST_EQUAL(e.dict_find("b").string_length(), 3);
+	TEST_EQUAL(e.dict_find("c").type(), bdecode_node::string_t);
+	TEST_EQUAL(e.dict_find("c").string_value(), std::string("bbb"));
+	TEST_EQUAL(e.dict_find("c").string_length(), 3);
+	TEST_EQUAL(e.dict_find_string_value("X"), "0123456789");
+	char error_string[200];
+	TEST_CHECK(e.has_soft_error(error_string));
+	TEST_EQUAL(std::string(error_string), std::string("unsorted dictionary key"));
 }
 
 // test dictionary with a key without a value
@@ -128,7 +178,7 @@ TORRENT_TEST(dict_key_novalue)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 10);
 	TEST_EQUAL(ec, error_code(bdecode_errors::expected_value));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test dictionary with a key that's not a string
@@ -142,7 +192,7 @@ TORRENT_TEST(dict_nonstring_key)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 1);
 	TEST_EQUAL(ec, error_code(bdecode_errors::expected_digit));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // dictionary key with \0
@@ -152,11 +202,74 @@ TORRENT_TEST(dict_null_key)
 	bdecode_node e;
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
-	TEST_CHECK(ret == 0);
+	TEST_EQUAL(ret, 0);
 	TEST_CHECK(e.dict_size() == 1);
 	bdecode_node d = e.dict_find(std::string("a\0b", 3));
 	TEST_EQUAL(d.type(), bdecode_node::int_t);
 	TEST_EQUAL(d.int_value(), 1);
+}
+
+// soft error reported for dictionary with unordered keys
+TORRENT_TEST(dict_unordered_keys)
+{
+	char error_string[200];
+	{
+		char b[] = "d2:abi1e2:aai2ee";
+		bdecode_node e;
+		error_code ec;
+		int ret = bdecode(b, b + sizeof(b) - 1, e, ec);
+		TEST_EQUAL(ret, 0);
+		TEST_CHECK(e.has_soft_error(error_string));
+		TEST_EQUAL(std::string(error_string), std::string("unsorted dictionary key"));
+	}
+	{
+		char b[] = "d2:bai1e2:aai2ee";
+		bdecode_node e;
+		error_code ec;
+		int ret = bdecode(b, b + sizeof(b) - 1, e, ec);
+		TEST_EQUAL(ret, 0);
+		TEST_CHECK(e.has_soft_error(error_string));
+		TEST_EQUAL(std::string(error_string), std::string("unsorted dictionary key"));
+	}
+	{
+		char b[] = "d2:aai1e1:ai2ee";
+		bdecode_node e;
+		error_code ec;
+		int ret = bdecode(b, b + sizeof(b) - 1, e, ec);
+		TEST_EQUAL(ret, 0);
+		TEST_CHECK(e.has_soft_error(error_string));
+		TEST_EQUAL(std::string(error_string), std::string("unsorted dictionary key"));
+	}
+	{
+		char b[] = "d1:ai1e2:aai2ee";
+		bdecode_node e;
+		error_code ec;
+		int ret = bdecode(b, b + sizeof(b) - 1, e, ec);
+		TEST_EQUAL(ret, 0);
+		TEST_CHECK(!e.has_soft_error(error_string));
+		TEST_EQUAL(std::string(error_string), std::string("unsorted dictionary key"));
+	}
+	{
+		char b[] = "d2:aai1e1:bi2ee";
+		bdecode_node e;
+		error_code ec;
+		int ret = bdecode(b, b + sizeof(b) - 1, e, ec);
+		TEST_EQUAL(ret, 0);
+		TEST_CHECK(!e.has_soft_error(error_string));
+		TEST_EQUAL(std::string(error_string), std::string("unsorted dictionary key"));
+	}
+}
+
+TORRENT_TEST(dict_duplicate_key)
+{
+	char b[] = "d2:aai1e2:aai2ee";
+	bdecode_node e;
+	error_code ec;
+	int ret = bdecode(b, b + sizeof(b) - 1, e, ec);
+	TEST_EQUAL(ret, 0);
+	char error_string[200];
+	TEST_CHECK(e.has_soft_error(error_string));
+	TEST_EQUAL(std::string(error_string), std::string("duplicate dictionary key"));
 }
 
 // premature e
@@ -168,7 +281,7 @@ TORRENT_TEST(premature_e)
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(ec, error_code(bdecode_errors::unexpected_eof));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test strings with negative length-prefix
@@ -182,7 +295,7 @@ TORRENT_TEST(negative_length_prefix)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 0);
 	TEST_EQUAL(ec, error_code(bdecode_errors::expected_value));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test strings with overflow length-prefix
@@ -196,7 +309,7 @@ TORRENT_TEST(overflow_length_prefix)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 19);
 	TEST_EQUAL(ec,  error_code(bdecode_errors::overflow));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test strings with almost overflow (more than 8 digits)
@@ -210,7 +323,7 @@ TORRENT_TEST(close_overflow_length_prefix)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 8);
 	TEST_EQUAL(ec, error_code(bdecode_errors::unexpected_eof));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test strings with overflow (more than 8 digits)
@@ -225,7 +338,34 @@ TORRENT_TEST(overflow_length_prefix2)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 0);
 	TEST_EQUAL(ec, error_code(bdecode_errors::limit_exceeded));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
+}
+
+TORRENT_TEST(leading_zero_length_prefix)
+{
+	{
+		char b[] = "06:foobar";
+		bdecode_node e;
+		error_code ec;
+		int pos;
+		int ret = bdecode(b, b + sizeof(b) - 1, e, ec, &pos);
+		TEST_EQUAL(ret, 0);
+		char error_string[200];
+		TEST_CHECK(e.has_soft_error(error_string));
+		TEST_EQUAL(std::string(error_string), std::string("leading zero in string length"));
+		std::printf("%s\n", print_entry(e).c_str());
+	}
+	{
+		char b[] = "0:";
+		bdecode_node e;
+		error_code ec;
+		int pos;
+		int ret = bdecode(b, b + sizeof(b) - 1, e, ec, &pos);
+		TEST_EQUAL(ret, 0);
+		char error_string[200];
+		TEST_CHECK(!e.has_soft_error(error_string));
+		std::printf("%s\n", print_entry(e).c_str());
+	}
 }
 
 // test integer without any digits
@@ -239,7 +379,7 @@ TORRENT_TEST(nodigit_int)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 1);
 	TEST_EQUAL(ec, error_code(bdecode_errors::expected_digit));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test integer with just a minus
@@ -253,7 +393,7 @@ TORRENT_TEST(minus_int)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 2);
 	TEST_EQUAL(ec, error_code(bdecode_errors::expected_digit));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test integer with a minus inserted in it
@@ -267,7 +407,7 @@ TORRENT_TEST(interior_minus_int)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 6);
 	TEST_EQUAL(ec,  error_code(bdecode_errors::expected_digit));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test integers that don't fit in 64 bits
@@ -278,7 +418,7 @@ TORRENT_TEST(int_overflow)
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
 	TEST_EQUAL(ret, 0);
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 	// the lazy aspect makes this overflow when asking for
 	// the value. turning it to zero.
 	TEST_EQUAL(e.int_value(), 0);
@@ -295,7 +435,7 @@ TORRENT_TEST(int_overflow2)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 22);
 	TEST_EQUAL(ec,  error_code(bdecode_errors::overflow));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test truncated negative integer
@@ -309,7 +449,32 @@ TORRENT_TEST(int_truncated)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 2);
 	TEST_EQUAL(ec,  error_code(bdecode_errors::unexpected_eof));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
+}
+
+TORRENT_TEST(int_leading_zero)
+{
+	{
+		char b[] = "i01e";
+		bdecode_node e;
+		error_code ec;
+		int ret = bdecode(b, b + sizeof(b) - 1, e, ec);
+		TEST_EQUAL(ret, 0);
+		char error_string[200];
+		TEST_CHECK(e.has_soft_error(error_string));
+		TEST_EQUAL(std::string(error_string), std::string("leading zero in integer"));
+		std::printf("%s\n", print_entry(e).c_str());
+	}
+	{
+		char b[] = "i0e";
+		bdecode_node e;
+		error_code ec;
+		int ret = bdecode(b, b + sizeof(b) - 1, e, ec);
+		TEST_EQUAL(ret, 0);
+		char error_string[200];
+		TEST_CHECK(!e.has_soft_error(error_string));
+		std::printf("%s\n", print_entry(e).c_str());
+	}
 }
 
 // bdecode_error
@@ -318,7 +483,7 @@ TORRENT_TEST(bdecode_error)
 	error_code ec(bdecode_errors::overflow);
 	TEST_EQUAL(ec.message(), "integer overflow");
 	TEST_EQUAL(ec.category().name(), std::string("bdecode error"));
-	ec.assign(5434, get_bdecode_category());
+	ec.assign(5434, bdecode_category());
 	TEST_EQUAL(ec.message(), "Unknown error");
 }
 
@@ -329,8 +494,8 @@ TORRENT_TEST(64bit_int)
 	bdecode_node e;
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
-	TEST_CHECK(ret == 0);
-	printf("%s\n", print_entry(e).c_str());
+	TEST_EQUAL(ret, 0);
+	std::printf("%s\n", print_entry(e).c_str());
 	TEST_CHECK(e.int_value() == 9223372036854775807LL);
 }
 
@@ -341,8 +506,8 @@ TORRENT_TEST(64bit_int_negative)
 	bdecode_node e;
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
-	TEST_CHECK(ret == 0);
-	printf("%s\n", print_entry(e).c_str());
+	TEST_EQUAL(ret, 0);
+	std::printf("%s\n", print_entry(e).c_str());
 	TEST_CHECK(e.int_value() == -9223372036854775807LL);
 }
 
@@ -357,7 +522,7 @@ TORRENT_TEST(int_invalid_digit)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 9);
 	TEST_EQUAL(ec, error_code(bdecode_errors::expected_digit));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test invalid encoding
@@ -378,7 +543,7 @@ TORRENT_TEST(invalid_encoding)
 		, 0xa1, 0x88, 0x7a, 0x8d, 0xc3, 0xd6, 0x31, 0x3a
 		, 0x79, 0x31, 0xae, 0x71, 0x65, 0};
 
-	printf("%s\n", buf);
+	std::printf("%s\n", buf);
 	bdecode_node e;
 	error_code ec;
 	int ret = bdecode((char*)buf, (char*)buf + sizeof(buf), e, ec);
@@ -399,10 +564,9 @@ TORRENT_TEST(depth_limit)
 
 	bdecode_node e;
 	error_code ec;
-	int ret = bdecode(b, b + sizeof(b), e, ec, NULL, 100);
+	int ret = bdecode(b, b + sizeof(b), e, ec, nullptr, 100);
 	TEST_CHECK(ret != 0);
-	TEST_EQUAL(ec, error_code(bdecode_errors::depth_exceeded
-		, get_bdecode_category()));
+	TEST_EQUAL(ec, error_code(bdecode_errors::depth_exceeded));
 }
 
 // test the item limit
@@ -417,10 +581,9 @@ TORRENT_TEST(item_limit)
 
 	bdecode_node e;
 	error_code ec;
-	int ret = bdecode(b, b + i + 1, e, ec, NULL, 1000, 1000);
+	int ret = bdecode(b, b + i + 1, e, ec, nullptr, 1000, 1000);
 	TEST_CHECK(ret != 0);
-	TEST_EQUAL(ec, error_code(bdecode_errors::limit_exceeded
-		, get_bdecode_category()));
+	TEST_EQUAL(ec, error_code(bdecode_errors::limit_exceeded));
 }
 
 // test unexpected EOF
@@ -435,13 +598,13 @@ TORRENT_TEST(unepected_eof)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 5);
 	TEST_EQUAL(ec, error_code(bdecode_errors::unexpected_eof));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
-// test unexpected EOF (really expected terminator)
+// test unexpected EOF in string length
 TORRENT_TEST(unepected_eof2)
 {
-	char b[] = "l2:..0"; // expected terminating 'e' instead of '0'
+	char b[] = "l2:..0"; // expected ':' delimiter instead of EOF
 
 	bdecode_node e;
 	error_code ec;
@@ -449,8 +612,8 @@ TORRENT_TEST(unepected_eof2)
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec, &pos);
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 6);
-	TEST_EQUAL(ec, error_code(bdecode_errors::expected_colon));
-	printf("%s\n", print_entry(e).c_str());
+	TEST_EQUAL(ec, error_code(bdecode_errors::unexpected_eof));
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test expected string
@@ -466,7 +629,7 @@ TORRENT_TEST(expected_string)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 1);
 	TEST_EQUAL(ec, error_code(bdecode_errors::expected_digit));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test unexpected EOF while parsing dict key
@@ -481,7 +644,7 @@ TORRENT_TEST(unexpected_eof_dict_key)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 5);
 	TEST_EQUAL(ec, error_code(bdecode_errors::unexpected_eof));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test unexpected EOF while parsing dict key
@@ -496,7 +659,7 @@ TORRENT_TEST(unexpected_eof_dict_key2)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 5);
 	TEST_EQUAL(ec, error_code(bdecode_errors::unexpected_eof));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test expected string while parsing dict key
@@ -511,7 +674,7 @@ TORRENT_TEST(expected_string_dict_key2)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 1);
 	TEST_EQUAL(ec, error_code(bdecode_errors::expected_digit));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test unexpected EOF while parsing int
@@ -526,7 +689,7 @@ TORRENT_TEST(unexpected_eof_int)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 1);
 	TEST_EQUAL(ec, error_code(bdecode_errors::unexpected_eof));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test unexpected EOF while parsing int
@@ -541,7 +704,7 @@ TORRENT_TEST(unexpected_eof_int2)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 3);
 	TEST_EQUAL(ec, error_code(bdecode_errors::unexpected_eof));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 
@@ -557,7 +720,7 @@ TORRENT_TEST(expected_colon_dict)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 5);
 	TEST_EQUAL(ec, error_code(bdecode_errors::expected_colon));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test empty string
@@ -567,10 +730,10 @@ TORRENT_TEST(empty_string)
 
 	bdecode_node e;
 	error_code ec;
-	int ret = bdecode(b, b + sizeof(b)-1, e, ec, NULL);
+	int ret = bdecode(b, b + sizeof(b)-1, e, ec, nullptr);
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(ec, error_code(bdecode_errors::unexpected_eof));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test partial string
@@ -585,7 +748,7 @@ TORRENT_TEST(partial_string)
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(pos, 3);
 	TEST_EQUAL(ec, error_code(bdecode_errors::unexpected_eof));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 TORRENT_TEST(list_ints)
@@ -595,7 +758,7 @@ TORRENT_TEST(list_ints)
 	for (int i = 0; i < 1000; ++i)
 	{
 		char tmp[20];
-		snprintf(tmp, sizeof(tmp), "i%de", i);
+		std::snprintf(tmp, sizeof(tmp), "i%de", i);
 		buf += tmp;
 	}
 	buf += "e";
@@ -619,12 +782,12 @@ TORRENT_TEST(dict_ints)
 	for (int i = 0; i < 1000; ++i)
 	{
 		char tmp[30];
-		snprintf(tmp, sizeof(tmp), "4:%04di%de", i, i);
+		std::snprintf(tmp, sizeof(tmp), "4:%04di%de", i, i);
 		buf += tmp;
 	}
 	buf += "e";
 
-	printf("%s\n", buf.c_str());
+	std::printf("%s\n", buf.c_str());
 	bdecode_node e;
 	error_code ec;
 	int ret = bdecode((char*)&buf[0], (char*)&buf[0] + buf.size(), e, ec);
@@ -634,7 +797,7 @@ TORRENT_TEST(dict_ints)
 	for (int i = 0; i < 1000; ++i)
 	{
 		char tmp[30];
-		snprintf(tmp, sizeof(tmp), "%04d", i);
+		std::snprintf(tmp, sizeof(tmp), "%04d", i);
 		TEST_EQUAL(e.dict_find_int_value(tmp), i);
 	}
 }
@@ -686,16 +849,17 @@ TORRENT_TEST(exceed_buf_limit)
 	int ret = bdecode(b, b + 0x3fffffff, e, ec);
 	TEST_EQUAL(ret, -1);
 	TEST_EQUAL(ec, error_code(bdecode_errors::limit_exceeded));
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 }
 
 // test parse_int
 TORRENT_TEST(parse_int)
 {
 	char b[] = "1234567890e";
-	boost::int64_t val = 0;
-	bdecode_errors::error_code_enum ec;
+	std::int64_t val = 0;
+	bdecode_errors::error_code_enum ec = bdecode_errors::no_error;
 	char const* e = parse_int(b, b + sizeof(b)-1, 'e', val, ec);
+	TEST_EQUAL(ec, bdecode_errors::no_error);
 	TEST_EQUAL(val, 1234567890);
 	TEST_EQUAL(e, b + sizeof(b) - 2);
 }
@@ -704,7 +868,7 @@ TORRENT_TEST(parse_int)
 TORRENT_TEST(invalid_digit)
 {
 	char b[] = "0o";
-	boost::int64_t val = 0;
+	std::int64_t val = 0;
 	bdecode_errors::error_code_enum ec;
 	char const* e = parse_int(b, b + sizeof(b)-1, 'e', val, ec);
 	TEST_EQUAL(ec, bdecode_errors::expected_digit);
@@ -715,7 +879,7 @@ TORRENT_TEST(invalid_digit)
 TORRENT_TEST(parse_int_overflow)
 {
 	char b[] = "9223372036854775808:";
-	boost::int64_t val = 0;
+	std::int64_t val = 0;
 	bdecode_errors::error_code_enum ec;
 	char const* e = parse_int(b, b + sizeof(b)-1, ':', val, ec);
 	TEST_EQUAL(ec, bdecode_errors::overflow);
@@ -738,7 +902,7 @@ TORRENT_TEST(parse_length_overflow)
 		bdecode_node e;
 		int ret = bdecode(b[i], b[i] + strlen(b[i]), e, ec);
 		TEST_EQUAL(ret, -1);
-		TEST_CHECK(ec == error_code(bdecode_errors::unexpected_eof));
+		TEST_EQUAL(ec, error_code(bdecode_errors::unexpected_eof));
 	}
 }
 
@@ -746,10 +910,10 @@ TORRENT_TEST(parse_length_overflow)
 TORRENT_TEST(expected_colon_string)
 {
 	char b[] = "928";
-	boost::int64_t val = 0;
-	bdecode_errors::error_code_enum ec;
+	std::int64_t val = 0;
+	bdecode_errors::error_code_enum ec = bdecode_errors::no_error;
 	char const* e = parse_int(b, b + sizeof(b)-1, ':', val, ec);
-	TEST_EQUAL(ec, bdecode_errors::expected_colon);
+	TEST_EQUAL(ec, bdecode_errors::no_error);
 	TEST_EQUAL(e, b + 3);
 }
 
@@ -765,11 +929,11 @@ TORRENT_TEST(dict_find_funs)
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
 	TEST_EQUAL(ret, 0);
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 
 	TEST_EQUAL(e.type(), bdecode_node::dict_t);
 
-	// dict_find_int* 
+	// dict_find_int*
 
 	TEST_EQUAL(e.dict_find_int_value("a"), 1);
 	TEST_EQUAL(e.dict_find_int("a").type(), bdecode_node::int_t);
@@ -834,7 +998,7 @@ TORRENT_TEST(list_at_funs)
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
 	TEST_EQUAL(ret, 0);
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 
 	TEST_EQUAL(e.type(), bdecode_node::list_t);
 
@@ -872,7 +1036,7 @@ TORRENT_TEST(list_at_reverse)
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
 	TEST_EQUAL(ret, 0);
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 
 	TEST_EQUAL(e.type(), bdecode_node::list_t);
 
@@ -898,7 +1062,7 @@ TORRENT_TEST(dict_find_funs2)
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
 	TEST_EQUAL(ret, 0);
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 
 	TEST_EQUAL(e.type(), bdecode_node::dict_t);
 
@@ -916,7 +1080,7 @@ TORRENT_TEST(print_entry)
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
 	TEST_EQUAL(ret, 0);
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 
 	TEST_EQUAL(print_entry(e), "[ 1, 'foo', [ 1, 2 ], { 'x': 1 } ]");
 }
@@ -928,7 +1092,7 @@ TORRENT_TEST(print_entry2)
 	error_code ec;
 	int ret = bdecode(b, b + sizeof(b)-1, e, ec);
 	TEST_EQUAL(ret, 0);
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 
 	TEST_EQUAL(print_entry(e), "{ 'a': 1, 'b': 'foo', 'c': [ 1, 2 ], 'd': { 'x': 1 } }");
 }
@@ -953,7 +1117,7 @@ TORRENT_TEST(swap)
 	std::string str2 = print_entry(e2);
 	TEST_EQUAL(e1.type(), bdecode_node::dict_t);
 	TEST_EQUAL(e2.type(), bdecode_node::int_t);
-	printf("%s\n", print_entry(e1).c_str());
+	std::printf("%s\n", print_entry(e1).c_str());
 
 	e1.swap(e2);
 
@@ -961,7 +1125,7 @@ TORRENT_TEST(swap)
 	TEST_EQUAL(e2.type(), bdecode_node::dict_t);
 	TEST_EQUAL(print_entry(e1), str2);
 	TEST_EQUAL(print_entry(e2), str1);
-	printf("%s\n", print_entry(e1).c_str());
+	std::printf("%s\n", print_entry(e1).c_str());
 
 	e1.swap(e2);
 
@@ -969,7 +1133,7 @@ TORRENT_TEST(swap)
 	TEST_EQUAL(e2.type(), bdecode_node::int_t);
 	TEST_EQUAL(print_entry(e1), str1);
 	TEST_EQUAL(print_entry(e2), str2);
-	printf("%s\n", print_entry(e1).c_str());
+	std::printf("%s\n", print_entry(e1).c_str());
 }
 
 // test swap() (one node is the root of the other node)
@@ -991,7 +1155,7 @@ TORRENT_TEST(swap_root)
 	std::string str2 = print_entry(e2);
 	TEST_EQUAL(e1.type(), bdecode_node::dict_t);
 	TEST_EQUAL(e2.type(), bdecode_node::int_t);
-	printf("%s\n", print_entry(e1).c_str());
+	std::printf("%s\n", print_entry(e1).c_str());
 
 	e1.swap(e2);
 
@@ -999,7 +1163,7 @@ TORRENT_TEST(swap_root)
 	TEST_EQUAL(e2.type(), bdecode_node::dict_t);
 	TEST_EQUAL(print_entry(e1), str2);
 	TEST_EQUAL(print_entry(e2), str1);
-	printf("%s\n", print_entry(e1).c_str());
+	std::printf("%s\n", print_entry(e1).c_str());
 
 	// swap back
 	e1.swap(e2);
@@ -1008,7 +1172,7 @@ TORRENT_TEST(swap_root)
 	TEST_EQUAL(e2.type(), bdecode_node::int_t);
 	TEST_EQUAL(print_entry(e1), str1);
 	TEST_EQUAL(print_entry(e2), str2);
-	printf("%s\n", print_entry(e1).c_str());
+	std::printf("%s\n", print_entry(e1).c_str());
 }
 
 // test swap() (neither is a root and they don't share a root)
@@ -1099,14 +1263,14 @@ TORRENT_TEST(clear)
 	bdecode_node e;
 	error_code ec;
 	int ret = bdecode(b1, b1 + sizeof(b1)-1, e, ec);
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 	TEST_EQUAL(ret, 0);
 	TEST_EQUAL(e.type(), bdecode_node::dict_t);
 	TEST_EQUAL(e.dict_size(), 4);
 	TEST_EQUAL(e.dict_at(1).first, "b");
 
 	ret = bdecode(b2, b2 + sizeof(b2)-1, e, ec);
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 	TEST_EQUAL(ret, 0);
 	TEST_EQUAL(e.type(), bdecode_node::list_t);
 	TEST_EQUAL(e.list_size(), 2);
@@ -1123,7 +1287,7 @@ TORRENT_TEST(copy_root)
 	int ret = bdecode(b1, b1 + sizeof(b1)-1, e1, ec);
 	TEST_EQUAL(ret, 0);
 	TEST_EQUAL(e1.type(), bdecode_node::dict_t);
-	printf("%s\n", print_entry(e1).c_str());
+	std::printf("%s\n", print_entry(e1).c_str());
 
 	bdecode_node e2(e1);
 	bdecode_node e3;
@@ -1151,7 +1315,7 @@ TORRENT_TEST(non_owning_refs)
 
 	TEST_EQUAL(ret, 0);
 	TEST_EQUAL(e1.type(), bdecode_node::dict_t);
-	printf("%s\n", print_entry(e1).c_str());
+	std::printf("%s\n", print_entry(e1).c_str());
 
 	bdecode_node e2 = e1.non_owning();
 
@@ -1176,7 +1340,7 @@ TORRENT_TEST(partial_parse)
 	TEST_EQUAL(pos, 35);
 	TEST_EQUAL(e.type(), bdecode_node::dict_t);
 
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 
 	TEST_EQUAL(print_entry(e), "{ 'a': 1, 'b': 'foo', 'c': [ 1, 2 ], 'd': { 'x': {} } }");
 }
@@ -1193,7 +1357,7 @@ TORRENT_TEST(partial_parse2)
 	TEST_EQUAL(pos, 29);
 	TEST_EQUAL(e.type(), bdecode_node::dict_t);
 
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 
 	TEST_EQUAL(print_entry(e), "{ 'a': 1, 'b': 'foo', 'c': [ 1, 2 ], 'd': {} }");
 }
@@ -1210,7 +1374,7 @@ TORRENT_TEST(partial_parse3)
 	TEST_EQUAL(pos, 26);
 	TEST_EQUAL(e.type(), bdecode_node::dict_t);
 
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 
 	TEST_EQUAL(print_entry(e), "{ 'a': 1, 'b': 'foo', 'c': [ 1, 2 ] }");
 }
@@ -1227,9 +1391,24 @@ TORRENT_TEST(partial_parse4)
 	TEST_EQUAL(pos, 22);
 	TEST_EQUAL(e.type(), bdecode_node::dict_t);
 
-	printf("%s\n", print_entry(e).c_str());
+	std::printf("%s\n", print_entry(e).c_str());
 
 	TEST_EQUAL(print_entry(e), "{ 'a': 1, 'b': 'foo', 'c': [ 1 ] }");
+}
+
+TORRENT_TEST(partial_parse_string)
+{
+	// it's important to not have a null terminator here
+	// to allow address sanitizer to trigger in case the decoder reads past the
+	// end
+	char b[] = { '5', '5'};
+
+	bdecode_node e;
+	error_code ec;
+	int pos;
+	int ret = bdecode(b, b + sizeof(b), e, ec, &pos);
+	TEST_EQUAL(ret, -1);
+	TEST_EQUAL(pos, 2);
 }
 
 // test switch_underlying_buffer
@@ -1247,12 +1426,12 @@ TORRENT_TEST(switch_buffer)
 	TEST_EQUAL(e.type(), bdecode_node::dict_t);
 
 	std::string string1 = print_entry(e);
-	printf("%s\n", string1.c_str());
+	std::printf("%s\n", string1.c_str());
 
 	e.switch_underlying_buffer(b2);
 
 	std::string string2 = print_entry(e);
-	printf("%s\n", string2.c_str());
+	std::printf("%s\n", string2.c_str());
 
 	TEST_EQUAL(string1, string2);
 }

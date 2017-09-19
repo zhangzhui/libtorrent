@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2009-2015, Arvid Norberg
+Copyright (c) 2009-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -35,18 +35,16 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/config.hpp"
 
-#include "libtorrent/aux_/disable_warnings_push.hpp"
-
-#include <boost/asio/high_resolution_timer.hpp>
-
 #if defined TORRENT_BUILD_SIMULATOR
 #include "simulator/simulator.hpp"
-#endif
-
+#else
+#include "libtorrent/aux_/disable_warnings_push.hpp"
+#include <boost/asio/high_resolution_timer.hpp>
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
+#endif // SIMULATOR
 
-namespace libtorrent
-{
+namespace libtorrent {
+
 #if defined TORRENT_BUILD_SIMULATOR
 	typedef sim::asio::high_resolution_timer deadline_timer;
 #else
@@ -55,4 +53,3 @@ namespace libtorrent
 }
 
 #endif // TORRENT_DEADLINE_TIMER_HPP_INCLUDED
-

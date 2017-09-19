@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2011-2015, Arvid Norberg
+Copyright (c) 2011-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -31,9 +31,31 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "libtorrent/config.hpp"
-#include <boost/cstdint.hpp>
+#include "libtorrent/span.hpp"
 
-namespace libtorrent
-{
-	boost::uint32_t TORRENT_EXTRA_EXPORT random();
+#include <cstdint>
+#include <random>
+#include <algorithm>
+
+namespace libtorrent { namespace aux {
+
+		TORRENT_EXTRA_EXPORT std::mt19937& random_engine();
+
+		template<class RandomIt>
+		void random_shuffle(RandomIt first, RandomIt last)
+		{
+			std::shuffle(first, last, random_engine());
+		}
+
+		// Fills the buffer with random bytes.
+		//
+		// This functions perform differently under different setups
+		// For Windows and all platforms when compiled with libcrypto, it
+		// generates cryptographically random bytes.
+		// If the above conditions are not true, then a standard
+		// fill of bytes is used.
+		TORRENT_EXTRA_EXPORT void random_bytes(span<char> buffer);
+	}
+
+	TORRENT_EXTRA_EXPORT std::uint32_t random(std::uint32_t max);
 }

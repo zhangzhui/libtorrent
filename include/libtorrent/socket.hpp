@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2015, Arvid Norberg
+Copyright (c) 2003-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -50,8 +50,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <winsock2.h>
 #endif
 
-#include <boost/version.hpp>
-
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ip/udp.hpp>
 #include <boost/asio/write.hpp>
@@ -67,49 +65,35 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
-namespace libtorrent
-{
+namespace libtorrent {
 
 #if defined TORRENT_BUILD_SIMULATOR
-	using sim::asio::ip::udp;
-	using sim::asio::ip::tcp;
+	using udp = sim::asio::ip::udp;
+	using tcp = sim::asio::ip::tcp;
 	using sim::asio::async_write;
 	using sim::asio::async_read;
-	using sim::asio::null_buffers;
+	using null_buffers = sim::asio::null_buffers;
 #else
-	using boost::asio::ip::tcp;
-	using boost::asio::ip::udp;
+	using tcp = boost::asio::ip::tcp;
+	using udp = boost::asio::ip::udp;
 	using boost::asio::async_write;
 	using boost::asio::async_read;
-	using boost::asio::null_buffers;
-#endif
-
-#if TORRENT_USE_IPV6
-#ifdef IPV6_V6ONLY
-	struct v6only
-	{
-		v6only(bool enable): m_value(enable) {}
-		template<class Protocol>
-		int level(Protocol const&) const { return IPPROTO_IPV6; }
-		template<class Protocol>
-		int name(Protocol const&) const { return IPV6_V6ONLY; }
-		template<class Protocol>
-		int const* data(Protocol const&) const { return &m_value; }
-		template<class Protocol>
-		size_t size(Protocol const&) const { return sizeof(m_value); }
-		int m_value;
-	};
-#endif
+	using null_buffers = boost::asio::null_buffers;
 #endif
 
 #ifdef TORRENT_WINDOWS
 
+#ifndef PROTECTION_LEVEL_UNRESTRICTED
+#define PROTECTION_LEVEL_UNRESTRICTED 10
+#endif
+
 #ifndef IPV6_PROTECTION_LEVEL
 #define IPV6_PROTECTION_LEVEL 30
 #endif
+
 	struct v6_protection_level
 	{
-		v6_protection_level(int level): m_value(level) {}
+		explicit v6_protection_level(int level): m_value(level) {}
 		template<class Protocol>
 		int level(Protocol const&) const { return IPPROTO_IPV6; }
 		template<class Protocol>
@@ -120,12 +104,26 @@ namespace libtorrent
 		size_t size(Protocol const&) const { return sizeof(m_value); }
 		int m_value;
 	};
-#endif
+
+	struct exclusive_address_use
+	{
+		explicit exclusive_address_use(int enable): m_value(enable) {}
+		template<class Protocol>
+		int level(Protocol const&) const { return SOL_SOCKET; }
+		template<class Protocol>
+		int name(Protocol const&) const { return SO_EXCLUSIVEADDRUSE; }
+		template<class Protocol>
+		int const* data(Protocol const&) const { return &m_value; }
+		template<class Protocol>
+		size_t size(Protocol const&) const { return sizeof(m_value); }
+		int m_value;
+	};
+#endif // TORRENT_WINDOWS
 
 #ifdef IPV6_TCLASS
 	struct traffic_class
 	{
-		traffic_class(char val): m_value(val) {}
+		explicit traffic_class(char val): m_value(val) {}
 		template<class Protocol>
 		int level(Protocol const&) const { return IPPROTO_IPV6; }
 		template<class Protocol>
@@ -140,12 +138,12 @@ namespace libtorrent
 
 	struct type_of_service
 	{
-#ifdef WIN32
-		typedef DWORD tos_t;
+#ifdef _WIN32
+		using tos_t = DWORD;
 #else
-		typedef int tos_t;
+		using tos_t = int;
 #endif
-		type_of_service(char val): m_value(val) {}
+		explicit type_of_service(char val) : m_value(tos_t(val)) {}
 		template<class Protocol>
 		int level(Protocol const&) const { return IPPROTO_IP; }
 		template<class Protocol>
@@ -162,26 +160,24 @@ namespace libtorrent
 #endif
 
 #ifdef TORRENT_HAS_DONT_FRAGMENT
+
+	// the order of these preprocessor tests matters. Windows defines both
+	// IP_DONTFRAGMENT and IP_MTU_DISCOVER, but the latter is not supported
+	// in general, the simple option of just setting the DF bit is preferred, if
+	// it's available
+#if defined IP_DONTFRAG || defined IP_DONTFRAGMENT
+
 	struct dont_fragment
 	{
-		dont_fragment(bool val)
-#ifdef IP_PMTUDISCOVER_DO
-			: m_value(val ? IP_PMTUDISC_DO : IP_PMTUDISC_DONT) {}
-#else
-			: m_value(val) {}
-#endif
+		explicit dont_fragment(bool val) : m_value(val) {}
 		template<class Protocol>
 		int level(Protocol const&) const { return IPPROTO_IP; }
 		template<class Protocol>
 		int name(Protocol const&) const
 #if defined IP_DONTFRAG
 		{ return IP_DONTFRAG; }
-#elif defined IP_MTU_DISCOVER
-		{ return IP_MTU_DISCOVER; }
-#elif defined IP_DONTFRAGMENT
+#else // defined IP_DONTFRAGMENT
 		{ return IP_DONTFRAGMENT; }
-#else
-		{}
 #endif
 		template<class Protocol>
 		int const* data(Protocol const&) const { return &m_value; }
@@ -189,8 +185,31 @@ namespace libtorrent
 		size_t size(Protocol const&) const { return sizeof(m_value); }
 		int m_value;
 	};
+
+#else
+
+	// this is the fallback mechanism using the IP_MTU_DISCOVER option, which
+	// does a little bit more than we want, it makes the kernel track an estimate
+	// of the MTU and rejects packets immediately if they are believed to exceed
+	// it.
+	struct dont_fragment
+	{
+		explicit dont_fragment(bool val)
+			: m_value(val ? IP_PMTUDISC_DO : IP_PMTUDISC_DONT) {}
+		template<class Protocol>
+		int level(Protocol const&) const { return IPPROTO_IP; }
+		template<class Protocol>
+		int name(Protocol const&) const { return IP_MTU_DISCOVER; }
+		template<class Protocol>
+		int const* data(Protocol const&) const { return &m_value; }
+		template<class Protocol>
+		size_t size(Protocol const&) const { return sizeof(m_value); }
+		int m_value;
+	};
+
+#endif // IP_DONTFRAG vs. IP_MTU_DISCOVER
+
 #endif // TORRENT_HAS_DONT_FRAGMENT
 }
 
 #endif // TORRENT_SOCKET_HPP_INCLUDED
-

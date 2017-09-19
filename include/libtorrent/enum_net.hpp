@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2015, Arvid Norberg
+Copyright (c) 2007-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -37,9 +37,6 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/aux_/disable_warnings_push.hpp"
 
-#include <vector>
-#include <boost/asio/ip/tcp.hpp>
-
 #if TORRENT_USE_IFCONF || TORRENT_USE_NETLINK || TORRENT_USE_SYSCTL
 #include <sys/socket.h> // for SO_BINDTODEVICE
 #endif
@@ -49,9 +46,13 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/io_service_fwd.hpp"
 #include "libtorrent/address.hpp"
 #include "libtorrent/error_code.hpp"
+#include "libtorrent/socket.hpp"
+#include "libtorrent/aux_/bind_to_device.hpp"
 
-namespace libtorrent
-{
+#include <vector>
+
+namespace libtorrent {
+
 	struct socket_type;
 
 	// the interface should not have a netmask
@@ -60,7 +61,9 @@ namespace libtorrent
 		address interface_address;
 		address netmask;
 		char name[64];
-		int mtu;
+		// an interface is preferred if its address is
+		// not tentative/duplicate/deprecated
+		bool preferred = true;
 	};
 
 	struct ip_route
@@ -93,37 +96,30 @@ namespace libtorrent
 
 	TORRENT_EXTRA_EXPORT address get_default_gateway(io_service& ios, error_code& ec);
 
-#ifdef SO_BINDTODEVICE
-	struct bind_to_device_opt
-	{
-		bind_to_device_opt(char const* device): m_value(device) {}
-		template<class Protocol>
-		int level(Protocol const&) const { return SOL_SOCKET; }
-		template<class Protocol>
-		int name(Protocol const&) const { return SO_BINDTODEVICE; }
-		template<class Protocol>
-		const char* data(Protocol const&) const { return m_value; }
-		template<class Protocol>
-		size_t size(Protocol const&) const { return IFNAMSIZ; }
-		char const* m_value;
-	};
-#endif
-
 	// attempt to bind socket to the device with the specified name. For systems
 	// that don't support SO_BINDTODEVICE the socket will be bound to one of the
 	// IP addresses of the specified device. In this case it is necessary to
 	// verify the local endpoint of the socket once the connection is established.
 	// the returned address is the ip the socket was bound to (or address_v4::any()
 	// in case SO_BINDTODEVICE succeeded and we don't need to verify it).
+	// TODO: 3 use string_view for device_name
 	template <class Socket>
-	address bind_to_device(io_service& ios, Socket& sock
-		, bool ipv4, char const* device_name, int port, error_code& ec)
+	address bind_socket_to_device(io_service& ios, Socket& sock
+		, boost::asio::ip::tcp const& protocol
+		, char const* device_name, int port, error_code& ec)
 	{
-		boost::asio::ip::tcp::endpoint bind_ep(address_v4::any(), port);
+		tcp::endpoint bind_ep(address_v4::any(), std::uint16_t(port));
 
 		address ip = address::from_string(device_name, ec);
 		if (!ec)
 		{
+#if TORRENT_USE_IPV6
+			// this is to cover the case where "0.0.0.0" is considered any IPv4 or
+			// IPv6 address. If we're asking to be bound to an IPv6 address and
+			// providing 0.0.0.0 as the device, turn it into "::"
+			if (ip == address_v4::any() && protocol == boost::asio::ip::tcp::v6())
+				ip = address_v6::any();
+#endif
 			bind_ep.address(ip);
 			// it appears to be an IP. Just bind to that address
 			sock.bind(bind_ep, ec);
@@ -132,10 +128,10 @@ namespace libtorrent
 
 		ec.clear();
 
-#ifdef SO_BINDTODEVICE
+#if TORRENT_HAS_BINDTODEVICE
 		// try to use SO_BINDTODEVICE here, if that exists. If it fails,
 		// fall back to the mechanism we have below
-		sock.set_option(bind_to_device_opt(device_name), ec);
+		sock.set_option(aux::bind_to_device(device_name), ec);
 		if (ec)
 #endif
 		{
@@ -147,16 +143,16 @@ namespace libtorrent
 
 			bool found = false;
 
-			for (int i = 0; i < int(ifs.size()); ++i)
+			for (auto const& iface : ifs)
 			{
 				// we're looking for a specific interface, and its address
 				// (which must be of the same family as the address we're
 				// connecting to)
-				if (strcmp(ifs[i].name, device_name) != 0) continue;
-				if (ifs[i].interface_address.is_v4() != ipv4)
+				if (std::strcmp(iface.name, device_name) != 0) continue;
+				if (iface.interface_address.is_v4() != (protocol == boost::asio::ip::tcp::v4()))
 					continue;
 
-				bind_ep.address(ifs[i].interface_address);
+				bind_ep.address(iface.interface_address);
 				found = true;
 				break;
 			}
@@ -171,10 +167,6 @@ namespace libtorrent
 		return bind_ep.address();
 	}
 
-	// returns true if the given device exists
-	TORRENT_EXTRA_EXPORT bool has_interface(char const* name, io_service& ios
-		, error_code& ec);
-
 	// returns the device name whose local address is ``addr``. If
 	// no such device is found, an empty string is returned.
 	TORRENT_EXTRA_EXPORT std::string device_for_address(address addr
@@ -183,4 +175,3 @@ namespace libtorrent
 }
 
 #endif
-

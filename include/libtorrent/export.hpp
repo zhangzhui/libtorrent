@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2005-2015, Arvid Norberg
+Copyright (c) 2005-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -33,19 +33,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef TORRENT_EXPORT_HPP_INCLUDED
 #define TORRENT_EXPORT_HPP_INCLUDED
 
-#if !defined(BOOST_COMPILER_CONFIG) && !defined(BOOST_NO_COMPILER_CONFIG)
-#  include <boost/config/select_compiler_config.hpp>
-#endif
-#ifdef BOOST_COMPILER_CONFIG
-#  include BOOST_COMPILER_CONFIG
-#endif
-
-#if !defined(BOOST_PLATFORM_CONFIG) && !defined(BOOST_NO_PLATFORM_CONFIG)
-#  include <boost/config/select_platform_config.hpp>
-#endif
-#ifdef BOOST_PLATFORM_CONFIG
-#  include BOOST_PLATFORM_CONFIG
-#endif
+#include <boost/config.hpp>
 
 // backwards compatibility with older versions of boost
 #if !defined BOOST_SYMBOL_EXPORT && !defined BOOST_SYMBOL_IMPORT
@@ -87,7 +75,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 // only export this type if deprecated functions are enabled
 #ifdef TORRENT_NO_DEPRECATE
-#define TORRENT_DEPRECATED_EXPORT
+#define TORRENT_DEPRECATED_EXPORT TORRENT_EXTRA_EXPORT
 #else
 #define TORRENT_DEPRECATED_EXPORT TORRENT_EXPORT
 #endif

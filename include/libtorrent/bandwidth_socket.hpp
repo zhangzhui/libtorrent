@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2009-2015, Arvid Norberg
+Copyright (c) 2009-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -30,13 +30,14 @@ POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-
 #ifndef TORRENT_BANDWIDTH_SOCKET_HPP_INCLUDED
 #define TORRENT_BANDWIDTH_SOCKET_HPP_INCLUDED
 
-namespace libtorrent
-{
-	struct bandwidth_socket
+#include "libtorrent/export.hpp"
+
+namespace libtorrent {
+
+	struct TORRENT_EXTRA_EXPORT bandwidth_socket
 	{
 		virtual void assign_bandwidth(int channel, int amount) = 0;
 		virtual bool is_disconnecting() const = 0;
@@ -45,4 +46,3 @@ namespace libtorrent
 }
 
 #endif // TORRENT_BANDWIDTH_SOCKET_HPP_INCLUDED
-

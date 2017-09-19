@@ -3,7 +3,7 @@ libtorrent manual
 =================
 
 :Author: Arvid Norberg, arvid@libtorrent.org
-:Version: 1.1.0
+:Version: 1.2.0
 
 .. contents:: Table of contents
   :depth: 2
@@ -12,10 +12,9 @@ libtorrent manual
 downloading and building
 ========================
 
-To acquire the latest version of libtorrent, you'll have to grab it from SVN.
-You'll find instructions on how to do this here__ (see subversion access).
+To download the latest version of libtorrent, clone the `github repo`__.
 
-__ http://sourceforge.net/svn/?group_id=79942
+__ https://github.com/arvidn/libtorrent
 
 The build systems supported "out of the box" in libtorrent are boost-build v2
 (BBv2) and autotools (for unix-like systems). If you still can't build after
@@ -38,15 +37,18 @@ IRC channel on ``irc.freenode.net``.
 	configuration options in the pkg-config file. Always use pkg-config
 	when linking against libtorrent.
 
-building from svn
+building from git
 -----------------
 
-To build libtorrent from svn you need to check out the libtorrent sources from
-sourceforge. If you downloaded a release tarball, you can skip this section.
+To build libtorrent from git you need to clone the libtorrent repo from
+github. If you downloaded a release `tarball`__, you can skip this section.
 
-To check out libtorrent follow these instructions__.
+__ https://github.com/arvidn/libtorrent/releases/latest
 
-__ http://sourceforge.net/svn/?group_id=79942
+::
+
+	git clone https://github.com/arvidn/libtorrent.git
+
 
 building with BBv2
 ------------------
@@ -75,7 +77,7 @@ You'll find boost here__.
 __ http://sourceforge.net/project/showfiles.php?group_id=7586&package_id=8041&release_id=619445
 
 Extract the archive to some directory where you want it. For the sake of this
-guide, let's assume you extract the package to ``c:\boost_1_55_0`` (I'm using
+guide, let's assume you extract the package to ``c:\boost_1_64_0`` (I'm using
 a windows path in this example since if you're on linux/unix you're more likely
 to use the autotools). You'll need at least version 1.49 of the boost library
 in order to build libtorrent.
@@ -86,7 +88,7 @@ Step 2: Setup BBv2
 
 First you need to build ``bjam``. You do this by opening a terminal (In
 windows, run ``cmd``). Change directory to
-``c:\boost_1_55_0\tools\jam\src``. Then run the script called
+``c:\boost_1_64_0\tools\jam\src``. Then run the script called
 ``build.bat`` or ``build.sh`` on a unix system. This will build ``bjam`` and
 place it in a directory starting with ``bin.`` and then have the name of your
 platform. Copy the ``bjam.exe`` (or ``bjam`` on a unix system) to a place
@@ -101,16 +103,16 @@ set the environment variable ``BOOST_BUILD_PATH``. This is the path that tells
 ``bjam`` where it can find boost-build, your configuration file and all the
 toolsets (descriptions used by boost-build to know how to use different
 compilers on different platforms). Assuming the boost install path above, set
-it to ``c:\boost_1_55_0\tools\build\v2``.
+it to ``c:\boost_1_64_0\tools\build\v2``.
 
 To set an environment variable in windows, type for example::
 
-  set BOOST_BUILD_PATH=c:\boost_1_55_0\tools\build\v2
+  set BOOST_BUILD_PATH=c:\boost_1_64_0\tools\build\v2
 
 In a terminal window.
 
 The last thing to do to complete the setup of BBv2 is to modify your
-``user-config.jam`` file. It is located in ``c:\boost_1_55_0\tools\build\v2``.
+``user-config.jam`` file. It is located in ``c:\boost_1_64_0\tools\build\v2``.
 Depending on your platform and which compiler you're using, you should add a
 line for each compiler and compiler version you have installed on your system
 that you want to be able to use with BBv2. For example, if you're using
@@ -148,7 +150,7 @@ Step 3: Building libtorrent
 When building libtorrent, the ``Jamfile`` expects the environment variable
 ``BOOST_ROOT`` to be set to the boost installation directory. It uses this to
 find the boost libraries it depends on, so they can be built and their headers
-files found. So, set this to ``c:\boost_1_55_0``. You only need this if you're
+files found. So, set this to ``c:\boost_1_64_0``. You only need this if you're
 building against a source distribution of boost.
 
 Then the only thing left is simply to invoke ``bjam``. If you want to specify
@@ -224,8 +226,8 @@ from a cygwin terminal, you'll have to run it from a ``cmd`` terminal. The same 
 cygwin, if you're building with gcc in cygwin you'll have to run it from a cygwin terminal.
 Also, make sure the paths are correct in the different environments. In cygwin, the paths
 (``BOOST_BUILD_PATH`` and ``BOOST_ROOT``) should be in the typical unix-format (e.g.
-``/cygdrive/c/boost_1_55_0``). In the windows environment, they should have the typical
-windows format (``c:/boost_1_55_0``).
+``/cygdrive/c/boost_1_64_0``). In the windows environment, they should have the typical
+windows format (``c:/boost_1_64_0``).
 
 .. note::
 	In Jamfiles, spaces are separators. It's typically easiest to avoid spaces
@@ -245,16 +247,13 @@ Build features:
 |                          | * ``shared`` - links dynamically against the boost |
 |                          |   libraries.                                       |
 +--------------------------+----------------------------------------------------+
-| ``logging``              | * ``off`` - logging alerts disabled.               |
-|                          | * ``on`` - default. logging alerts available,      |
-|                          |   still need to be enabled by the alert mask. The  |
+| ``logging``              | * ``off`` - logging alerts disabled. The           |
 |                          |   reason to disable logging is to keep the binary  |
-|                          |   size down.                                       |
+|                          |   size low where that matters.                     |
+|                          | * ``on`` - default. logging alerts available,      |
+|                          |   still need to be enabled by the alert mask.      |
 +--------------------------+----------------------------------------------------+
-| ``dht``                  | * ``on`` - build with support for tracker less     |
-|                          |   torrents and DHT support.                        |
-|                          | * ``logging`` - build with DHT support and verbose |
-|                          |   logging of the DHT protocol traffic.             |
+| ``dht``                  | * ``on`` - build with DHT support                  |
 |                          | * ``off`` - build without DHT support.             |
 +--------------------------+----------------------------------------------------+
 | ``asserts``              | * ``auto`` - asserts are on if in debug mode       |
@@ -280,11 +279,24 @@ Build features:
 |                          | * ``off`` - mutable torrents are not supported.    |
 +--------------------------+----------------------------------------------------+
 | ``crypto``               | * ``built-in`` - (default) uses built-in SHA-1     |
-|                          |   implementation.                                  |
-|                          | * ``openssl`` - links against openssl and          |
-|                          |   libcrypto to use for SHA-1 hashing.              |
-|                          | * ``gcrypt`` - links against libgcrypt to use for  |
-|                          |   SHA-1 hashing.                                   |
+|                          |   implementation. In macOS/iOS it uses             |
+|                          |   CommonCrypto SHA-1 implementation.               |
+|                          | * ``openssl`` - links against openssl to enable    |
+|                          |   torrents over ssl feature.                       |
+|                          |   the option crypto=libcrypto.                     |
+|                          | * ``libcrypto`` - links against libcrypto          |
+|                          |   to use the SHA-1 implementation.                 |
+|                          | * ``gcrypt`` - links against libgcrypt             |
+|                          |   to use the SHA-1 implementation.                 |
++--------------------------+----------------------------------------------------+
+| ``openssl-version``      | This can be used on windows to link against the    |
+|                          | special OpenSSL library names used on windows      |
+|                          | prior to OpenSSL 1.1.                              |
+|                          |                                                    |
+|                          | * ``1.1`` - link against the normal openssl        |
+|                          |   library name. (default)                          |
+|                          | * ``pre1.1`` - link against the old windows names  |
+|                          |   (i.e. ``ssleay32`` and ``libeay32``.             |
 +--------------------------+----------------------------------------------------+
 | ``allocator``            | * ``pool`` - default, uses pool allocators for     |
 |                          |   send buffers.                                    |
@@ -311,14 +323,6 @@ Build features:
 |                          |   without invariant checks and with optimization.  |
 |                          | * ``profile`` - builds libtorrent with profile     |
 |                          |   information.                                     |
-+--------------------------+----------------------------------------------------+
-| ``character-set``        | This setting will only have an affect on windows.  |
-|                          | Other platforms are expected to support UTF-8.     |
-|                          |                                                    |
-|                          | * ``unicode`` - The unicode version of the win32   |
-|                          |   API is used. This is default.                    |
-|                          | * ``ansi`` - The ansi version of the win32 API is  |
-|                          |   used.                                            |
 +--------------------------+----------------------------------------------------+
 | ``invariant-checks``     | This setting only affects debug builds (where      |
 |                          | ``NDEBUG`` is not defined). It defaults to ``on``. |
@@ -382,12 +386,12 @@ building with autotools
 First of all, you need to install ``automake`` and ``autoconf``. Many
 unix/linux systems comes with these preinstalled.
 
-The prerequisites for building libtorrent are boost.thread, boost.date_time
-and boost.filesystem. Those are the *compiled* boost libraries needed. The
-headers-only libraries needed include (but is not necessarily limited to)
-boost.bind, boost.ref, boost.multi_index, boost.optional, boost.lexical_cast,
-boost.integer, boost.iterator, boost.tuple, boost.array, boost.function,
-boost.smart_ptr, boost.preprocessor, boost.static_assert.
+The prerequisites for building libtorrent are boost.system, boost.chrono and
+boost.random. Those are the *compiled* boost libraries needed. The headers-only
+libraries needed include (but is not necessarily limited to) boost.bind,
+boost.ref, boost.multi_index, boost.optional, boost.lexical_cast, boost.integer,
+boost.iterator, boost.tuple, boost.array, boost.function, boost.smart_ptr,
+boost.preprocessor, boost.static_assert.
 
 If you want to build the ``client_test`` example, you'll also need boost.regex
 and boost.program_options.
@@ -446,12 +450,14 @@ the suffix ``mt``.
 You know that the boost libraries were found if you see the following output
 from the configure script::
 
-  checking whether the Boost::DateTime library is available... yes
-  checking for main in -lboost_date_time... yes
-  checking whether the Boost::Filesystem library is available... yes
-  checking for main in -lboost_filesystem... yes
-  checking whether the Boost::Thread library is available... yes
-  checking for main in -lboost_thread... yes
+	Checking for boost libraries:
+	checking for boostlib >= 1.53... yes
+	checking whether the Boost::System library is available... yes
+	checking for exit in -lboost_system... yes
+	checking whether the Boost::Chrono library is available... yes
+	checking for exit in -lboost_chrono-mt... yes
+	checking whether the Boost::Random library is available... yes
+	checking for exit in -lboost_random-mt... yes
 
 Another possible source of problems may be if the path to your libtorrent
 directory contains spaces. Make sure you either rename the directories with
@@ -526,21 +532,6 @@ defines you can use to control the build.
 |                                        | peer_log_alert. With this build flag, you       |
 |                                        | cannot enable those alerts.                     |
 +----------------------------------------+-------------------------------------------------+
-| ``TORRENT_STORAGE_DEBUG``              | This will enable extra expensive invariant      |
-|                                        | checks in the storage, including logging of     |
-|                                        | piece sorting.                                  |
-+----------------------------------------+-------------------------------------------------+
-| ``TORRENT_DISK_STATS``                 | This will create a log of all disk activity     |
-|                                        | which later can parsed and graphed using        |
-|                                        | ``parse_disk_log.py``.                          |
-+----------------------------------------+-------------------------------------------------+
-| ``UNICODE``                            | If building on windows this will make sure the  |
-|                                        | UTF-8 strings in pathnames are converted into   |
-|                                        | UTF-16 before they are passed to the file       |
-|                                        | operations.                                     |
-+----------------------------------------+-------------------------------------------------+
-| ``TORRENT_DISABLE_POOL_ALLOCATOR``     | Disables use of ``boost::pool<>``.              |
-+----------------------------------------+-------------------------------------------------+
 | ``TORRENT_DISABLE_MUTABLE_TORRENTS``   | Disables mutable torrent support (`BEP 38`_)    |
 +----------------------------------------+-------------------------------------------------+
 | ``TORRENT_LINKING_SHARED``             | If this is defined when including the           |
@@ -569,26 +560,18 @@ defines you can use to control the build.
 |                                        | encrypted supported by clients such as          |
 |                                        | uTorrent, Azureus and KTorrent.                 |
 |                                        | If this is not defined, either                  |
-|                                        | ``TORRENT_USE_OPENSSL`` or                      |
-|                                        | ``TORRENT_USE_GCRYPT`` must be defined.         |
+|                                        | ``TORRENT_USE_LIBCRYPTO`` or                    |
+|                                        | ``TORRENT_USE_LIBGCRYPT`` must be defined.      |
 +----------------------------------------+-------------------------------------------------+
 | ``TORRENT_DISABLE_EXTENSIONS``         | When defined, libtorrent plugin support is      |
 |                                        | disabled along with support for the extension   |
 |                                        | handskake (BEP 10).                             |
 +----------------------------------------+-------------------------------------------------+
-| ``_UNICODE``                           | On windows, this will cause the file IO         |
-|                                        | use wide character API, to properly support     |
-|                                        | non-ansi characters.                            |
-+----------------------------------------+-------------------------------------------------+
-| ``TORRENT_DISABLE_RESOLVE_COUNTRIES``  | Defining this will disable the ability to       |
-|                                        | resolve countries of origin for peer IPs.       |
-+----------------------------------------+-------------------------------------------------+
-| ``TORRENT_DISABLE_INVARIANT_CHECKS``   | This will disable internal invariant checks in  |
-|                                        | libtorrent. The invariant checks can sometime   |
+| ``TORRENT_USE_INVARIANT_CHECKS``       | If defined to non-zero, this will enable        |
+|                                        | internal invariant checks in libtorrent.        |
+|                                        | The invariant checks can sometimes              |
 |                                        | be quite expensive, they typically don't scale  |
-|                                        | very well. This option can be used to still     |
-|                                        | build in debug mode, with asserts enabled, but  |
-|                                        | make the resulting executable faster.           |
+|                                        | very well.                                      |
 +----------------------------------------+-------------------------------------------------+
 | ``TORRENT_EXPENSIVE_INVARIANT_CHECKS`` | This will enable extra expensive invariant      |
 |                                        | checks. Useful for finding particular bugs      |

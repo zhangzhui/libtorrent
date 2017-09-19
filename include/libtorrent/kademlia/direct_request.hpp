@@ -30,72 +30,64 @@ POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#ifndef LIBTORRENT_DIRECT_REQUEST_HPP
-#define LIBTORRENT_DIRECT_REQUEST_HPP
+#ifndef TORRENT_DIRECT_REQUEST_HPP
+#define TORRENT_DIRECT_REQUEST_HPP
 
-#include <boost/function/function1.hpp>
 #include <libtorrent/kademlia/msg.hpp>
 #include <libtorrent/kademlia/traversal_algorithm.hpp>
 
-namespace libtorrent { namespace dht
-{
+namespace libtorrent { namespace dht {
 
 struct direct_traversal : traversal_algorithm
 {
+	typedef std::function<void(dht::msg const&)> message_callback;
+
 	direct_traversal(node& node
-		, node_id target
-		, boost::function<void(msg const&)> cb)
+		, node_id const& target
+		, message_callback cb)
 		: traversal_algorithm(node, target)
 		, m_cb(cb)
 	{}
 
-	virtual char const* name() const { return "direct_traversal"; }
+	char const* name() const override { return "direct_traversal"; }
 
 	void invoke_cb(msg const& m)
 	{
-		if (!m_cb.empty())
+		if (m_cb)
 		{
 			m_cb(m);
-			m_cb.clear();
+			m_cb = nullptr;
 			done();
 		}
 	}
 
 protected:
-	boost::function<void(msg const&)> m_cb;
+	message_callback m_cb;
 };
 
 struct direct_observer : observer
 {
-	direct_observer(boost::intrusive_ptr<traversal_algorithm> const& algo
+	direct_observer(std::shared_ptr<traversal_algorithm> const& algo
 		, udp::endpoint const& ep, node_id const& id)
 		: observer(algo, ep, id)
 	{}
 
-	virtual void reply(msg const& m)
+	void reply(msg const& m) override
 	{
 		flags |= flag_done;
 		static_cast<direct_traversal*>(algorithm())->invoke_cb(m);
 	}
 
-	virtual void timeout()
+	void timeout() override
 	{
 		if (flags & flag_done) return;
 		flags |= flag_done;
 		bdecode_node e;
-		if (flags & flag_ipv6_address)
-		{
-			msg m(e, target_ep());
-			static_cast<direct_traversal*>(algorithm())->invoke_cb(m);
-		}
-		else
-		{
-			msg m(e, target_ep());
-			static_cast<direct_traversal*>(algorithm())->invoke_cb(m);
-		}
+		msg m(e, target_ep());
+		static_cast<direct_traversal*>(algorithm())->invoke_cb(m);
 	}
 };
 
-} } // namespace libtorrent::dht
+}} // namespace libtorrent::dht
 
-#endif
+#endif //TORRENT_DIRECT_REQUEST_HPP

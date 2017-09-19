@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2015, Arvid Norberg
+Copyright (c) 2007-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -33,20 +33,16 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef TORRENT_SOCKS5_STREAM_HPP_INCLUDED
 #define TORRENT_SOCKS5_STREAM_HPP_INCLUDED
 
-#include "libtorrent/aux_/disable_warnings_push.hpp"
-
-#include <boost/bind.hpp>
-#include <boost/shared_ptr.hpp>
-
-#include "libtorrent/aux_/disable_warnings_pop.hpp"
+#include <functional>
 
 #include "libtorrent/proxy_base.hpp"
+#include "libtorrent/broadcast_socket.hpp" // for is_ip_address
 #include "libtorrent/assert.hpp"
-#if defined TORRENT_ASIO_DEBUGGING
 #include "libtorrent/debug.hpp"
-#endif
+#include "libtorrent/string_util.hpp" // for to_string
 
 namespace libtorrent {
+
 namespace socks_error {
 
 	// SOCKS5 error values. If an error_code has the
@@ -74,7 +70,13 @@ namespace socks_error {
 } // namespace socks_error
 
 // returns the error_category for SOCKS5 errors
-TORRENT_EXPORT boost::system::error_category& get_socks_category();
+TORRENT_EXPORT boost::system::error_category& socks_category();
+
+#ifndef TORRENT_NO_DEPRECATE
+TORRENT_DEPRECATED
+inline boost::system::error_category& get_socks_category()
+{ return socks_category(); }
+#endif
 
 class socks5_stream : public proxy_base
 {
@@ -83,7 +85,6 @@ public:
 	// commands
 	enum {
 		socks5_connect = 1,
-		socks5_bind = 2,
 		socks5_udp_associate = 3
 	};
 
@@ -91,14 +92,13 @@ public:
 		: proxy_base(io_service)
 		, m_version(5)
 		, m_command(socks5_connect)
-		, m_listen(0)
 	{}
 
 	void set_version(int v) { m_version = v; }
 
 	void set_command(int c)
 	{
-		TORRENT_ASSERT(c >= socks5_connect && c <=socks5_udp_associate);
+		TORRENT_ASSERT(c == socks5_connect || c == socks5_udp_associate);
 		m_command = c;
 	}
 
@@ -111,6 +111,10 @@ public:
 
 	void set_dst_name(std::string const& host)
 	{
+		// if this assert trips, set_dst_name() is called wth an IP address rather
+		// than a hostname. Instead, resolve the IP into an address and pass it to
+		// async_connect instead
+		TORRENT_ASSERT(!is_ip_address(host.c_str()));
 		m_dst_name = host;
 		if (m_dst_name.size() > 255)
 			m_dst_name.resize(255);
@@ -118,7 +122,6 @@ public:
 
 	void close(error_code& ec)
 	{
-		m_hostname.clear();
 		m_dst_name.clear();
 		proxy_base::close(ec);
 	}
@@ -126,7 +129,6 @@ public:
 #ifndef BOOST_NO_EXCEPTIONS
 	void close()
 	{
-		m_hostname.clear();
 		m_dst_name.clear();
 		proxy_base::close();
 	}
@@ -138,8 +140,7 @@ public:
 	{
 		// make sure we don't try to connect to INADDR_ANY. binding is fine,
 		// and using a hostname is fine on SOCKS version 5.
-		TORRENT_ASSERT(m_command == socks5_bind
-			|| endpoint.address() != address()
+		TORRENT_ASSERT(endpoint.address() != address()
 			|| (!m_dst_name.empty() && m_version == 5));
 
 		m_remote_endpoint = endpoint;
@@ -153,31 +154,27 @@ public:
 		//   3.3 send username+password
 		// 4. send SOCKS command message
 
-		// to avoid unnecessary copying of the handler,
-		// store it in a shaed_ptr
-		boost::shared_ptr<handler_type> h(new handler_type(handler));
-
-#if defined TORRENT_ASIO_DEBUGGING
-		add_outstanding_async("socks5_stream::name_lookup");
-#endif
-		tcp::resolver::query q(m_hostname, to_string(m_port).elems);
-		m_resolver.async_resolve(q, boost::bind(
-			&socks5_stream::name_lookup, this, _1, _2, h));
+		using std::placeholders::_1;
+		using std::placeholders::_2;
+		ADD_OUTSTANDING_ASYNC("socks5_stream::name_lookup");
+		tcp::resolver::query q(m_hostname, to_string(m_port).data());
+		m_resolver.async_resolve(q, std::bind(
+			&socks5_stream::name_lookup, this, _1, _2, handler_type(std::move(handler))));
 	}
 
 private:
 
 	void name_lookup(error_code const& e, tcp::resolver::iterator i
-		, boost::shared_ptr<handler_type> h);
-	void connected(error_code const& e, boost::shared_ptr<handler_type> h);
-	void handshake1(error_code const& e, boost::shared_ptr<handler_type> h);
-	void handshake2(error_code const& e, boost::shared_ptr<handler_type> h);
-	void handshake3(error_code const& e, boost::shared_ptr<handler_type> h);
-	void handshake4(error_code const& e, boost::shared_ptr<handler_type> h);
-	void socks_connect(boost::shared_ptr<handler_type> h);
-	void connect1(error_code const& e, boost::shared_ptr<handler_type> h);
-	void connect2(error_code const& e, boost::shared_ptr<handler_type> h);
-	void connect3(error_code const& e, boost::shared_ptr<handler_type> h);
+		, handler_type& h);
+	void connected(error_code const& e, handler_type& h);
+	void handshake1(error_code const& e, handler_type& h);
+	void handshake2(error_code const& e, handler_type& h);
+	void handshake3(error_code const& e, handler_type& h);
+	void handshake4(error_code const& e, handler_type& h);
+	void socks_connect(handler_type h);
+	void connect1(error_code const& e, handler_type& h);
+	void connect2(error_code const& e, handler_type& h);
+	void connect3(error_code const& e, handler_type& h);
 
 	// send and receive buffer
 	std::vector<char> m_buffer;
@@ -185,15 +182,11 @@ private:
 	std::string m_user;
 	std::string m_password;
 	std::string m_dst_name;
+
 	int m_version;
 
-	// the socks command to send for this connection (connect, bind,
-	// udp associate)
+	// the socks command to send for this connection (connect or udp associate)
 	int m_command;
-
-	// set to one when we're waiting for the
-	// second message to accept an incoming connection
-	int m_listen;
 };
 
 }
@@ -203,9 +196,6 @@ namespace boost { namespace system {
 	template<> struct is_error_code_enum<libtorrent::socks_error::socks_error_code>
 	{ static const bool value = true; };
 
-	template<> struct is_error_condition_enum<libtorrent::socks_error::socks_error_code>
-	{ static const bool value = true; };
 } }
 
 #endif
-

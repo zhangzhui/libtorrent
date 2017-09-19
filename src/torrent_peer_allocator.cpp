@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2015, Arvid Norberg
+Copyright (c) 2003-2016, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -35,8 +35,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/assert.hpp"
 #include "libtorrent/torrent_peer_allocator.hpp"
 
-namespace libtorrent
-{
+namespace libtorrent {
 
 	torrent_peer_allocator::torrent_peer_allocator()
 		: m_ipv4_peer_pool(sizeof(libtorrent::ipv4_peer), 500)
@@ -55,12 +54,12 @@ namespace libtorrent
 
 	torrent_peer* torrent_peer_allocator::allocate_peer_entry(int type)
 	{
-		torrent_peer* p = NULL;
+		torrent_peer* p = nullptr;
 		switch(type)
 		{
 			case torrent_peer_allocator_interface::ipv4_peer_type:
 				p = static_cast<torrent_peer*>(m_ipv4_peer_pool.malloc());
-				if (p == NULL) return NULL;
+				if (p == nullptr) return nullptr;
 				m_ipv4_peer_pool.set_next_size(500);
 				m_total_bytes += sizeof(libtorrent::ipv4_peer);
 				m_live_bytes += sizeof(libtorrent::ipv4_peer);
@@ -70,7 +69,7 @@ namespace libtorrent
 #if TORRENT_USE_IPV6
 			case torrent_peer_allocator_interface::ipv6_peer_type:
 				p = static_cast<torrent_peer*>(m_ipv6_peer_pool.malloc());
-				if (p == NULL) return NULL;
+				if (p == nullptr) return nullptr;
 				m_ipv6_peer_pool.set_next_size(500);
 				m_total_bytes += sizeof(libtorrent::ipv6_peer);
 				m_live_bytes += sizeof(libtorrent::ipv6_peer);
@@ -81,7 +80,7 @@ namespace libtorrent
 #if TORRENT_USE_I2P
 			case torrent_peer_allocator_interface::i2p_peer_type:
 				p = static_cast<torrent_peer*>(m_i2p_peer_pool.malloc());
-				if (p == NULL) return NULL;
+				if (p == nullptr) return nullptr;
 				m_i2p_peer_pool.set_next_size(500);
 				m_total_bytes += sizeof(libtorrent::i2p_peer);
 				m_live_bytes += sizeof(libtorrent::i2p_peer);
@@ -101,8 +100,8 @@ namespace libtorrent
 			TORRENT_ASSERT(m_ipv6_peer_pool.is_from(static_cast<libtorrent::ipv6_peer*>(p)));
 			static_cast<libtorrent::ipv6_peer*>(p)->~ipv6_peer();
 			m_ipv6_peer_pool.free(p);
-			TORRENT_ASSERT(m_live_bytes >= sizeof(ipv6_peer));
-			m_live_bytes -= sizeof(ipv6_peer);
+			TORRENT_ASSERT(m_live_bytes >= int(sizeof(ipv6_peer)));
+			m_live_bytes -= int(sizeof(ipv6_peer));
 			TORRENT_ASSERT(m_live_allocations > 0);
 			--m_live_allocations;
 			return;
@@ -114,8 +113,8 @@ namespace libtorrent
 			TORRENT_ASSERT(m_i2p_peer_pool.is_from(static_cast<libtorrent::i2p_peer*>(p)));
 			static_cast<libtorrent::i2p_peer*>(p)->~i2p_peer();
 			m_i2p_peer_pool.free(p);
-			TORRENT_ASSERT(m_live_bytes >= sizeof(i2p_peer));
-			m_live_bytes -= sizeof(i2p_peer);
+			TORRENT_ASSERT(m_live_bytes >= int(sizeof(i2p_peer)));
+			m_live_bytes -= int(sizeof(i2p_peer));
 			TORRENT_ASSERT(m_live_allocations > 0);
 			--m_live_allocations;
 			return;
@@ -124,11 +123,10 @@ namespace libtorrent
 		TORRENT_ASSERT(m_ipv4_peer_pool.is_from(static_cast<libtorrent::ipv4_peer*>(p)));
 		static_cast<libtorrent::ipv4_peer*>(p)->~ipv4_peer();
 		m_ipv4_peer_pool.free(p);
-		TORRENT_ASSERT(m_live_bytes >= sizeof(ipv4_peer));
-		m_live_bytes -= sizeof(ipv4_peer);
+		TORRENT_ASSERT(m_live_bytes >= int(sizeof(ipv4_peer)));
+		m_live_bytes -= int(sizeof(ipv4_peer));
 		TORRENT_ASSERT(m_live_allocations > 0);
 		--m_live_allocations;
 	}
 
 }
-
