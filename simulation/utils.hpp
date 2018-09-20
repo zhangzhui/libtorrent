@@ -36,6 +36,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <functional>
 #include "libtorrent/address.hpp"
 #include "libtorrent/socket.hpp"
+#include "simulator/simulator.hpp"
 
 namespace libtorrent
 {
@@ -62,7 +63,7 @@ void set_proxy(lt::session& ses, int proxy_type, int flags = 0
 
 void print_alerts(lt::session& ses
 	, std::function<void(lt::session&, lt::alert const*)> on_alert
-		= [](lt::session&, lt::alert const*) {});
+		= [](lt::session&, lt::alert const*) {}, int idx = 0);
 
 #endif
 

@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2006-2016, Arvid Norberg, Thomas Yuan
+Copyright (c) 2006-2018, Arvid Norberg, Thomas Yuan
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -47,7 +47,7 @@ class node;
 
 struct put_data: traversal_algorithm
 {
-	typedef std::function<void(item const&, int)> put_callback;
+	using put_callback = std::function<void(item const&, int)>;
 
 	put_data(node& node, put_callback const& callback);
 
@@ -71,10 +71,10 @@ protected:
 struct put_data_observer : traversal_observer
 {
 	put_data_observer(
-		std::shared_ptr<traversal_algorithm> const& algorithm
-		, udp::endpoint const& ep, node_id const& id, std::string const& token)
-		: traversal_observer(algorithm, ep, id)
-		, m_token(token)
+		std::shared_ptr<traversal_algorithm> algorithm
+		, udp::endpoint const& ep, node_id const& id, std::string token)
+		: traversal_observer(std::move(algorithm), ep, id)
+		, m_token(std::move(token))
 	{
 	}
 

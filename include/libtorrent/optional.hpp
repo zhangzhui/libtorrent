@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2016, Arvid Norberg
+Copyright (c) 2017-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -30,28 +30,22 @@ POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#ifndef TORRENT_INSTANTIATE_CONNECTION
-#define TORRENT_INSTANTIATE_CONNECTION
 
-#include "libtorrent/socket_type.hpp"
+#ifndef TORRENT_OPTIONAL_HPP_INCLUDED
+#define TORRENT_OPTIONAL_HPP_INCLUDED
+
+#include "libtorrent/aux_/disable_warnings_push.hpp"
+#include <boost/optional.hpp>
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
 
 namespace libtorrent {
 
-	namespace aux {
-
-		struct proxy_settings;
+	template <typename T, typename U>
+	T value_or(boost::optional<T> opt, U def)
+	{
+		return opt ? *opt : T(def);
 	}
-
-	struct utp_socket_manager;
-	struct socket_type;
-
-	// instantiate a socket_type (s) according to the specified criteria
-	TORRENT_EXTRA_EXPORT bool instantiate_connection(io_service& ios
-		, aux::proxy_settings const& ps, socket_type& s
-		, void* ssl_context
-		, utp_socket_manager* sm
-		, bool peer_connection
-		, bool tracker_connection);
 }
 
 #endif
+

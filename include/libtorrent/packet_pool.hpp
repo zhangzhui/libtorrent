@@ -130,6 +130,7 @@ namespace libtorrent {
 		}
 
 		packet_slab(const packet_slab&) = delete;
+		packet_slab(packet_slab&&) = default;
 
 		void try_push_back(packet_ptr &p)
 		{
@@ -160,11 +161,21 @@ namespace libtorrent {
 	// can handle common cases of packet size by 3 pools
 	struct TORRENT_EXTRA_EXPORT packet_pool : private single_threaded
 	{
+		// there's a bug in GCC where allocating these in
+		// member initializer expressions won't propagate exceptions.
+		// https://gcc.gnu.org/bugzilla/show_bug.cgi?id=80683
+		packet_pool()
+			: m_syn_slab(TORRENT_UTP_HEADER)
+			, m_mtu_floor_slab(mtu_floor_size)
+			, m_mtu_ceiling_slab(mtu_ceiling_size)
+		{}
+		packet_pool(packet_pool&&) = default;
+
 		packet_ptr acquire(int const allocate)
 		{
 			TORRENT_ASSERT(is_single_thread());
 			TORRENT_ASSERT(allocate >= 0);
-			TORRENT_ASSERT(allocate <= std::numeric_limits<std::uint16_t>::max());
+			TORRENT_ASSERT(allocate <= (std::numeric_limits<std::uint16_t>::max)());
 
 			return alloc(allocate);
 		}
@@ -173,7 +184,7 @@ namespace libtorrent {
 		{
 			TORRENT_ASSERT(is_single_thread());
 
-			if (p.get() == nullptr) return;
+			if (!p) return;
 
 			int const allocated = p->allocated;
 
@@ -200,11 +211,11 @@ namespace libtorrent {
 			else if (allocate <= m_mtu_ceiling_slab.allocate_size) { return m_mtu_ceiling_slab.alloc(); }
 			return create_packet(allocate);
 		}
-		static int const mtu_floor_size = TORRENT_INET_MIN_MTU - TORRENT_IPV4_HEADER - TORRENT_UDP_HEADER;
-		static int const mtu_ceiling_size = TORRENT_ETHERNET_MTU - TORRENT_IPV4_HEADER - TORRENT_UDP_HEADER;
-		packet_slab m_syn_slab{ TORRENT_UTP_HEADER };
-		packet_slab m_mtu_floor_slab{ mtu_floor_size };
-		packet_slab m_mtu_ceiling_slab{ mtu_ceiling_size };
+		constexpr static int mtu_floor_size = TORRENT_INET_MIN_MTU - TORRENT_IPV4_HEADER - TORRENT_UDP_HEADER;
+		constexpr static int mtu_ceiling_size = TORRENT_ETHERNET_MTU - TORRENT_IPV4_HEADER - TORRENT_UDP_HEADER;
+		packet_slab m_syn_slab;
+		packet_slab m_mtu_floor_slab;
+		packet_slab m_mtu_ceiling_slab;
 	};
 }
 

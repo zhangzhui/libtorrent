@@ -89,6 +89,28 @@ AS_ECHO "Initializing Libtool:"
 LT_PREREQ([2.2.6])
 LT_INIT
 
+AS_IF([test "$SYS" = linux],[
+    AC_PREPROC_IFELSE([AC_LANG_PROGRAM(
+        [[#ifndef __ANDROID__
+         # error Not Android
+         #endif
+        ]],[[;]])
+    ],[
+      HAVE_ANDROID="1"
+      AC_MSG_RESULT([yes])
+    ],[
+      AC_MSG_RESULT([no])
+    ])
+])
+AM_CONDITIONAL(HAVE_ANDROID, test "${HAVE_ANDROID}" = "1")
+
+HAVE_WINDOWS=0
+case "${host_os}" in
+    *mingw32* | *cygwin*)
+        HAVE_WINDOWS=1
+        ;;
+esac
+AM_CONDITIONAL(HAVE_WINDOWS, test "${HAVE_WINDOWS}" = "1")
 
 ###############################################################################
 # Checking for needed base libraries
@@ -447,7 +469,7 @@ AS_CASE(["$ARG_WITH_LIBICONV"],
       AC_MSG_RESULT([yes])
       AM_ICONV()
       AS_IF([test "x$am_cv_func_iconv" = "xyes"], [
-           ICONV_LIBS=$LTLIBICONV
+           ICONV_LIBS=$LIBICONV
            AC_SUBST([ICONV_LIBS])
            LIBS="$ICONV_LIBS $LIBS"
       ], [
@@ -530,7 +552,6 @@ AC_CONFIG_FILES(
   [bindings/python/compile_flags]
   [bindings/python/compile_cmd]
   [libtorrent-rasterbar.pc]
-  [libtorrent-rasterbar-cmake.pc]
 )
 
 AC_OUTPUT

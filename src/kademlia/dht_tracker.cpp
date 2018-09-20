@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2006-2016, Arvid Norberg
+Copyright (c) 2006-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -57,7 +57,7 @@ namespace libtorrent { namespace dht {
 	namespace {
 
 	// generate a new write token key every 5 minutes
-	time_duration const key_refresh
+	auto const key_refresh
 		= duration_cast<time_duration>(minutes(5));
 
 	void add_dht_counters(node const& dht, counters& c)
@@ -118,14 +118,12 @@ namespace libtorrent { namespace dht {
 	{
 		if (s.is_ssl()) return;
 
-		address local_address = s.get_local_endpoint().address();
-#if TORRENT_USE_IPV6
+		address const local_address = s.get_local_endpoint().address();
 		// don't try to start dht nodes on non-global IPv6 addresses
 		// with IPv4 the interface might be behind NAT so we can't skip them based on the scope of the local address
 		// and we might not have the external address yet
 		if (local_address.is_v6() && is_local(local_address))
 			return;
-#endif
 		auto stored_nid = std::find_if(m_state.nids.begin(), m_state.nids.end()
 			, [&](node_ids_t::value_type const& nid) { return nid.first == local_address; });
 		node_id const nid = stored_nid != m_state.nids.end() ? stored_nid->second : node_id();
@@ -160,12 +158,10 @@ namespace libtorrent { namespace dht {
 	{
 		if (s.is_ssl()) return;
 
-#if TORRENT_USE_IPV6
 		address local_address = s.get_local_endpoint().address();
 		// since we don't start nodes on local IPv6 interfaces we don't need to remove them either
 		if (local_address.is_v6() && is_local(local_address))
 			return;
-#endif
 		TORRENT_ASSERT(m_nodes.count(s) == 1);
 		m_nodes.erase(s);
 	}
@@ -181,11 +177,9 @@ namespace libtorrent { namespace dht {
 			n.second.connection_timer.expires_from_now(seconds(1), ec);
 			n.second.connection_timer.async_wait(
 				std::bind(&dht_tracker::connection_timeout, self(), n.first, _1));
-#if TORRENT_USE_IPV6
-			if (n.first.get_local_endpoint().protocol() == tcp::v6())
+			if (is_v6(n.first.get_local_endpoint()))
 				n.second.dht.bootstrap(concat(m_state.nodes6, m_state.nodes), f);
 			else
-#endif
 				n.second.dht.bootstrap(concat(m_state.nodes, m_state.nodes6), f);
 		}
 
@@ -206,7 +200,7 @@ namespace libtorrent { namespace dht {
 		m_host_resolver.cancel();
 	}
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	void dht_tracker::dht_status(session_status& s)
 	{
 		s.dht_torrents += int(m_storage.num_torrents());
@@ -320,12 +314,12 @@ namespace libtorrent { namespace dht {
 	void dht_tracker::get_peers(sha1_hash const& ih
 		, std::function<void(std::vector<tcp::endpoint> const&)> f)
 	{
-		std::function<void(std::vector<std::pair<node_entry, std::string>> const&)> empty;
 		for (auto& n : m_nodes)
-			n.second.dht.get_peers(ih, f, empty, false);
+			n.second.dht.get_peers(ih, f, {}, {});
 	}
 
-	void dht_tracker::announce(sha1_hash const& ih, int listen_port, int flags
+	void dht_tracker::announce(sha1_hash const& ih, int listen_port
+		, announce_flags_t const flags
 		, std::function<void(std::vector<tcp::endpoint> const&)> f)
 	{
 		for (auto& n : m_nodes)
@@ -360,7 +354,8 @@ namespace libtorrent { namespace dht {
 
 	// these functions provide a slightly higher level
 	// interface to the get/put functionality in the DHT
-	void get_immutable_item_callback(item const& it, std::shared_ptr<get_immutable_item_ctx> ctx
+	void get_immutable_item_callback(item const& it
+		, std::shared_ptr<get_immutable_item_ctx> ctx
 		, std::function<void(item const&)> f)
 	{
 		// the reason to wrap here is to control the return value
@@ -498,8 +493,8 @@ namespace libtorrent { namespace dht {
 		}
 	}
 
-	bool dht_tracker::incoming_packet(udp::endpoint const& ep
-		, span<char const> const buf)
+	bool dht_tracker::incoming_packet(aux::listen_socket_handle const& s
+		, udp::endpoint const& ep, span<char const> const buf)
 	{
 		int const buf_size = int(buf.size());
 		if (buf_size <= 20
@@ -509,10 +504,10 @@ namespace libtorrent { namespace dht {
 		m_counters.inc_stats_counter(counters::dht_bytes_in, buf_size);
 		// account for IP and UDP overhead
 		m_counters.inc_stats_counter(counters::recv_ip_overhead_bytes
-			, ep.address().is_v6() ? 48 : 28);
+			, is_v6(ep) ? 48 : 28);
 		m_counters.inc_stats_counter(counters::dht_messages_in);
 
-		if (m_settings.ignore_dark_internet && ep.address().is_v4())
+		if (m_settings.ignore_dark_internet && is_v4(ep))
 		{
 			address_v4::bytes_type b = ep.address().to_v4().to_bytes();
 
@@ -564,7 +559,7 @@ namespace libtorrent { namespace dht {
 
 		libtorrent::dht::msg const m(m_msg, ep);
 		for (auto& n : m_nodes)
-			n.second.dht.incoming(m);
+			n.second.dht.incoming(s, m);
 		return true;
 	}
 
@@ -575,7 +570,7 @@ namespace libtorrent { namespace dht {
 		, dht_observer* observer, counters& cnt
 		, get_foreign_node_t get_foreign_node
 		, dht_storage_interface& storage)
-		: dht(s, sock, settings, nid, observer, cnt, get_foreign_node, storage)
+		: dht(s, sock, settings, nid, observer, cnt, std::move(get_foreign_node), storage)
 		, connection_timer(ios)
 	{}
 
@@ -616,7 +611,7 @@ namespace libtorrent { namespace dht {
 		{
 			// use the local rather than external address because if the user is behind NAT
 			// we won't know the external IP on startup
-			ret.nids.push_back(std::make_pair(n.first.get_local_endpoint().address(), n.second.dht.nid()));
+			ret.nids.emplace_back(n.first.get_local_endpoint().address(), n.second.dht.nid());
 			auto nodes = save_nodes(n.second.dht);
 			ret.nodes.insert(ret.nodes.end(), nodes.begin(), nodes.end());
 		}
@@ -700,7 +695,7 @@ namespace libtorrent { namespace dht {
 		m_counters.inc_stats_counter(counters::dht_bytes_out, int(m_send_buf.size()));
 		// account for IP and UDP overhead
 		m_counters.inc_stats_counter(counters::sent_ip_overhead_bytes
-			, addr.address().is_v6() ? 48 : 28);
+			, is_v6(addr) ? 48 : 28);
 		m_counters.inc_stats_counter(counters::dht_messages_out);
 #ifndef TORRENT_DISABLE_LOGGING
 		m_log->log_packet(dht_logger::outgoing_message, m_send_buf, addr);

@@ -114,27 +114,31 @@ void set_proxy(lt::session& ses, int proxy_type, int flags, bool proxy_peer_conn
 	p.set_bool(settings_pack::proxy_hostnames, true);
 	p.set_bool(settings_pack::proxy_peer_connections, proxy_peer_connections);
 	p.set_bool(settings_pack::proxy_tracker_connections, true);
-	p.set_bool(settings_pack::force_proxy, true);
 
 	ses.apply_settings(p);
 }
 
 void print_alerts(lt::session& ses
-	, std::function<void(lt::session&, lt::alert const*)> on_alert)
+	, std::function<void(lt::session&, lt::alert const*)> on_alert
+	, int const idx)
 {
 	lt::time_point start_time = lt::clock_type::now();
 
-	ses.set_alert_notify([&ses,start_time,on_alert] {
-		ses.get_io_service().post([&ses,start_time,on_alert] {
+	static std::vector<lt::alert*> alerts;
+
+	ses.set_alert_notify([&ses,start_time,on_alert,idx] {
+		ses.get_io_service().post([&ses,start_time,on_alert,idx] {
 
 		try {
-			std::vector<lt::alert*> alerts;
+			alerts.clear();
 			ses.pop_alerts(&alerts);
 
 			for (lt::alert const* a : alerts)
 			{
-				std::printf("%-3d [0] %s\n", int(lt::duration_cast<lt::seconds>(a->timestamp()
-					- start_time).count()), a->message().c_str());
+				std::printf("%-3d [%d] %s\n"
+					, int(lt::duration_cast<lt::seconds>(a->timestamp() - start_time).count())
+					, idx
+					, a->message().c_str());
 				// call the user handler
 				on_alert(ses, a);
 			}

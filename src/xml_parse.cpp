@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2016, Arvid Norberg
+Copyright (c) 2007-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,20 +34,19 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/xml_parse.hpp"
 #include "libtorrent/string_util.hpp"
-#include "libtorrent/string_view.hpp"
 
 namespace libtorrent {
 
-	TORRENT_EXTRA_EXPORT void xml_parse(string_view input
+	void xml_parse(string_view input
 		, std::function<void(int, string_view, string_view)> callback)
 	{
 		char const* p = input.data();
 		char const* end = input.data() + input.size();
-		for(;p != end; ++p)
+		for (;p != end; ++p)
 		{
 			char const* start = p;
 			// look for tag start
-			for(; p != end && *p != '<'; ++p);
+			for (; p != end && *p != '<'; ++p);
 
 			if (p != start)
 			{
@@ -114,7 +113,6 @@ namespace libtorrent {
 			{
 				start += 3;
 				callback(xml_comment, {start, std::size_t(tag_name_end - start - 2)}, {});
-				tag_end = p - 2;
 				continue;
 			}
 			else
@@ -128,11 +126,11 @@ namespace libtorrent {
 				char const* val_start = nullptr;
 
 				// find start of attribute name
-				for (; i != tag_end && is_space(*i); ++i);
+				while (i != tag_end && is_space(*i)) ++i;
 				if (i == tag_end) break;
 				start = i;
 				// find end of attribute name
-				for (; i != tag_end && *i != '=' && !is_space(*i); ++i);
+				while (i != tag_end && *i != '=' && !is_space(*i)) ++i;
 				std::size_t const name_len = std::size_t(i - start);
 
 				// look for equality sign
@@ -147,7 +145,7 @@ namespace libtorrent {
 				}
 
 				++i;
-				for (; i != tag_end && is_space(*i); ++i);
+				while (i != tag_end && is_space(*i)) ++i;
 				// check for parse error (values must be quoted)
 				if (i == tag_end || (*i != '\'' && *i != '\"'))
 				{

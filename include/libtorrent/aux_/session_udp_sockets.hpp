@@ -35,6 +35,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/utp_socket_manager.hpp"
 #include "libtorrent/config.hpp"
+#include "libtorrent/aux_/allocating_handler.hpp"
 #include <boost/asio/io_service.hpp>
 #include <vector>
 
@@ -53,6 +54,10 @@ namespace libtorrent { namespace aux {
 		udp::endpoint local_endpoint() override { return sock.local_endpoint(); }
 
 		udp_socket sock;
+
+		// since udp packets are expected to be dispatched frequently, this saves
+		// time on handler allocation every time we read again.
+		aux::handler_storage<TORRENT_READ_HANDLER_MAX_SIZE> udp_handler_storage;
 
 		// this is true when the udp socket send() has failed with EAGAIN or
 		// EWOULDBLOCK. i.e. we're currently waiting for the socket to become
@@ -74,7 +79,7 @@ namespace libtorrent { namespace aux {
 		transport const ssl;
 	};
 
-	// sockets used for outoing utp connections
+	// sockets used for outgoing utp connections
 	struct TORRENT_EXTRA_EXPORT outgoing_sockets
 	{
 		// partitions sockets based on whether they match one of the given endpoints
@@ -84,7 +89,8 @@ namespace libtorrent { namespace aux {
 		std::vector<std::shared_ptr<outgoing_udp_socket>>::iterator
 		partition_outgoing_sockets(std::vector<listen_endpoint_t>& eps);
 
-		tcp::endpoint bind(socket_type& s, address const& remote_address) const;
+		tcp::endpoint bind(socket_type& s, address const& remote_address
+			, error_code& ec) const;
 
 		void update_proxy(proxy_settings const& settings);
 
@@ -94,7 +100,7 @@ namespace libtorrent { namespace aux {
 		std::vector<std::shared_ptr<outgoing_udp_socket>> sockets;
 	private:
 		// round-robin index into sockets
-		// one dimention for IPv4/IPv6 and a second for SSL/non-SSL
+		// one dimension for IPv4/IPv6 and a second for SSL/non-SSL
 		mutable std::array<std::array<std::uint8_t, 2>, 2> index = {{ {{0, 0}}, {{0, 0}} }};
 	};
 

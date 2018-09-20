@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2006-2016, Arvid Norberg
+Copyright (c) 2006-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -72,7 +72,7 @@ namespace libtorrent { namespace dht {
 #endif
 	}
 
-	void node_entry::update_rtt(int new_rtt)
+	void node_entry::update_rtt(int const new_rtt)
 	{
 		TORRENT_ASSERT(new_rtt <= 0xffff);
 		TORRENT_ASSERT(new_rtt >= 0);

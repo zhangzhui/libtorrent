@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2008-2016, Arvid Norberg
+Copyright (c) 2008-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -38,20 +38,14 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/aux_/block_cache_reference.hpp"
 #include "libtorrent/span.hpp"
 
-#include <memory>
-
 namespace libtorrent {
-
-	struct disk_io_thread;
-	struct disk_observer;
-	struct disk_buffer_holder;
 
 	struct TORRENT_EXTRA_EXPORT buffer_allocator_interface
 	{
 		virtual void free_disk_buffer(char* b) = 0;
 		virtual void reclaim_blocks(span<aux::block_cache_reference> refs) = 0;
 	protected:
-		~buffer_allocator_interface() {}
+		~buffer_allocator_interface() = default;
 	};
 
 	// The disk buffer holder acts like a ``unique_ptr`` that frees a disk buffer
@@ -63,9 +57,10 @@ namespace libtorrent {
 	struct TORRENT_EXTRA_EXPORT disk_buffer_holder
 	{
 		// internal
-		disk_buffer_holder(buffer_allocator_interface& alloc, char* buf) noexcept;
+		disk_buffer_holder(buffer_allocator_interface& alloc
+			, char* buf, std::size_t sz) noexcept;
 
-		disk_buffer_holder& operator=(disk_buffer_holder&&) noexcept;
+		disk_buffer_holder& operator=(disk_buffer_holder&&) & noexcept;
 		disk_buffer_holder(disk_buffer_holder&&) noexcept;
 
 		disk_buffer_holder& operator=(disk_buffer_holder const&) = delete;
@@ -75,7 +70,9 @@ namespace libtorrent {
 		// using a disk buffer pool directly (there's only one
 		// disk_buffer_pool per session)
 		disk_buffer_holder(buffer_allocator_interface& alloc
-			, aux::block_cache_reference const& ref, char* buf) noexcept;
+			, aux::block_cache_reference const& ref
+			, char* buf
+			, std::size_t sz) noexcept;
 
 		// frees any unreleased disk buffer held by this object
 		~disk_buffer_holder();
@@ -92,14 +89,15 @@ namespace libtorrent {
 		// set the holder object to hold the specified buffer
 		// (or nullptr by default). If it's already holding a
 		// disk buffer, it will first be freed.
-		void reset(char* buf = 0);
-		void reset(aux::block_cache_reference const& ref, char* buf);
+		void reset(char* buf = nullptr, std::size_t sz = 0);
+		void reset(aux::block_cache_reference const& ref, char* buf, std::size_t sz);
 
 		// swap pointers of two disk buffer holders.
 		void swap(disk_buffer_holder& h) noexcept
 		{
 			TORRENT_ASSERT(h.m_allocator == m_allocator);
 			std::swap(h.m_buf, m_buf);
+			std::swap(h.m_size, m_size);
 			std::swap(h.m_ref, m_ref);
 		}
 
@@ -110,12 +108,13 @@ namespace libtorrent {
 		// buffer
 		explicit operator bool() const noexcept { return m_buf != nullptr; }
 
-		std::size_t size() const { return 0x4000; }
+		std::size_t size() const { return m_size; }
 
 	private:
 
 		buffer_allocator_interface* m_allocator;
 		char* m_buf;
+		std::size_t m_size;
 		aux::block_cache_reference m_ref;
 	};
 

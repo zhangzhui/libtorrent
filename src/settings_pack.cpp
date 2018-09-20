@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2012-2016, Arvid Norberg
+Copyright (c) 2012-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -93,10 +93,12 @@ namespace libtorrent {
 
 #define SET(name, default_value, fun) { #name, fun, default_value }
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 #define DEPRECATED_SET(name, default_value, fun) { #name, fun, default_value }
+#define DEPRECATED_SET_STR(name, default_value, fun) { #name, fun, default_value }
 #else
 #define DEPRECATED_SET(name, default_value, fun) { "", nullptr, 0 }
+#define DEPRECATED_SET_STR(name, default_value, fun) { "", nullptr, nullptr }
 #endif
 
 #ifdef TORRENT_WINDOWS
@@ -113,19 +115,15 @@ constexpr int CLOSE_FILE_INTERVAL = 0;
 	({{
 		SET(user_agent, "libtorrent/" LIBTORRENT_VERSION, &session_impl::update_user_agent),
 		SET(announce_ip, nullptr, nullptr),
-		SET(mmap_cache, nullptr, nullptr),
+		DEPRECATED_SET_STR(mmap_cache, nullptr, nullptr),
 		SET(handshake_client_version, nullptr, nullptr),
 		SET(outgoing_interfaces, "", &session_impl::update_outgoing_interfaces),
-#if !TORRENT_USE_IPV6
-		SET(listen_interfaces, "0.0.0.0:6881", &session_impl::update_listen_interfaces),
-#else
 		SET(listen_interfaces, "0.0.0.0:6881,[::]:6881", &session_impl::update_listen_interfaces),
-#endif
 		SET(proxy_hostname, "", &session_impl::update_proxy),
 		SET(proxy_username, "", &session_impl::update_proxy),
 		SET(proxy_password, "", &session_impl::update_proxy),
 		SET(i2p_hostname, "", &session_impl::update_i2p_bridge),
-		SET(peer_fingerprint, "-LT1200-", &session_impl::update_peer_fingerprint),
+		SET(peer_fingerprint, "-LT1200-", nullptr),
 		SET(dht_bootstrap_nodes, "dht.libtorrent.org:25401", &session_impl::update_dht_bootstrap_nodes)
 	}});
 
@@ -141,8 +139,17 @@ constexpr int CLOSE_FILE_INTERVAL = 0;
 		SET(use_read_cache, true, nullptr),
 		DEPRECATED_SET(use_write_cache, true, nullptr),
 		DEPRECATED_SET(dont_flush_write_cache, false, nullptr),
+#ifdef TORRENT_WINDOWS
+		// the emulation of preadv/pwritev uses overlapped reads/writes to be able
+		// to issue them all back to back. However, it appears windows fail to
+		// merge them. At least for people reporting performance issues in
+		// qBittorrent
+		SET(coalesce_reads, true, nullptr),
+		SET(coalesce_writes, true, nullptr),
+#else
 		SET(coalesce_reads, false, nullptr),
 		SET(coalesce_writes, false, nullptr),
+#endif
 		SET(auto_manage_prefer_seeds, false, nullptr),
 		SET(dont_count_slow_torrents, true, &session_impl::update_count_slow),
 		SET(close_redundant_connections, true, nullptr),
@@ -171,7 +178,7 @@ constexpr int CLOSE_FILE_INTERVAL = 0;
 		SET(no_recheck_incomplete_resume, false, nullptr),
 		SET(anonymous_mode, false, &session_impl::update_anonymous_mode),
 		SET(report_web_seed_downloads, true, &session_impl::update_report_web_seed_downloads),
-		DEPRECATED_SET(rate_limit_utp, false, &session_impl::update_rate_limit_utp),
+		DEPRECATED_SET(rate_limit_utp, true, &session_impl::update_rate_limit_utp),
 		DEPRECATED_SET(announce_double_nat, false, nullptr),
 		SET(seeding_outgoing_connections, true, nullptr),
 		SET(no_connect_privileged_ports, false, &session_impl::update_privileged_ports),
@@ -183,7 +190,7 @@ constexpr int CLOSE_FILE_INTERVAL = 0;
 		DEPRECATED_SET(contiguous_recv_buffer, true, nullptr),
 		SET(ban_web_seeds, true, nullptr),
 		SET(allow_partial_disk_writes, true, nullptr),
-		SET(force_proxy, false, &session_impl::update_force_proxy),
+		DEPRECATED_SET(force_proxy, false, nullptr),
 		SET(support_share_mode, true, nullptr),
 		SET(support_merkle_torrents, true, nullptr),
 		SET(report_redundant_bytes, true, nullptr),
@@ -199,6 +206,7 @@ constexpr int CLOSE_FILE_INTERVAL = 0;
 		SET(proxy_peer_connections, true, nullptr),
 		SET(auto_sequential, true, &session_impl::update_auto_sequential),
 		SET(proxy_tracker_connections, true, nullptr),
+		SET(enable_ip_notifier, true, &session_impl::update_ip_notifier),
 	}});
 
 	aux::array<int_setting_entry_t, settings_pack::num_int_settings> const int_settings
@@ -221,7 +229,7 @@ constexpr int CLOSE_FILE_INTERVAL = 0;
 		SET(max_failcount, 3, &session_impl::update_max_failcount),
 		SET(min_reconnect_time, 60, nullptr),
 		SET(peer_connect_timeout, 15, nullptr),
-		SET(connection_speed, 10, &session_impl::update_connection_speed),
+		SET(connection_speed, 30, &session_impl::update_connection_speed),
 		SET(inactivity_timeout, 600, nullptr),
 		SET(unchoke_interval, 15, nullptr),
 		SET(optimistic_unchoke_interval, 30, nullptr),
@@ -236,7 +244,7 @@ constexpr int CLOSE_FILE_INTERVAL = 0;
 		SET(send_buffer_watermark_factor, 50, nullptr),
 		SET(choking_algorithm, settings_pack::fixed_slots_choker, nullptr),
 		SET(seed_choking_algorithm, settings_pack::round_robin, nullptr),
-		SET(cache_size, 1024, nullptr),
+		SET(cache_size, 2048, nullptr),
 		DEPRECATED_SET(cache_buffer_chunk_size, 0, nullptr),
 		SET(cache_expiry, 300, nullptr),
 		SET(disk_io_write_mode, settings_pack::enable_os_cache, nullptr),
@@ -250,7 +258,7 @@ constexpr int CLOSE_FILE_INTERVAL = 0;
 		SET(active_dht_limit, 88, nullptr),
 		SET(active_tracker_limit, 1600, nullptr),
 		SET(active_lsd_limit, 60, nullptr),
-		SET(active_limit, 15, &session_impl::trigger_auto_manage),
+		SET(active_limit, 500, &session_impl::trigger_auto_manage),
 		DEPRECATED_SET(active_loaded_limit, 0, &session_impl::trigger_auto_manage),
 		SET(auto_manage_interval, 30, nullptr),
 		SET(seed_time_limit, 24 * 60 * 60, nullptr),
@@ -301,15 +309,15 @@ constexpr int CLOSE_FILE_INTERVAL = 0;
 		SET(utp_loss_multiplier, 50, nullptr),
 		SET(mixed_mode_algorithm, settings_pack::peer_proportional, nullptr),
 		SET(listen_queue_size, 5, nullptr),
-		SET(torrent_connect_boost, 10, nullptr),
+		SET(torrent_connect_boost, 30, nullptr),
 		SET(alert_queue_size, 1000, &session_impl::update_alert_queue_size),
 		SET(max_metadata_size, 3 * 1024 * 10240, nullptr),
 		DEPRECATED_SET(hashing_threads, 1, nullptr),
-		SET(checking_mem_usage, 256, nullptr),
+		SET(checking_mem_usage, 1024, nullptr),
 		SET(predictive_piece_announce, 0, nullptr),
 		SET(aio_threads, 4, &session_impl::update_disk_threads),
 		SET(aio_max, 300, nullptr),
-		SET(network_threads, 0, nullptr),
+		DEPRECATED_SET(network_threads, 0, nullptr),
 		DEPRECATED_SET(ssl_listen, 0, &session_impl::update_ssl_listen),
 		SET(tracker_backoff, 250, nullptr),
 		SET(share_ratio_limit, 200, nullptr),
@@ -330,7 +338,7 @@ constexpr int CLOSE_FILE_INTERVAL = 0;
 		SET(proxy_port, 0, &session_impl::update_proxy),
 		SET(i2p_port, 0, &session_impl::update_i2p_bridge),
 		SET(cache_size_volatile, 256, nullptr),
-		SET(urlseed_max_request_bytes, 16 * 1024 * 1024, 0),
+		SET(urlseed_max_request_bytes, 16 * 1024 * 1024, nullptr),
 		SET(web_seed_name_lookup_retry, 1800, nullptr),
 		SET(close_file_interval, CLOSE_FILE_INTERVAL, nullptr),
 		SET(max_web_seed_connections, 3, nullptr),
@@ -446,6 +454,28 @@ constexpr int CLOSE_FILE_INTERVAL = 0;
 		}
 	}
 
+	void run_all_updates(aux::session_impl& ses)
+	{
+		using fun_t = void (aux::session_impl::*)();
+		for (int i = 0; i < settings_pack::num_string_settings; ++i)
+		{
+			fun_t const& f = str_settings[i].fun;
+			if (f) (ses.*f)();
+		}
+
+		for (int i = 0; i < settings_pack::num_int_settings; ++i)
+		{
+			fun_t const& f = int_settings[i].fun;
+			if (f) (ses.*f)();
+		}
+
+		for (int i = 0; i < settings_pack::num_bool_settings; ++i)
+		{
+			fun_t const& f = bool_settings[i].fun;
+			if (f) (ses.*f)();
+		}
+	}
+
 	void initialize_default_settings(aux::session_settings& s)
 	{
 		for (int i = 0; i < settings_pack::num_string_settings; ++i)
@@ -493,7 +523,7 @@ constexpr int CLOSE_FILE_INTERVAL = 0;
 	void apply_pack(settings_pack const* pack, aux::session_settings& sett
 		, aux::session_impl* ses)
 	{
-		typedef void (aux::session_impl::*fun_t)();
+		using fun_t = void (aux::session_impl::*)();
 		std::vector<fun_t> callbacks;
 
 		for (auto const& p : pack->m_strings)

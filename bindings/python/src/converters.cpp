@@ -20,7 +20,11 @@
 #include "libtorrent/alert.hpp"
 #include "libtorrent/create_torrent.hpp" // for create_flags_t
 #include "libtorrent/portmap.hpp" // for port_mapping_t
+#include "libtorrent/peer_class.hpp"
+#include "libtorrent/pex_flags.hpp"
+#include "libtorrent/string_view.hpp"
 #include <vector>
+#include <map>
 
 using namespace boost::python;
 namespace bp = boost::python;
@@ -64,9 +68,8 @@ struct tuple_to_endpoint
            ->storage.bytes;
 
         object o(borrowed(x));
-        new (storage) T(lt::address::from_string(
+        data->convertible = new (storage) T(lt::address::from_string(
            extract<std::string>(o[0])), extract<int>(o[1]));
-        data->convertible = storage;
     }
 };
 
@@ -113,12 +116,54 @@ struct tuple_to_pair
         std::pair<T1, T2> p;
         p.first = extract<T1>(o[0]);
         p.second = extract<T2>(o[1]);
-        new (storage) std::pair<T1, T2>(p);
-        data->convertible = storage;
+        data->convertible = new (storage) std::pair<T1, T2>(p);
     }
 };
 
-template<class T1, class T2>
+struct from_string_view
+{
+    static PyObject* convert(lt::string_view v)
+    {
+        str ret(v.data(), v.size());
+        return incref(ret.ptr());
+    }
+};
+
+struct to_string_view
+{
+    to_string_view()
+    {
+        converter::registry::push_back(
+            &convertible, &construct, type_id<lt::string_view>()
+        );
+    }
+
+    static void* convertible(PyObject* x)
+    {
+        return PyUnicode_Check(x) ? x: nullptr;
+    }
+
+    static void construct(PyObject* x, converter::rvalue_from_python_stage1_data* data)
+    {
+        void* storage = ((converter::rvalue_from_python_storage<
+            lt::string_view>*)data)->storage.bytes;
+        data->convertible = new (storage) lt::string_view(PyUnicode_AS_DATA(x), PyUnicode_GET_DATA_SIZE(x));
+    }
+};
+
+template<typename Map>
+struct map_to_dict
+{
+    static PyObject* convert(Map const& m)
+    {
+        dict ret;
+        for (auto const& e : m)
+            ret[e.first] = e.second;
+        return incref(ret.ptr());
+    }
+};
+
+template<class T1, class T2, class Map = std::map<T1, T2>>
 struct dict_to_map
 {
     dict_to_map()
@@ -139,7 +184,7 @@ struct dict_to_map
             std::map<T1, T2>>*)data)->storage.bytes;
 
         dict o(borrowed(x));
-        std::map<T1, T2> m;
+        Map m;
 
         stl_input_iterator<T1> i(o.keys()), end;
         for (; i != end; ++i)
@@ -147,8 +192,7 @@ struct dict_to_map
             T1 const& key = *i;
             m[key] = extract<T2>(o[key]);
         }
-        new (storage) std::map<T1, T2>(m);
-        data->convertible = storage;
+        data->convertible = new (storage) std::map<T1, T2>(m);
     }
 };
 
@@ -194,9 +238,52 @@ struct list_to_vector
            object o(borrowed(PyList_GetItem(x, i)));
            p.push_back(extract<typename T::value_type>(o));
         }
-        T* ptr = new (storage) T();
-        ptr->swap(p);
-        data->convertible = storage;
+        data->convertible = new (storage) T(std::move(p));
+    }
+};
+
+template<class T, typename IndexType = int>
+struct list_to_bitfield
+{
+    list_to_bitfield()
+    {
+        converter::registry::push_back(
+            &convertible, &construct, type_id<T>()
+        );
+    }
+
+    static void* convertible(PyObject* x)
+    {
+        return PyList_Check(x) ? x : nullptr;
+    }
+
+    static void construct(PyObject* x, converter::rvalue_from_python_stage1_data* data)
+    {
+        void* storage = ((converter::rvalue_from_python_storage<
+            T>*)data)->storage.bytes;
+
+        T p;
+        int const size = int(PyList_Size(x));
+		  p.resize(size);
+        for (int i = 0; i < size; ++i)
+        {
+           object o(borrowed(PyList_GetItem(x, i)));
+           if (extract<bool>(o)) p.set_bit(IndexType{i});
+			  else p.clear_bit(IndexType{i});
+        }
+        data->convertible = new (storage) T(std::move(p));
+    }
+};
+
+template<class T>
+struct bitfield_to_list
+{
+    static PyObject* convert(T const& v)
+    {
+        list ret;
+        for (auto const& i : v)
+            ret.append(i);
+        return incref(ret.ptr());
     }
 };
 
@@ -232,8 +319,7 @@ struct to_strong_typedef
     static void construct(PyObject* x, converter::rvalue_from_python_stage1_data* data)
     {
         void* storage = ((converter::rvalue_from_python_storage<T>*)data)->storage.bytes;
-        new (storage) T(extract<underlying_type>(object(borrowed(x))));
-        data->convertible = storage;
+        data->convertible = new (storage) T(extract<underlying_type>(object(borrowed(x))));
     }
 };
 
@@ -273,8 +359,7 @@ struct to_bitfield_flag
     static void construct(PyObject* x, converter::rvalue_from_python_stage1_data* data)
     {
         void* storage = ((converter::rvalue_from_python_storage<T>*)data)->storage.bytes;
-        new (storage) T(extract<underlying_type>(object(borrowed(x))));
-        data->convertible = storage;
+        data->convertible = new (storage) T(extract<underlying_type>(object(borrowed(x))));
     }
 };
 
@@ -282,7 +367,7 @@ void bind_converters()
 {
     // C++ -> python conversions
     to_python_converter<std::pair<int, int>, pair_to_tuple<int, int>>();
-    to_python_converter<std::pair<lt::piece_index_t, int>, pair_to_tuple<lt::piece_index_t, int>>();
+    to_python_converter<std::pair<lt::piece_index_t, lt::download_priority_t>, pair_to_tuple<lt::piece_index_t, lt::download_priority_t>>();
     to_python_converter<lt::tcp::endpoint, endpoint_to_tuple<lt::tcp::endpoint>>();
     to_python_converter<lt::udp::endpoint, endpoint_to_tuple<lt::udp::endpoint>>();
     to_python_converter<lt::address, address_to_tuple<lt::address>>();
@@ -293,14 +378,20 @@ void bind_converters()
     to_python_converter<std::vector<lt::sha1_hash>, vector_to_list<std::vector<lt::sha1_hash>>>();
     to_python_converter<std::vector<std::string>, vector_to_list<std::vector<std::string>>>();
     to_python_converter<std::vector<int>, vector_to_list<std::vector<int>>>();
-    to_python_converter<std::vector<std::uint8_t>, vector_to_list<std::vector<std::uint8_t>>>();
+    to_python_converter<std::vector<lt::download_priority_t>, vector_to_list<std::vector<lt::download_priority_t>>>();
     to_python_converter<std::vector<lt::tcp::endpoint>, vector_to_list<std::vector<lt::tcp::endpoint>>>();
     to_python_converter<std::vector<lt::udp::endpoint>, vector_to_list<std::vector<lt::udp::endpoint>>>();
     to_python_converter<std::vector<std::pair<std::string, int>>, vector_to_list<std::vector<std::pair<std::string, int>>>>();
 
+    to_python_converter<lt::typed_bitfield<lt::piece_index_t>, bitfield_to_list<lt::typed_bitfield<lt::piece_index_t>>>();
+    to_python_converter<lt::bitfield, bitfield_to_list<lt::bitfield>>();
+
+    to_python_converter<lt::queue_position_t, from_strong_typedef<lt::queue_position_t>>();
     to_python_converter<lt::piece_index_t, from_strong_typedef<lt::piece_index_t>>();
+    to_python_converter<lt::download_priority_t, from_strong_typedef<lt::download_priority_t>>();
     to_python_converter<lt::file_index_t, from_strong_typedef<lt::file_index_t>>();
     to_python_converter<lt::port_mapping_t, from_strong_typedef<lt::port_mapping_t>>();
+    to_python_converter<lt::peer_class_t, from_strong_typedef<lt::peer_class_t>>();
     to_python_converter<lt::torrent_flags_t, from_bitfield_flag<lt::torrent_flags_t>>();
     to_python_converter<lt::peer_flags_t, from_bitfield_flag<lt::peer_flags_t>>();
     to_python_converter<lt::peer_source_flags_t, from_bitfield_flag<lt::peer_source_flags_t>>();
@@ -316,8 +407,12 @@ void bind_converters()
     to_python_converter<lt::save_state_flags_t, from_bitfield_flag<lt::save_state_flags_t>>();
     to_python_converter<lt::session_flags_t, from_bitfield_flag<lt::session_flags_t>>();
     to_python_converter<lt::remove_flags_t, from_bitfield_flag<lt::remove_flags_t>>();
+    to_python_converter<lt::reopen_network_flags_t, from_bitfield_flag<lt::reopen_network_flags_t>>();
     to_python_converter<lt::file_flags_t, from_bitfield_flag<lt::file_flags_t>>();
     to_python_converter<lt::create_flags_t, from_bitfield_flag<lt::create_flags_t>>();
+    to_python_converter<lt::pex_flags_t, from_bitfield_flag<lt::pex_flags_t>>();
+    to_python_converter<lt::reannounce_flags_t, from_bitfield_flag<lt::reannounce_flags_t>>();
+    to_python_converter<lt::string_view, from_string_view>();
 
     // work-around types
     to_python_converter<lt::aux::noexcept_movable<lt::address>, address_to_tuple<
@@ -331,20 +426,28 @@ void bind_converters()
     to_python_converter<lt::aux::noexcept_movable<std::vector<lt::sha1_hash>>, vector_to_list<lt::aux::noexcept_movable<std::vector<lt::sha1_hash>>>>();
     to_python_converter<lt::aux::noexcept_movable<std::vector<std::string>>, vector_to_list<lt::aux::noexcept_movable<std::vector<std::string>>>>();
     to_python_converter<lt::aux::noexcept_movable<std::vector<int>>, vector_to_list<lt::aux::noexcept_movable<std::vector<int>>>>();
-    to_python_converter<lt::aux::noexcept_movable<std::vector<std::uint8_t>>, vector_to_list<lt::aux::noexcept_movable<std::vector<std::uint8_t>>>>();
+    to_python_converter<lt::aux::noexcept_movable<std::vector<lt::download_priority_t>>, vector_to_list<lt::aux::noexcept_movable<std::vector<lt::download_priority_t>>>>();
     to_python_converter<lt::aux::noexcept_movable<std::vector<lt::tcp::endpoint>>, vector_to_list<lt::aux::noexcept_movable<std::vector<lt::tcp::endpoint>>>>();
     to_python_converter<lt::aux::noexcept_movable<std::vector<lt::udp::endpoint>>, vector_to_list<lt::aux::noexcept_movable<std::vector<lt::udp::endpoint>>>>();
     to_python_converter<lt::aux::noexcept_movable<std::vector<std::pair<std::string, int>>>, vector_to_list<lt::aux::noexcept_movable<std::vector<std::pair<std::string, int>>>>>();
+    to_python_converter<lt::aux::noexcept_movable<std::map<lt::piece_index_t, lt::bitfield>>, map_to_dict<lt::aux::noexcept_movable<std::map<lt::piece_index_t, lt::bitfield>>>>();
+    to_python_converter<lt::aux::noexcept_movable<std::map<lt::file_index_t, std::string>>, map_to_dict<lt::aux::noexcept_movable<std::map<lt::file_index_t, std::string>>>>();
+    to_python_converter<std::map<lt::file_index_t, std::string>, map_to_dict<std::map<lt::file_index_t, std::string>>>();
+
+#if TORRENT_ABI_VERSION == 1
+    to_python_converter<lt::aux::noexcept_movable<std::vector<char>>, vector_to_list<lt::aux::noexcept_movable<std::vector<char>>>>();
+    list_to_vector<lt::aux::noexcept_movable<std::vector<char>>>();
+#endif
 
     // python -> C++ conversions
     tuple_to_pair<int, int>();
     tuple_to_pair<std::string, int>();
     tuple_to_endpoint<lt::tcp::endpoint>();
     tuple_to_endpoint<lt::udp::endpoint>();
-    tuple_to_pair<lt::piece_index_t, int>();
+    tuple_to_pair<lt::piece_index_t, lt::download_priority_t>();
     dict_to_map<lt::file_index_t, std::string>();
     list_to_vector<std::vector<int>>();
-    list_to_vector<std::vector<std::uint8_t>>();
+    list_to_vector<std::vector<lt::download_priority_t>>();
     list_to_vector<std::vector<std::string>>();
     list_to_vector<std::vector<lt::tcp::endpoint>>();
     list_to_vector<std::vector<lt::udp::endpoint>>();
@@ -352,15 +455,27 @@ void bind_converters()
 
     // work-around types
     list_to_vector<lt::aux::noexcept_movable<std::vector<int>>>();
-    list_to_vector<lt::aux::noexcept_movable<std::vector<std::uint8_t>>>();
+    list_to_vector<lt::aux::noexcept_movable<std::vector<lt::download_priority_t>>>();
     list_to_vector<lt::aux::noexcept_movable<std::vector<std::string>>>();
     list_to_vector<lt::aux::noexcept_movable<std::vector<lt::tcp::endpoint>>>();
     list_to_vector<lt::aux::noexcept_movable<std::vector<lt::udp::endpoint>>>();
     list_to_vector<lt::aux::noexcept_movable<std::vector<std::pair<std::string, int>>>>();
+    dict_to_map<lt::piece_index_t, lt::bitfield, lt::aux::noexcept_movable<std::map<lt::piece_index_t, lt::bitfield>>>();
+    dict_to_map<lt::file_index_t, std::string, lt::aux::noexcept_movable<std::map<lt::file_index_t, std::string>>>();
 
+    // bitfield types
+    list_to_bitfield<lt::typed_bitfield<lt::piece_index_t>, lt::piece_index_t>();
+    list_to_bitfield<lt::bitfield>();
+
+    bitfield_to_list<lt::typed_bitfield<lt::piece_index_t>>();
+    bitfield_to_list<lt::bitfield>();
+
+    to_strong_typedef<lt::queue_position_t>();
     to_strong_typedef<lt::piece_index_t>();
+    to_strong_typedef<lt::download_priority_t>();
     to_strong_typedef<lt::file_index_t>();
     to_strong_typedef<lt::port_mapping_t>();
+    to_strong_typedef<lt::peer_class_t>();
     to_bitfield_flag<lt::torrent_flags_t>();
     to_bitfield_flag<lt::peer_flags_t>();
     to_bitfield_flag<lt::peer_source_flags_t>();
@@ -376,6 +491,9 @@ void bind_converters()
     to_bitfield_flag<lt::save_state_flags_t>();
     to_bitfield_flag<lt::session_flags_t>();
     to_bitfield_flag<lt::remove_flags_t>();
+    to_bitfield_flag<lt::reopen_network_flags_t>();
     to_bitfield_flag<lt::file_flags_t>();
     to_bitfield_flag<lt::create_flags_t>();
+    to_bitfield_flag<lt::pex_flags_t>();
+    to_bitfield_flag<lt::reannounce_flags_t>();
 }

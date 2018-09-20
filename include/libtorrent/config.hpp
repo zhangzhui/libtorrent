@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2005-2016, Arvid Norberg
+Copyright (c) 2005-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -38,19 +38,16 @@ POSSIBILITY OF SUCH DAMAGE.
 #define _FILE_OFFSET_BITS 64
 
 #include <boost/config.hpp>
-#include <boost/asio/detail/config.hpp>
 
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
-#include "libtorrent/export.hpp"
+// TODO: don't include that here. Make each header that use the export macros
+// include it instead. and move it to aux_
+#include "libtorrent/aux_/export.hpp"
 
 #ifdef __linux__
 #include <linux/version.h> // for LINUX_VERSION_CODE and KERNEL_VERSION
 #endif // __linux
-
-#if !defined BOOST_ASIO_SEPARATE_COMPILATION && !defined BOOST_ASIO_DYN_LINK
-#define BOOST_ASIO_SEPARATE_COMPILATION
-#endif
 
 #if defined __MINGW64__ || defined __MINGW32__
 // GCC warns on format codes that are incompatible with glibc, which the windows
@@ -125,7 +122,6 @@ POSSIBILITY OF SUCH DAMAGE.
 // ==== AMIGA ===
 #if defined __AMIGA__ || defined __amigaos__ || defined __AROS__
 #define TORRENT_AMIGA
-#define TORRENT_USE_IPV6 0
 #define TORRENT_USE_IOSTREAM 0
 // set this to 1 to disable all floating point operations
 // (disables some float-dependent APIs)
@@ -167,13 +163,6 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #if TARGET_OS_IPHONE
 #define TORRENT_USE_SC_NETWORK_REACHABILITY 1
-#endif
-
-#else // __APPLE__
-// FreeBSD has a reasonable iconv signature
-// unless we're on glibc
-#ifndef __GLIBC__
-# define TORRENT_ICONV_ARG(x) (x)
 #endif
 #endif // __APPLE__
 
@@ -256,6 +245,10 @@ POSSIBILITY OF SUCH DAMAGE.
 # define TORRENT_USE_GETIPFORWARDTABLE 1
 #endif
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 # if !defined TORRENT_USE_LIBCRYPTO && !defined TORRENT_USE_LIBGCRYPT
 // unless some other crypto library has been specified, default to the native
 // windows CryptoAPI
@@ -314,6 +307,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef TORRENT_USE_ICONV
 #define TORRENT_USE_ICONV 0
 #endif
+#define TORRENT_USE_MEMALIGN 1
 
 // ==== GNU/Hurd ===
 #elif defined __GNU__
@@ -327,8 +321,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_HAS_FALLOCATE 0
 #define TORRENT_USE_IFCONF 1
 #define TORRENT_USE_SYSCTL 1
-#define TORRENT_USE_IPV6 0
-#define TORRENT_ICONV_ARG(x) (x)
 #define TORRENT_USE_WRITEV 0
 #define TORRENT_USE_READV 0
 
@@ -353,10 +345,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_NO_RETURN __declspec(noreturn)
 #else
 #define TORRENT_NO_RETURN
-#endif
-
-#ifndef TORRENT_ICONV_ARG
-#define TORRENT_ICONV_ARG(x) const_cast<char**>(x)
 #endif
 
 #if defined __GNUC__ || defined __clang__
@@ -478,10 +466,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_USE_IFADDRS 0
 #endif
 
-#ifndef TORRENT_USE_IPV6
-#define TORRENT_USE_IPV6 1
-#endif
-
 // if preadv() exists, we assume pwritev() does as well
 #ifndef TORRENT_USE_PREADV
 #define TORRENT_USE_PREADV 0
@@ -514,19 +498,19 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #if !defined(TORRENT_READ_HANDLER_MAX_SIZE)
 # ifdef _GLIBCXX_DEBUG
-#  define TORRENT_READ_HANDLER_MAX_SIZE 400
+constexpr std::size_t TORRENT_READ_HANDLER_MAX_SIZE = 400;
 # else
 // if this is not divisible by 8, we're wasting space
-#  define TORRENT_READ_HANDLER_MAX_SIZE 336
+constexpr std::size_t TORRENT_READ_HANDLER_MAX_SIZE = 342;
 # endif
 #endif
 
 #if !defined(TORRENT_WRITE_HANDLER_MAX_SIZE)
 # ifdef _GLIBCXX_DEBUG
-#  define TORRENT_WRITE_HANDLER_MAX_SIZE 400
+constexpr std::size_t TORRENT_WRITE_HANDLER_MAX_SIZE = 400;
 # else
 // if this is not divisible by 8, we're wasting space
-#  define TORRENT_WRITE_HANDLER_MAX_SIZE 336
+constexpr std::size_t TORRENT_WRITE_HANDLER_MAX_SIZE = 342;
 # endif
 #endif
 
@@ -579,7 +563,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #endif // TORRENT_HAS_SSE
 
-#if (defined __arm__ || defined __aarch64__)
+#if (defined __arm__ || defined __aarch64__ || defined _M_ARM || defined _M_ARM64)
 #define TORRENT_HAS_ARM 1
 #else
 #define TORRENT_HAS_ARM 0

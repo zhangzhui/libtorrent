@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2015-2016, Arvid Norberg
+Copyright (c) 2015-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -38,10 +38,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/invariant_check.hpp"
 
 namespace libtorrent { namespace aux {
-
-	file_progress::file_progress()
-	{
-	}
 
 	void file_progress::init(piece_picker const& picker, file_storage const& fs)
 	{

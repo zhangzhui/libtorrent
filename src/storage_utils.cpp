@@ -38,9 +38,9 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/session.hpp" // for session::delete_files
 #include "libtorrent/stat_cache.hpp"
 #include "libtorrent/add_torrent_params.hpp"
+#include "libtorrent/torrent_status.hpp"
 
 #include <set>
-#include <string>
 
 namespace libtorrent { namespace aux {
 
@@ -120,6 +120,8 @@ namespace libtorrent { namespace aux {
 
 		const int size = bufs_size(bufs);
 		TORRENT_ASSERT(size > 0);
+		TORRENT_ASSERT(static_cast<int>(piece) * static_cast<std::int64_t>(files.piece_length())
+			+ offset + size <= files.total_size());
 
 		// find the file iterator and file offset
 		std::int64_t const torrent_offset = static_cast<int>(piece) * std::int64_t(files.piece_length()) + offset;
@@ -152,7 +154,7 @@ namespace libtorrent { namespace aux {
 		{
 			file_bytes_left = bytes_left;
 			if (file_offset + file_bytes_left > files.file_size(file_index))
-				file_bytes_left = (std::max)(static_cast<int>(files.file_size(file_index) - file_offset), 0);
+				file_bytes_left = std::max(static_cast<int>(files.file_size(file_index) - file_offset), 0);
 
 			// there are no bytes left in this file, move to the next one
 			// this loop skips over empty files
@@ -168,14 +170,14 @@ namespace libtorrent { namespace aux {
 
 				file_bytes_left = bytes_left;
 				if (file_offset + file_bytes_left > files.file_size(file_index))
-					file_bytes_left = (std::max)(static_cast<int>(files.file_size(file_index) - file_offset), 0);
+					file_bytes_left = std::max(static_cast<int>(files.file_size(file_index) - file_offset), 0);
 			}
 
 			// make a copy of the iovec array that _just_ covers the next
 			// file_bytes_left bytes, i.e. just this one operation
-			int tmp_bufs_used = copy_bufs(current_buf, file_bytes_left, tmp_buf);
+			int const tmp_bufs_used = copy_bufs(current_buf, file_bytes_left, tmp_buf);
 
-			int bytes_transferred = op(file_index, file_offset
+			int const bytes_transferred = op(file_index, file_offset
 				, tmp_buf.first(tmp_bufs_used), ec);
 			if (ec) return -1;
 
@@ -219,7 +221,7 @@ namespace libtorrent { namespace aux {
 			if (err != boost::system::errc::no_such_file_or_directory)
 			{
 				// the directory exists, check all the files
-				for (file_index_t i(0); i < f.end_file(); ++i)
+				for (auto const i : f.file_range())
 				{
 					// files moved out to absolute paths are ignored
 					if (f.file_absolute_path(i)) continue;
@@ -265,9 +267,10 @@ namespace libtorrent { namespace aux {
 		// later
 		aux::vector<bool, file_index_t> copied_files(std::size_t(f.num_files()), false);
 
-		file_index_t i;
+		// track how far we got in case of an error
+		file_index_t file_index{};
 		error_code e;
-		for (i = file_index_t(0); i < f.end_file(); ++i)
+		for (auto const i : f.file_range())
 		{
 			// files moved out to absolute paths are not moved
 			if (f.file_absolute_path(i)) continue;
@@ -307,6 +310,7 @@ namespace libtorrent { namespace aux {
 				ec.ec = e;
 				ec.file(i);
 				ec.operation = operation_t::file_rename;
+				file_index = i;
 				break;
 			}
 		}
@@ -317,7 +321,7 @@ namespace libtorrent { namespace aux {
 			if (e)
 			{
 				ec.ec = e;
-				ec.file(file_index_t(-1));
+				ec.file(torrent_status::error_file_partfile);
 				ec.operation = operation_t::partfile_move;
 			}
 		}
@@ -325,17 +329,17 @@ namespace libtorrent { namespace aux {
 		if (e)
 		{
 			// rollback
-			while (--i >= file_index_t(0))
+			while (--file_index >= file_index_t(0))
 			{
 				// files moved out to absolute paths are not moved
-				if (f.file_absolute_path(i)) continue;
+				if (f.file_absolute_path(file_index)) continue;
 
 				// if we ended up copying the file, don't do anything during
 				// roll-back
-				if (copied_files[i]) continue;
+				if (copied_files[file_index]) continue;
 
-				std::string const old_path = combine_path(save_path, f.file_path(i));
-				std::string const new_path = combine_path(new_save_path, f.file_path(i));
+				std::string const old_path = combine_path(save_path, f.file_path(file_index));
+				std::string const new_path = combine_path(new_save_path, f.file_path(file_index));
 
 				// ignore errors when rolling back
 				error_code ignore;
@@ -352,7 +356,7 @@ namespace libtorrent { namespace aux {
 		// an in-out parameter
 
 		std::set<std::string> subdirs;
-		for (i = file_index_t(0); i < f.end_file(); ++i)
+		for (auto const i : f.file_range())
 		{
 			// files moved out to absolute paths are not moved
 			if (f.file_absolute_path(i)) continue;
@@ -408,7 +412,7 @@ namespace libtorrent { namespace aux {
 			// delete the files from disk
 			std::set<std::string> directories;
 			using iter_t = std::set<std::string>::iterator;
-			for (file_index_t i(0); i < fs.end_file(); ++i)
+			for (auto const i : fs.file_range())
 			{
 				std::string const fp = fs.file_path(i);
 				bool const complete = fs.file_absolute_path(i);
@@ -462,7 +466,7 @@ namespace libtorrent { namespace aux {
 	bool verify_resume_data(add_torrent_params const& rd
 		, aux::vector<std::string, file_index_t> const& links
 		, file_storage const& fs
-		, aux::vector<std::uint8_t, file_index_t> const& file_priority
+		, aux::vector<download_priority_t, file_index_t> const& file_priority
 		, stat_cache& stat
 		, std::string const& save_path
 		, storage_error& ec)
@@ -480,7 +484,7 @@ namespace libtorrent { namespace aux {
 			// moved. If so, we just fail. The user is responsible to not touch
 			// other torrents until a new mutable torrent has been completely
 			// added.
-			for (file_index_t idx(0); idx < fs.end_file(); ++idx)
+			for (auto const idx : fs.file_range())
 			{
 				std::string const& s = links[idx];
 				if (s.empty()) continue;
@@ -522,7 +526,7 @@ namespace libtorrent { namespace aux {
 			// expected location, but is likely to be in a partfile. Just exempt it
 			// from checking
 			if (file_index < file_priority.end_index()
-				&& file_priority[file_index] == 0)
+				&& file_priority[file_index] == dont_download)
 				continue;
 
 			error_code error;
@@ -573,7 +577,7 @@ namespace libtorrent { namespace aux {
 		, stat_cache& cache
 		, storage_error& ec)
 	{
-		for (file_index_t i(0); i < fs.end_file(); ++i)
+		for (auto const i : fs.file_range())
 		{
 			std::int64_t const sz = cache.get_filesize(
 				i, fs, save_path, ec.ec);

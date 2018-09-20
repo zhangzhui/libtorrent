@@ -34,8 +34,10 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_STORAGE_UTILS_HPP_INCLUDE
 
 #include <cstdint>
+#include <string>
 
 #include "libtorrent/config.hpp"
+#include "libtorrent/fwd.hpp"
 #include "libtorrent/span.hpp"
 #include "libtorrent/aux_/typed_span.hpp"
 #include "libtorrent/units.hpp"
@@ -44,11 +46,8 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	class file_storage;
 	struct part_file;
-	struct storage_error;
 	struct stat_cache;
-	struct add_torrent_params;
 
 	// TODO: 3 remove this typedef, and use span<char const> for disk write
 	// operations
@@ -86,13 +85,13 @@ namespace aux {
 	// opt to only delete the partfile
 	TORRENT_EXTRA_EXPORT void
 	delete_files(file_storage const& fs, std::string const& save_path
-		, std::string const& part_file_name, remove_flags_t const options, storage_error& ec);
+		, std::string const& part_file_name, remove_flags_t options, storage_error& ec);
 
 	TORRENT_EXTRA_EXPORT bool
 	verify_resume_data(add_torrent_params const& rd
 		, aux::vector<std::string, file_index_t> const& links
 		, file_storage const& fs
-		, aux::vector<std::uint8_t, file_index_t> const& file_priority
+		, aux::vector<download_priority_t, file_index_t> const& file_priority
 		, stat_cache& stat
 		, std::string const& save_path
 		, storage_error& ec);

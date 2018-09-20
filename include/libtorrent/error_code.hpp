@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2008-2016, Arvid Norberg
+Copyright (c) 2008-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -326,18 +326,27 @@ namespace libtorrent {
 			// the listen socket associated with this request was closed
 			invalid_listen_socket,
 
+#if TORRENT_ABI_VERSION == 1
+			// these error codes are deprecated, NAT-PMP/PCP error codes have
+			// been moved to their own category
 
 			// The NAT-PMP router responded with an unsupported protocol version
-			unsupported_protocol_version = 120,
+			unsupported_protocol_version TORRENT_DEPRECATED_ENUM = 120,
 			// You are not authorized to map ports on this NAT-PMP router
-			natpmp_not_authorized,
+			natpmp_not_authorized TORRENT_DEPRECATED_ENUM,
 			// The NAT-PMP router failed because of a network failure
-			network_failure,
+			network_failure TORRENT_DEPRECATED_ENUM,
 			// The NAT-PMP router failed because of lack of resources
-			no_resources,
+			no_resources TORRENT_DEPRECATED_ENUM,
 			// The NAT-PMP router failed because an unsupported opcode was sent
-			unsupported_opcode,
-
+			unsupported_opcode TORRENT_DEPRECATED_ENUM,
+#else
+			deprecated_120 = 120,
+			deprecated_121,
+			deprecated_122,
+			deprecated_123,
+			deprecated_124,
+#endif
 
 
 			// The resume data file is missing the 'file sizes' entry
@@ -420,7 +429,7 @@ namespace libtorrent {
 			// invalid action field in udp tracker response
 			invalid_tracker_action,
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 			// expected string in bencoded string
 			expected_string = 190,
 			// expected colon in bencoded string
@@ -489,7 +498,7 @@ namespace libtorrent {
 	using system_error = boost::system::system_error;
 
 #ifndef BOOST_NO_EXCEPTIONS
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	TORRENT_DEPRECATED
 	inline boost::system::error_category& get_libtorrent_category()
 	{ return libtorrent_category(); }
@@ -523,7 +532,7 @@ namespace libtorrent {
 		// kind of operation failed.
 		operation_t operation;
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		// Returns a string literal representing the file operation
 		// that failed. If there were no failure, it returns
 		// an empty string.

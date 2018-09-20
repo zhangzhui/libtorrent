@@ -49,6 +49,8 @@ using namespace libtorrent;
 namespace lt = libtorrent;
 using std::ignore;
 
+namespace {
+
 enum test_case {
 	complete_download,
 	partial_download,
@@ -86,18 +88,23 @@ void test_remove_torrent(remove_flags_t const remove_options
 	file.close();
 
 	wait_for_listen(ses1, "ses1");
-	wait_for_listen(ses2, "ses1");
+	wait_for_listen(ses2, "ses2");
 
 	// test using piece sizes smaller than 16kB
-	std::tie(tor1, tor2, ignore) = setup_transfer(&ses1, &ses2, 0
-		, true, false, true, "_remove", 8 * 1024, &t, false, 0);
+	std::tie(tor1, tor2, ignore) = setup_transfer(&ses1, &ses2, nullptr
+		, true, false, true, "_remove", 8 * 1024, &t, false, nullptr);
 
 	if (test == partial_download)
 	{
-		std::vector<int> priorities(num_pieces, 1);
+		std::vector<download_priority_t> priorities(std::size_t(num_pieces), low_priority);
 		// set half of the pieces to priority 0
-		std::fill(priorities.begin(), priorities.begin() + (num_pieces / 2), 0);
+		std::fill(priorities.begin(), priorities.begin() + (num_pieces / 2), dont_download);
 		tor2.prioritize_pieces(priorities);
+	}
+	else if (test == mid_download)
+	{
+		tor1.set_upload_limit(static_cast<int>(t->total_size()));
+		tor2.set_download_limit(static_cast<int>(t->total_size()));
 	}
 
 	torrent_status st1;
@@ -119,12 +126,13 @@ void test_remove_torrent(remove_flags_t const remove_options
 		if (st2.is_finished) break;
 
 		TEST_CHECK(st1.state == torrent_status::seeding
+			|| st1.state == torrent_status::checking_resume_data
 			|| st1.state == torrent_status::checking_files);
 		TEST_CHECK(st2.state == torrent_status::downloading
 			|| st2.state == torrent_status::checking_resume_data);
 
-		// if nothing is being transferred after 2 seconds, we're failing the test
-		if (st1.upload_payload_rate == 0 && i > 20)
+		// if nothing is being transferred after 3 seconds, we're failing the test
+		if (st1.total_payload_upload == 0 && i > 30)
 		{
 			TEST_ERROR("no transfer");
 			return;
@@ -165,6 +173,8 @@ void test_remove_torrent(remove_flags_t const remove_options
 	sp.push_back(ses1.abort());
 	sp.push_back(ses2.abort());
 }
+
+} // anonymous namespace
 
 TORRENT_TEST(remove_torrent)
 {

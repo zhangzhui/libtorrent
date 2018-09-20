@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -75,6 +75,8 @@ namespace libtorrent {
 
 		bool in_handshake() const override;
 
+		peer_id our_pid() const override { return peer_id(); }
+
 		// the following functions appends messages
 		// to the send buffer
 		void write_choke() override {}
@@ -93,6 +95,7 @@ namespace libtorrent {
 		void write_allow_fast(piece_index_t) override {}
 		void write_suggest(piece_index_t) override {}
 		void write_bitfield() override {}
+		void write_upload_only(bool) override {}
 
 #if TORRENT_USE_INVARIANT_CHECKS
 		void check_invariant() const;

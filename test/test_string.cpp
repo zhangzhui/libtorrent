@@ -59,7 +59,7 @@ TORRENT_TEST(hex)
 	TEST_CHECK(aux::from_hex({str, 40}, bin));
 	char hex[41];
 	aux::to_hex(bin, hex);
-	TEST_CHECK(strcmp(hex, str) == 0);
+	TEST_CHECK(std::strcmp(hex, str) == 0);
 
 	TEST_CHECK(aux::to_hex({"\x55\x73",2}) == "5573");
 	TEST_CHECK(aux::to_hex({"\xaB\xd0",2}) == "abd0");
@@ -68,9 +68,9 @@ TORRENT_TEST(hex)
 
 	for (int i = 1; i < 255; ++i)
 	{
-		bool const hex = strchr(hex_chars, i) != nullptr;
-		char const c = i;
-		TEST_EQUAL(aux::is_hex(c), hex);
+		bool const hex_loop = std::strchr(hex_chars, i) != nullptr;
+		char const c = char(i);
+		TEST_EQUAL(aux::is_hex(c), hex_loop);
 	}
 
 	TEST_EQUAL(aux::hex_to_int('0'), 0);
@@ -338,7 +338,7 @@ TORRENT_TEST(path)
 	convert_path_to_posix(path);
 	TEST_EQUAL(path, "a/b/c");
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	// resolve_file_url
 
 #ifdef TORRENT_WINDOWS
@@ -354,6 +354,8 @@ TORRENT_TEST(path)
 #endif
 #endif
 }
+
+namespace {
 
 void test_parse_interface(char const* input
 	, std::vector<listen_interface_t> expected
@@ -371,6 +373,8 @@ void test_parse_interface(char const* input
 	TEST_EQUAL(print_listen_interfaces(list), output);
 }
 
+} // anonymous namespace
+
 TORRENT_TEST(parse_list)
 {
 	std::vector<std::string> list;
@@ -384,26 +388,15 @@ TORRENT_TEST(parse_list)
 	TEST_EQUAL(list[5], "foobar");
 	TEST_EQUAL(list[6], "[::1]");
 
-#if TORRENT_USE_IPV6
 	test_parse_interface("  a:4,b:35, c : 1000s, d: 351 ,e \t:42,foobar:1337s\n\r,[2001::1]:6881"
 		, {{"a", 4, false}, {"b", 35, false}, {"c", 1000, true}, {"d", 351, false}
 			, {"e", 42, false}, {"foobar", 1337, true}, {"2001::1", 6881, false}}
 		, "a:4,b:35,c:1000s,d:351,e:42,foobar:1337s,[2001::1]:6881");
-#else
-	test_parse_interface("  a:4,b:35, c : 1000s, d: 351 ,e \t:42,foobar:1337s\n\r,[2001::1]:6881"
-		, {{"a", 4, false}, {"b", 35, false}, {"c", 1000, true}, {"d", 351, false}
-			, {"e", 42, false}, {"foobar", 1337, true}}
-		, "a:4,b:35,c:1000s,d:351,e:42,foobar:1337s");
-#endif
 
 	// IPv6 address
-#if TORRENT_USE_IPV6
 	test_parse_interface("[2001:ffff::1]:6882s"
 		, {{"2001:ffff::1", 6882, true}}
 		, "[2001:ffff::1]:6882s");
-#else
-	test_parse_interface("[2001:ffff::1]:6882s", {}, "");
-#endif
 
 	// IPv4 address
 	test_parse_interface("127.0.0.1:6882"

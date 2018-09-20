@@ -3,41 +3,6 @@ import feature : feature ;
 
 use-project /torrent : .. ;
 
-exe test_natpmp : test_natpmp.cpp
-	: # requirements
-	<library>/torrent//torrent
-	<export-extra>on
-# disable warning C4373: virtual function overrides, previous versions of the compiler did not override when parameters only differed by const/volatile qualifiers
-	<toolset>msvc:<cflags>/wd4373
-	: # default-build
-	<threading>multi
-	<asserts>on
-	<invariant-checks>full
-	<link>shared
-	<picker-debugging>on
-	<debug-iterators>on
-	<logging>on
-	;
-
-exe enum_if : enum_if.cpp
-	: # requirements
-	<library>/torrent//torrent
-	<export-extra>on
-# disable warning C4373: virtual function overrides, previous versions of the compiler did not override when parameters only differed by const/volatile qualifiers
-	<toolset>msvc:<cflags>/wd4373
-	: # default-build
-	<threading>multi
-	<asserts>on
-	<invariant-checks>full
-	<link>shared
-	<picker-debugging>on
-	<debug-iterators>on
-	<logging>on
-	;
-
-explicit test_natpmp ;
-explicit enum_if ;
-
 lib libtorrent_test
 	: # sources
 	main.cpp
@@ -82,13 +47,13 @@ project
 	<export-extra>on
 	<library>libtorrent_test
 	<library>/torrent//torrent
-	<toolset>darwin:<cflags>-Wno-unused-command-line-argument
-# disable warning C4275: non DLL-interface classkey 'identifier' used as base for DLL-interface classkey 'identifier'
-	<toolset>msvc:<cflags>/wd4275
-# disable warning C4373: virtual function overrides, previous versions of the compiler did not override when parameters only differed by const/volatile qualifiers
-	<toolset>msvc:<cflags>/wd4373
-	<toolset>msvc:<cflags>/wd4503
-	<toolset>msvc:<define>_SCL_SECURE_NO_WARNINGS
+	# C4127: conditional expression is constant
+	<toolset>msvc:<cflags>/wd4127
+	# C4309: 'conversion' : truncation of constant value
+	<toolset>msvc:<cflags>/wd4309
+	# C4310: cast truncates constant value
+	<toolset>msvc:<cflags>/wd4310
+	<conditional>@warnings
 	<export-extra>on
 	: default-build
 	<threading>multi
@@ -96,12 +61,45 @@ project
 	<invariant-checks>full
 	<link>shared
 	<picker-debugging>on
-	<debug-iterators>on
 	<logging>on
 	;
 
 feature launcher : none valgrind : composite ;
 feature.compose <launcher>valgrind : <testing.launcher>"valgrind --tool=memcheck -v --num-callers=20 --read-var-info=yes --track-origins=yes --error-exitcode=222 --suppressions=valgrind_suppressions.txt" <use-valgrind>on ;
+
+exe test_natpmp : test_natpmp.cpp
+	: # requirements
+	<library>/torrent//torrent
+	<export-extra>on
+	<conditional>@warnings
+	: # default-build
+	<threading>multi
+	<asserts>on
+	<invariant-checks>full
+	<link>shared
+	<picker-debugging>on
+	<logging>on
+	;
+
+exe enum_if : enum_if.cpp
+	: # requirements
+	<library>/torrent//torrent
+	<export-extra>on
+	<conditional>@warnings
+	: # default-build
+	<threading>multi
+	<asserts>on
+	<invariant-checks>full
+	<link>shared
+	<picker-debugging>on
+	<logging>on
+	;
+
+install stage_enum_if : enum_if : <location>. ;
+
+explicit test_natpmp ;
+explicit enum_if ;
+explicit stage_enum_if ;
 
 test-suite libtorrent :
 	[ run
@@ -143,9 +141,14 @@ test-suite libtorrent :
 		test_enum_net.cpp
 		test_linked_list.cpp
 		test_stack_allocator.cpp
-		test_listen_socket.cpp
 		test_file_progress.cpp
+		test_generate_peer_id.cpp
 		test_alloca.cpp ]
+
+	[ run test_listen_socket.cpp
+		: : : <crypto>openssl:<library>/torrent//ssl
+		<crypto>openssl:<library>/torrent//crypto
+	]
 
 	[ run test_piece_picker.cpp ]
 
@@ -153,11 +156,11 @@ test-suite libtorrent :
 		test_dht_storage.cpp
 		test_direct_dht.cpp
 		test_hasher512.cpp
-		]
+		: : : <crypto>openssl:<library>/torrent//ssl
+		<crypto>openssl:<library>/torrent//crypto
+	]
 
-	[ run test_string.cpp
-		test_utf8.cpp
-		]
+	[ run test_string.cpp test_utf8.cpp ]
 
 	[ run test_sha1_hash.cpp ]
 	[ run test_span.cpp ]
@@ -183,7 +186,10 @@ test-suite libtorrent :
 	[ run test_recheck.cpp ]
 	[ run test_read_resume.cpp ]
 	[ run test_resume.cpp ]
-	[ run test_ssl.cpp ]
+	[ run test_ssl.cpp : :
+		: <crypto>openssl:<library>/torrent//ssl
+		<crypto>openssl:<library>/torrent//crypto
+	]
 	[ run test_tracker.cpp ]
 	[ run test_checking.cpp ]
 	[ run test_url_seed.cpp ]
@@ -202,7 +208,10 @@ test-suite libtorrent :
 	[ run test_remap_files.cpp ]
 	[ run test_utp.cpp ]
 	[ run test_auto_unchoke.cpp ]
-	[ run test_http_connection.cpp ]
+	[ run test_http_connection.cpp : :
+		: <crypto>openssl:<library>/torrent//ssl
+		<crypto>openssl:<library>/torrent//crypto
+	]
 	[ run test_torrent.cpp ]
 	[ run test_transfer.cpp ]
 	[ run test_time_critical.cpp ]

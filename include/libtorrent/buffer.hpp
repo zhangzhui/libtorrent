@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2007-2016, Arvid Norberg
+Copyright (c) 2007-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -47,6 +47,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <malloc.h>
 #elif defined _MSC_VER
 #include <malloc.h>
+#elif defined __FreeBSD__
+#include <malloc_np.h>
 #elif defined TORRENT_BSD
 #include <malloc/malloc.h>
 #endif
@@ -81,7 +83,7 @@ public:
 
 		// the actual allocation may be larger than we requested. If so, let the
 		// user take advantage of every single byte
-#if defined __GLIBC__
+#if defined __GLIBC__ || defined __FreeBSD__
 		m_size = ::malloc_usable_size(m_begin);
 #elif defined _MSC_VER
 		m_size = ::_msize(m_begin);
@@ -98,7 +100,7 @@ public:
 		: buffer(size)
 	{
 		TORRENT_ASSERT(initialize.size() <= size);
-		if (initialize.size() > 0)
+		if (!initialize.empty())
 		{
 			std::memcpy(m_begin, initialize.data(), (std::min)(initialize.size(), size));
 		}

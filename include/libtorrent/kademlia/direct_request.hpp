@@ -40,13 +40,13 @@ namespace libtorrent { namespace dht {
 
 struct direct_traversal : traversal_algorithm
 {
-	typedef std::function<void(dht::msg const&)> message_callback;
+	using message_callback = std::function<void(dht::msg const&)>;
 
 	direct_traversal(node& node
 		, node_id const& target
 		, message_callback cb)
 		: traversal_algorithm(node, target)
-		, m_cb(cb)
+		, m_cb(std::move(cb))
 	{}
 
 	char const* name() const override { return "direct_traversal"; }
@@ -67,9 +67,9 @@ protected:
 
 struct direct_observer : observer
 {
-	direct_observer(std::shared_ptr<traversal_algorithm> const& algo
+	direct_observer(std::shared_ptr<traversal_algorithm> algo
 		, udp::endpoint const& ep, node_id const& id)
-		: observer(algo, ep, id)
+		: observer(std::move(algo), ep, id)
 	{}
 
 	void reply(msg const& m) override

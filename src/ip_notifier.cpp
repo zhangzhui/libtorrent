@@ -37,6 +37,7 @@ POSSIBILITY OF SUCH DAMAGE.
 // TODO: simulator support
 #elif TORRENT_USE_NETLINK
 #include "libtorrent/netlink.hpp"
+#include "libtorrent/socket.hpp"
 #include <array>
 #elif TORRENT_USE_SYSTEMCONFIGURATION
 #include <SystemConfiguration/SystemConfiguration.h>
@@ -75,7 +76,12 @@ struct ip_change_notifier_impl final : ip_change_notifier
 	explicit ip_change_notifier_impl(io_service& ios)
 		: m_socket(ios
 			, netlink::endpoint(netlink(NETLINK_ROUTE), RTMGRP_IPV4_IFADDR | RTMGRP_IPV6_IFADDR))
-	{}
+	{
+		// Linux can generate ENOBUFS if the socket's buffers are full
+		// don't treat it as an error
+		error_code ec;
+		m_socket.set_option(libtorrent::no_enobufs(true), ec);
+	}
 
 	// non-copyable
 	ip_change_notifier_impl(ip_change_notifier_impl const&) = delete;
@@ -85,7 +91,7 @@ struct ip_change_notifier_impl final : ip_change_notifier
 	{
 		using namespace std::placeholders;
 		m_socket.async_receive(boost::asio::buffer(m_buf)
-			, std::bind(&ip_change_notifier_impl::on_notify, this, _1, _2, std::move(cb)));
+			, std::bind(&ip_change_notifier_impl::on_notify, _1, _2, std::move(cb)));
 	}
 
 	void cancel() override
@@ -95,7 +101,7 @@ private:
 	netlink::socket m_socket;
 	std::array<char, 4096> m_buf;
 
-	void on_notify(error_code const& ec, std::size_t bytes_transferred
+	static void on_notify(error_code const& ec, std::size_t bytes_transferred
 		, std::function<void(error_code const&)> const& cb)
 	{
 		TORRENT_UNUSED(bytes_transferred);
@@ -105,12 +111,7 @@ private:
 		// interfaces after a notification so do that for Linux as well to
 		// minimize the difference between platforms
 
-		// Linux can generate ENOBUFS if the socket's buffers are full
-		// don't treat it as an error
-		if (ec.value() == boost::system::errc::no_buffer_space)
-			cb(error_code());
-		else
-			cb(ec);
+		cb(ec);
 	}
 };
 #elif TORRENT_USE_SYSTEMCONFIGURATION
@@ -122,9 +123,19 @@ template <typename T
 	, void (*Retain)(T) = CFRefRetain<T>, void (*Release)(T) = CFRefRelease<T>>
 struct CFRef
 {
-	CFRef() {}
+	CFRef() = default;
 	explicit CFRef(T h) : m_h(h) {} // take ownership
 	~CFRef() { release(); }
+
+	CFRef(CFRef&& rhs) : m_h(rhs.m_h) { rhs.m_h = nullptr; }
+	CFRef& operator=(CFRef&& rhs)
+	{
+		if (m_h == rhs.m_h) return *this;
+		release();
+		m_h = rhs.m_h;
+		rhs.m_h = nullptr;
+		return *this;
+	}
 
 	CFRef(CFRef const& rhs) : m_h(rhs.m_h) { retain(); }
 	CFRef& operator=(CFRef const& rhs)
@@ -257,8 +268,16 @@ CFRef<SCDynamicStoreRef> create_dynamic_store(SCDynamicStoreCallBack callback, v
 
 	SCDynamicStoreContext context = {0, nullptr, nullptr, nullptr, nullptr};
 	context.info = context_info;
+
+#if defined __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wold-style-cast"
+#endif
 	CFRef<SCDynamicStoreRef> store{SCDynamicStoreCreate(nullptr
 		, CFSTR("libtorrent.IPChangeNotifierStore"), callback, &context)};
+#if defined __clang__
+#pragma clang diagnostic pop
+#endif
 	if (!store)
 		return CFRef<SCDynamicStoreRef>();
 
@@ -375,6 +394,23 @@ struct ip_change_notifier_impl final : ip_change_notifier
 private:
 	OVERLAPPED m_ovl = {};
 	boost::asio::windows::object_handle m_hnd;
+};
+#else
+struct ip_change_notifier_impl final : ip_change_notifier
+{
+	explicit ip_change_notifier_impl(io_service& ios)
+		: m_ios(ios) {}
+
+	void async_wait(std::function<void(error_code const&)> cb) override
+	{
+		m_ios.post([cb]()
+		{ cb(make_error_code(boost::system::errc::not_supported)); });
+	}
+
+	void cancel() override {}
+
+private:
+	io_service& m_ios;
 };
 #endif
 

@@ -53,8 +53,8 @@ TORRENT_TEST(zeroes)
 		std::printf("failed to unzip: %s\n", ec.message().c_str());
 	}
 	TEST_CHECK(!ec);
-	TEST_CHECK(inflated.size() > 0);
-	for (int i = 0; i < int(inflated.size()); ++i)
+	TEST_CHECK(!inflated.empty());
+	for (std::size_t i = 0; i < inflated.size(); ++i)
 		TEST_EQUAL(inflated[i], 0);
 }
 
@@ -74,3 +74,27 @@ TORRENT_TEST(corrupt)
 	TEST_CHECK(ec);
 }
 
+TORRENT_TEST(invalid1)
+{
+	std::vector<char> zipped;
+	error_code ec;
+	load_file(combine_path("..", "invalid1.gz"), zipped, ec, 1000000);
+	if (ec) std::printf("failed to open file: (%d) %s\n", ec.value()
+		, ec.message().c_str());
+	TEST_CHECK(!ec);
+
+	std::vector<char> inflated;
+	inflate_gzip(zipped, inflated, 1000000, ec);
+
+	// we expect this to fail
+	TEST_CHECK(ec);
+}
+
+TORRENT_TEST(empty)
+{
+	std::vector<char> empty;
+	std::vector<char> inflated;
+	error_code ec;
+	inflate_gzip(empty, inflated, 1000000, ec);
+	TEST_CHECK(ec);
+}

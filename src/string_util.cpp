@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2012-2016, Arvid Norberg
+Copyright (c) 2012-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -44,8 +44,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	// lexical_cast's result depends on the locale. We need
-	// a well defined result
+	// We need well defined results that don't depend on locale
 	std::array<char, 4 + std::numeric_limits<std::int64_t>::digits10>
 		to_string(std::int64_t const n)
 	{
@@ -130,7 +129,7 @@ namespace libtorrent {
 	}
 
 	// generate a url-safe random string
-	void url_random(char* begin, char* end)
+	void url_random(span<char> dest)
 	{
 		// http-accepted characters:
 		// excluding ', since some buggy trackers don't support that
@@ -138,8 +137,8 @@ namespace libtorrent {
 			"abcdefghijklmnopqrstuvwxyz-_.!~*()";
 
 		// the random number
-		while (begin != end)
-			*begin++ = printable[random(sizeof(printable) - 2)];
+		for (char& c : dest)
+			c = printable[random(sizeof(printable) - 2)];
 	}
 
 	bool string_ends_with(string_view s1, string_view s2)
@@ -154,7 +153,7 @@ namespace libtorrent {
 		TORRENT_ASSERT(target.size() >= src.size());
 		TORRENT_ASSERT(target.size() < std::size_t(std::numeric_limits<int>::max()));
 
-		auto it = std::search(target.begin(), target.end(), src.begin(), src.end());
+		auto const it = std::search(target.begin(), target.end(), src.begin(), src.end());
 
 		// no complete sync
 		if (it == target.end()) return -1;
@@ -165,7 +164,7 @@ namespace libtorrent {
 	{
 		if (str == nullptr) return nullptr;
 		std::size_t const len = std::strlen(str);
-		char* tmp = new char[len + 1];
+		auto* tmp = new char[len + 1];
 		std::copy(str, str + len, tmp);
 		tmp[len] = '\0';
 		return tmp;
@@ -178,9 +177,8 @@ namespace libtorrent {
 		{
 			if (!ret.empty()) ret += ',';
 
-#if TORRENT_USE_IPV6
 			error_code ec;
-			address_v6::from_string(i.device, ec);
+			make_address_v6(i.device, ec);
 			if (!ec)
 			{
 				// IPv6 addresses must be wrapped in square brackets
@@ -189,7 +187,6 @@ namespace libtorrent {
 				ret += ']';
 			}
 			else
-#endif
 			{
 				ret += i.device;
 			}
@@ -221,14 +218,8 @@ namespace libtorrent {
 			listen_interface_t iface;
 			iface.ssl = false;
 
-#if !TORRENT_USE_IPV6
-			bool ipv6 = false;
-#endif
 			if (in[start] == '[')
 			{
-#if !TORRENT_USE_IPV6
-				ipv6 = true;
-#endif
 				++start;
 				// IPv6 address
 				while (start < in.size() && in[start] != ']')
@@ -286,14 +277,7 @@ namespace libtorrent {
 			while (start < in.size() && in[start] != ',')
 				++start;
 
-			if (iface.port >= 0
-#if !TORRENT_USE_IPV6
-				&& ipv6 == false
-#endif
-				)
-			{
-				out.push_back(iface);
-			}
+			if (iface.port >= 0) out.push_back(iface);
 
 			// skip the comma
 			if (start < in.size() && in[start] == ',')
@@ -329,7 +313,7 @@ namespace libtorrent {
 
 			if (colon != std::string::npos && colon > start)
 			{
-				int port = atoi(in.substr(colon + 1, end - colon - 1).c_str());
+				int port = std::atoi(in.substr(colon + 1, end - colon - 1).c_str());
 
 				// skip trailing spaces
 				std::string::size_type soft_end = colon;
@@ -342,7 +326,7 @@ namespace libtorrent {
 				if (in[start] == '[') ++start;
 				if (soft_end > start && in[soft_end-1] == ']') --soft_end;
 
-				out.push_back(std::make_pair(in.substr(start, soft_end - start), port));
+				out.emplace_back(in.substr(start, soft_end - start), port);
 			}
 
 			start = end + 1;
@@ -369,7 +353,7 @@ namespace libtorrent {
 			// skip trailing spaces
 			std::string::size_type soft_end = end;
 			while (soft_end > start
-				&& is_space(in[soft_end-1]))
+				&& is_space(in[soft_end - 1]))
 				--soft_end;
 
 			out.push_back(in.substr(start, soft_end - start));
@@ -420,8 +404,8 @@ namespace libtorrent {
 	std::size_t string_hash_no_case::operator()(std::string const& s) const
 	{
 		std::size_t ret = 5381;
-		for (std::string::const_iterator i = s.begin(); i != s.end(); ++i)
-			ret = (ret * 33) ^ static_cast<std::size_t>(to_lower(*i));
+		for (auto const c : s)
+			ret = (ret * 33) ^ static_cast<std::size_t>(to_lower(c));
 		return ret;
 	}
 
@@ -429,8 +413,8 @@ namespace libtorrent {
 	{
 		if (lhs.size() != rhs.size()) return false;
 
-		std::string::const_iterator s1 = lhs.begin();
-		std::string::const_iterator s2 = rhs.begin();
+		auto s1 = lhs.cbegin();
+		auto s2 = rhs.cbegin();
 
 		while (s1 != lhs.end() && s2 != rhs.end())
 		{

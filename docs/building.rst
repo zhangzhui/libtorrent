@@ -58,7 +58,7 @@ dependent boost libraries with the correct compiler settings, in order to
 ensure that the build targets are link compatible (see `boost guidelines`__
 for some details on this issue).
 
-__ http://boost.org/more/separate_compilation.html
+__ https://boost.org/more/separate_compilation.html
 
 Since BBv2 will build the boost libraries for you, you need the full boost
 source package. Having boost installed via some package system is usually not
@@ -74,7 +74,7 @@ Step 1: Download boost
 
 You'll find boost here__.
 
-__ http://sourceforge.net/project/showfiles.php?group_id=7586&package_id=8041&release_id=619445
+__ https://sourceforge.net/project/showfiles.php?group_id=7586&package_id=8041&release_id=619445
 
 Extract the archive to some directory where you want it. For the sake of this
 guide, let's assume you extract the package to ``c:\boost_1_64_0`` (I'm using
@@ -141,7 +141,7 @@ Note that the spaces around the semi-colons and colons are important!
 
 Also see the `official installation instructions`_.
 
-.. _`official installation instructions`: http://www.boost.org/doc/html/bbv2/installation.html
+.. _`official installation instructions`: https://www.boost.org/doc/html/bbv2/installation.html
 
 
 Step 3: Building libtorrent
@@ -237,6 +237,14 @@ windows format (``c:/boost_1_64_0``).
 The ``Jamfile`` will define ``NDEBUG`` when it's building a release build.
 For more build configuration flags see `Build configurations`_.
 
+When enabling linking against openssl (by setting the ``crypto`` feature to
+``openssl``) the Jamfile will look in some default directory for the openssl
+headers and libraries. On macOS, it will look for the homebrew openssl package.
+On windows it will look in ``c:\openssl`` and mingw in ``c:\OpenSSL-Win32``.
+
+To customize the library path and include path for openssl, set the features
+``openssl-lib`` and ``openssl-include`` respectively.
+
 Build features:
 
 +--------------------------+----------------------------------------------------+
@@ -246,6 +254,13 @@ Build features:
 |                          |   libraries.                                       |
 |                          | * ``shared`` - links dynamically against the boost |
 |                          |   libraries.                                       |
++--------------------------+----------------------------------------------------+
+| ``openssl-lib``          | can be used to specify the directory where libssl  |
+|                          | and libcrypto are installed (or the windows        |
+|                          | counterparts).                                     |
++--------------------------+----------------------------------------------------+
+| ``openssl-include``      | can be used to specify the include directory where |
+|                          | the openssl headers are installed.                 |
 +--------------------------+----------------------------------------------------+
 | ``logging``              | * ``off`` - logging alerts disabled. The           |
 |                          |   reason to disable logging is to keep the binary  |
@@ -281,9 +296,10 @@ Build features:
 | ``crypto``               | * ``built-in`` - (default) uses built-in SHA-1     |
 |                          |   implementation. In macOS/iOS it uses             |
 |                          |   CommonCrypto SHA-1 implementation.               |
-|                          | * ``openssl`` - links against openssl to enable    |
-|                          |   torrents over ssl feature.                       |
-|                          |   the option crypto=libcrypto.                     |
+|                          | * ``openssl`` - links against openssl and          |
+|                          |   libcrypto to use for SHA-1 hashing.              |
+|                          |   This also enables HTTPS-tracker support and      |
+|                          |   support for bittorrent over SSL.                 |
 |                          | * ``libcrypto`` - links against libcrypto          |
 |                          |   to use the SHA-1 implementation.                 |
 |                          | * ``gcrypt`` - links against libgcrypt             |
@@ -376,8 +392,8 @@ boost.program-options symbols.
 For more information, see the `Boost build v2 documentation`__, or more
 specifically `the section on builtin features`__.
 
-__ http://www.boost.org/tools/build/v2/index.html
-__ http://www.boost.org/doc/html/bbv2/reference.html#bbv2.advanced.builtins.features
+__ https://www.boost.org/tools/build/v2/index.html
+__ https://www.boost.org/doc/html/bbv2/reference.html#bbv2.advanced.builtins.features
 
 
 building with autotools
@@ -388,13 +404,9 @@ unix/linux systems comes with these preinstalled.
 
 The prerequisites for building libtorrent are boost.system, boost.chrono and
 boost.random. Those are the *compiled* boost libraries needed. The headers-only
-libraries needed include (but is not necessarily limited to) boost.bind,
-boost.ref, boost.multi_index, boost.optional, boost.lexical_cast, boost.integer,
-boost.iterator, boost.tuple, boost.array, boost.function, boost.smart_ptr,
-boost.preprocessor, boost.static_assert.
-
-If you want to build the ``client_test`` example, you'll also need boost.regex
-and boost.program_options.
+libraries needed include (but is not necessarily limited to)
+boost.multi_index, boost.optional, boost.multiprecision,
+boost.iterator, boost.preprocessor, boost.static_assert, boost.intrusive.
 
 Step 1: Generating the build system
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -589,7 +601,7 @@ defines you can use to control the build.
 |                                        | custom one.                                     |
 +----------------------------------------+-------------------------------------------------+
 
-.. _`BEP 38`: http://www.bittorrent.org/beps/bep_0038.html
+.. _`BEP 38`: https://www.bittorrent.org/beps/bep_0038.html
 
 If you experience that libtorrent uses unreasonable amounts of cpu, it will
 definitely help to define ``NDEBUG``, since it will remove the invariant checks

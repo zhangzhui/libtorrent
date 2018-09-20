@@ -46,6 +46,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "setup_transfer.hpp"
 #include <iostream>
 
+namespace {
+
 void test_pex()
 {
 	using namespace lt;
@@ -57,9 +59,11 @@ void test_pex()
 	session_proxy p2;
 	session_proxy p3;
 
-	auto const mask = alert::all_categories
-		& ~(alert::progress_notification
-			| alert::performance_warning
+	auto const mask = ~(
+			alert::performance_warning
+#if TORRENT_ABI_VERSION == 1
+			| alert::progress_notification
+#endif
 			| alert::stats_notification);
 
 	// this is to avoid everything finish from a single peer
@@ -75,6 +79,9 @@ void test_pex()
 	pack.set_bool(settings_pack::enable_dht, false);
 	pack.set_bool(settings_pack::enable_upnp, false);
 	pack.set_bool(settings_pack::enable_natpmp, false);
+#if TORRENT_ABI_VERSION == 1
+	pack.set_bool(settings_pack::rate_limit_utp, true);
+#endif
 
 	pack.set_int(settings_pack::out_enc_policy, settings_pack::pe_forced);
 	pack.set_int(settings_pack::in_enc_policy, settings_pack::pe_forced);
@@ -145,6 +152,7 @@ void test_pex()
 	p2 = ses2.abort();
 	p3 = ses3.abort();
 }
+} // anonymous namespace
 #endif // TORRENT_DISABLE_EXTENSIONS
 
 TORRENT_TEST(pex)

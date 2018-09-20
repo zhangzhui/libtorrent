@@ -44,15 +44,13 @@ struct session_view
 	session_view();
 
 	void set_pos(int pos);
+	void set_width(int width);
 
 	int pos() const;
 
 	int height() const;
 
 	void render();
-
-	void print_utp_stats(bool p) { m_print_utp_stats = p; }
-	bool print_utp_stats() const { return m_print_utp_stats; }
 
 	void update_counters(lt::span<std::int64_t const> stats_counters, std::uint64_t t);
 
@@ -69,14 +67,12 @@ private:
 	// respectively. The timestamps are microseconds since session start
 	std::uint64_t m_timestamp[2];
 
-	bool m_print_utp_stats;
-
 	int const m_queued_bytes_idx = lt::find_metric_idx("disk.queued_write_bytes");
 	int const m_wasted_bytes_idx = lt::find_metric_idx("net.recv_redundant_bytes");
 	int const m_failed_bytes_idx = lt::find_metric_idx("net.recv_failed_bytes");
 	int const m_num_peers_idx = lt::find_metric_idx("peer.num_peers_connected");
-	int const m_recv_payload_idx = lt::find_metric_idx("net.recv_payload_bytes");
-	int const m_sent_payload_idx = lt::find_metric_idx("net.sent_payload_bytes");
+	int const m_recv_idx = lt::find_metric_idx("net.recv_bytes");
+	int const m_sent_idx = lt::find_metric_idx("net.sent_bytes");
 	int const m_unchoked_idx = lt::find_metric_idx("peer.num_peers_up_unchoked");
 	int const m_unchoke_slots_idx = lt::find_metric_idx("ses.num_unchoke_slots");
 	int const m_limiter_up_queue_idx = lt::find_metric_idx("net.limiter_up_queue");

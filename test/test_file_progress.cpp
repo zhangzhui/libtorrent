@@ -54,10 +54,9 @@ TORRENT_TEST(init)
 	fs.set_piece_length(piece_size);
 	fs.set_num_pieces((int(fs.total_size()) + piece_size - 1) / piece_size);
 
-	for (piece_index_t idx(0); idx < fs.end_piece(); ++idx)
+	for (auto const idx : fs.piece_range())
 	{
-		piece_picker picker;
-		picker.init(4, fs.total_size() % 4, fs.num_pieces());
+		piece_picker picker(4, fs.total_size() % 4, fs.num_pieces());
 		picker.we_have(idx);
 
 		aux::file_progress fp;
@@ -66,11 +65,11 @@ TORRENT_TEST(init)
 		aux::vector<std::int64_t, file_index_t> vec;
 		fp.export_progress(vec);
 
-		std::uint64_t sum = 0;
+		std::int64_t sum = 0;
 		for (file_index_t i(0); i < vec.end_index(); ++i)
 			sum += vec[i];
 
-		TEST_EQUAL(int(sum), fs.piece_size(idx));
+		TEST_EQUAL(sum, fs.piece_size(idx));
 	}
 }
 
@@ -86,10 +85,9 @@ TORRENT_TEST(init2)
 	fs.set_piece_length(piece_size);
 	fs.set_num_pieces((int(fs.total_size()) + piece_size - 1) / piece_size);
 
-	for (piece_index_t idx(0); idx < fs.end_piece(); ++idx)
+	for (auto const idx : fs.piece_range())
 	{
-		piece_picker picker;
-		picker.init(4, fs.total_size() % 4, fs.num_pieces());
+		piece_picker picker(4, fs.total_size() % 4, fs.num_pieces());
 		picker.we_have(idx);
 
 		aux::vector<std::int64_t, file_index_t> vec;
@@ -98,11 +96,11 @@ TORRENT_TEST(init2)
 		fp.init(picker, fs);
 		fp.export_progress(vec);
 
-		std::uint64_t sum = 0;
+		std::int64_t sum = 0;
 		for (file_index_t i(0); i < vec.end_index(); ++i)
 			sum += vec[i];
 
-		TEST_EQUAL(int(sum), fs.piece_size(idx));
+		TEST_EQUAL(sum, fs.piece_size(idx));
 	}
 }
 

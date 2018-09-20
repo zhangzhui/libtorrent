@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2008-2016, Arvid Norberg
+Copyright (c) 2008-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,13 +34,16 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <cstring>
 #include <algorithm>
 #include <cstdlib>
+#include <cinttypes>
 
 #include "libtorrent/config.hpp"
 #include "libtorrent/http_parser.hpp"
+#include "libtorrent/hex.hpp" // for hex_to_int
 #include "libtorrent/assert.hpp"
 #include "libtorrent/parse_url.hpp" // for parse_url_components
 #include "libtorrent/string_util.hpp" // for ensure_trailing_slash, to_lower
 #include "libtorrent/aux_/escape_string.hpp" // for read_until
+#include "libtorrent/time.hpp" // for seconds32
 
 namespace libtorrent {
 
@@ -126,6 +129,25 @@ namespace libtorrent {
 			url += location;
 		}
 		return url;
+	}
+
+	std::string const& http_parser::header(string_view const key) const
+	{
+		static std::string const empty;
+		// TODO: remove to_string() if we're in C++14
+		auto const i = m_header.find(key.to_string());
+		if (i == m_header.end()) return empty;
+		return i->second;
+	}
+
+	boost::optional<seconds32> http_parser::header_duration(string_view const key) const
+	{
+		// TODO: remove to_string() if we're in C++14
+		auto const i = m_header.find(key.to_string());
+		if (i == m_header.end()) return boost::none;
+		auto const val = std::atol(i->second.c_str());
+		if (val <= 0) return boost::none;
+		return seconds32(val);
 	}
 
 	http_parser::~http_parser() = default;
@@ -244,7 +266,7 @@ restart_response:
 					// we're done once we reach the end of the headers
 //					if (!m_method.empty()) m_finished = true;
 					// the HTTP header should always be < 2 GB
-					TORRENT_ASSERT(m_recv_pos < (std::numeric_limits<int>::max)());
+					TORRENT_ASSERT(m_recv_pos < std::numeric_limits<int>::max());
 					m_body_start_pos = int(m_recv_pos);
 					break;
 				}
@@ -262,7 +284,8 @@ restart_response:
 				if (name == "content-length")
 				{
 					m_content_length = std::strtoll(value.c_str(), nullptr, 10);
-					if (m_content_length < 0)
+					if (m_content_length < 0
+						|| m_content_length == std::numeric_limits<std::int64_t>::max())
 					{
 						m_state = error_state;
 						error = true;
@@ -285,7 +308,8 @@ restart_response:
 					if (string_begins_no_case("bytes ", ptr)) ptr += 6;
 					char* end;
 					m_range_start = std::strtoll(ptr, &end, 10);
-					if (m_range_start < 0)
+					if (m_range_start < 0
+						|| m_range_start == std::numeric_limits<std::int64_t>::max())
 					{
 						m_state = error_state;
 						error = true;
@@ -297,7 +321,8 @@ restart_response:
 					{
 						ptr = end + 1;
 						m_range_end = std::strtoll(ptr, &end, 10);
-						if (m_range_end < 0)
+						if (m_range_end < 0
+							|| m_range_end == std::numeric_limits<std::int64_t>::max())
 						{
 							m_state = error_state;
 							error = true;
@@ -341,7 +366,7 @@ restart_response:
 					std::int64_t payload = m_cur_chunk_end - m_recv_pos;
 					if (payload > 0)
 					{
-						TORRENT_ASSERT(payload < (std::numeric_limits<int>::max)());
+						TORRENT_ASSERT(payload < std::numeric_limits<int>::max());
 						m_recv_pos += payload;
 						std::get<0>(ret) += int(payload);
 						incoming -= int(payload);
@@ -368,15 +393,13 @@ restart_response:
 						if (chunk_size == 0)
 						{
 							m_finished = true;
-							TORRENT_ASSERT(m_content_length < 0 || m_recv_pos - m_body_start_pos
-								- m_chunk_header_size == m_content_length);
 						}
 						header_size -= m_partial_chunk_header;
 						m_partial_chunk_header = 0;
-//						std::fprintf(stderr, "parse_chunk_header(%d, -> %d, -> %d) -> %d\n"
-//							"  incoming = %d\n  m_recv_pos = %d\n  m_cur_chunk_end = %d\n"
+//						std::fprintf(stderr, "parse_chunk_header(%d, -> %" PRId64 ", -> %d) -> %d\n"
+//							"  incoming = %d\n  m_recv_pos = %d\n  m_cur_chunk_end = %" PRId64 "\n"
 //							"  content-length = %d\n"
-//							, buf.size(), int(chunk_size), header_size, 1, incoming, int(m_recv_pos)
+//							, int(buf.size()), chunk_size, header_size, 1, incoming, int(m_recv_pos)
 //							, m_cur_chunk_end, int(m_content_length));
 					}
 					else
@@ -384,10 +407,10 @@ restart_response:
 						m_partial_chunk_header += incoming;
 						header_size = incoming;
 
-//						std::fprintf(stderr, "parse_chunk_header(%d, -> %d, -> %d) -> %d\n"
-//							"  incoming = %d\n  m_recv_pos = %d\n  m_cur_chunk_end = %d\n"
+//						std::fprintf(stderr, "parse_chunk_header(%d, -> %" PRId64 ", -> %d) -> %d\n"
+//							"  incoming = %d\n  m_recv_pos = %d\n  m_cur_chunk_end = %" PRId64 "\n"
 //							"  content-length = %d\n"
-//							, buf.size(), int(chunk_size), header_size, 0, incoming, int(m_recv_pos)
+//							, int(buf.size()), chunk_size, header_size, 0, incoming, int(m_recv_pos)
 //							, m_cur_chunk_end, int(m_content_length));
 					}
 					m_chunk_header_size += header_size;
@@ -409,7 +432,7 @@ restart_response:
 					&& m_content_length >= 0)
 				{
 					TORRENT_ASSERT(m_content_length - m_recv_pos + m_body_start_pos
-						< (std::numeric_limits<int>::max)());
+						< std::numeric_limits<int>::max());
 					incoming = int(m_content_length - m_recv_pos + m_body_start_pos);
 				}
 
@@ -428,6 +451,9 @@ restart_response:
 		return ret;
 	}
 
+	// this function signals error by assigning a negative value to "chunk_size"
+	// the return value indicates whether enough data is available in "buf" to
+	// completely parse the chunk header. Returning false means we need more data
 	bool http_parser::parse_chunk_header(span<char const> buf
 		, std::int64_t* chunk_size, int* header_size)
 	{
@@ -452,15 +478,36 @@ restart_response:
 		// there are extra tail headers, which is terminated by an
 		// empty line
 
+		*header_size = int(newline - buf.data());
+
 		// first, read the chunk length
-		*chunk_size = std::strtoll(pos, nullptr, 16);
-		if (*chunk_size < 0) return true;
+		std::int64_t size = 0;
+		for (char const* i = pos; i != newline; ++i)
+		{
+			if (*i == '\r') continue;
+			if (*i == '\n') continue;
+			if (*i == ';') break;
+			int const digit = aux::hex_to_int(*i);
+			if (digit < 0)
+			{
+				*chunk_size = -1;
+				return true;
+			}
+			if (size >= std::numeric_limits<std::int64_t>::max() / 16)
+			{
+				*chunk_size = -1;
+				return true;
+			}
+			size *= 16;
+			size += digit;
+		}
+		*chunk_size = size;
 
 		if (*chunk_size != 0)
 		{
-			*header_size = int(newline - buf.data());
-			// the newline alone is two bytes
-			TORRENT_ASSERT(newline - buf.data() > 2);
+			// the newline is at least 1 byte, and the length-prefix is at least 1
+			// byte
+			TORRENT_ASSERT(newline - buf.data() >= 2);
 			return true;
 		}
 

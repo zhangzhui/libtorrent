@@ -91,9 +91,9 @@ network primitives
 There are a few typedefs in the ``libtorrent`` namespace which pulls
 in network types from the ``boost::asio`` namespace. These are::
 
-	typedef boost::asio::ip::address address;
-	typedef boost::asio::ip::address_v4 address_v4;
-	typedef boost::asio::ip::address_v6 address_v6;
+	using address = boost::asio::ip::address;
+	using address_v4 = boost::asio::ip::address_v4;
+	using address_v6 = boost::asio::ip::address_v6;
 	using boost::asio::ip::tcp;
 	using boost::asio::ip::udp;
 
@@ -109,7 +109,7 @@ with an associated port.
 
 For documentation on these types, please refer to the `asio documentation`_.
 
-.. _`asio documentation`: http://asio.sourceforge.net/asio-0.3.8/doc/asio/reference.html
+.. _`asio documentation`: https://www.boost.org/doc/libs/1_66_0/doc/html/boost_asio.html
 
 exceptions
 ==========
@@ -434,6 +434,12 @@ The file format is a bencoded dictionary containing the following fields:
 | ``seeding_time``         | integer. The number of seconds this torrent has been active  |
 |                          | and seeding.                                                 |
 +--------------------------+--------------------------------------------------------------+
+| ``last_upload``          | integer. The number of seconds since epoch when we last      |
+|                          | uploaded payload to a peer on this torrent.                  |
++--------------------------+--------------------------------------------------------------+
+| ``last_download``        | integer. The number of seconds since epoch when we last      |
+|                          | downloaded payload from a peer on this torrent.              |
++--------------------------+--------------------------------------------------------------+
 | ``upload_rate_limit``    | integer. In case this torrent has a per-torrent upload rate  |
 |                          | limit, this is that limit. In bytes per second.              |
 +--------------------------+--------------------------------------------------------------+
@@ -602,8 +608,8 @@ There is limited support for HTTP redirects. In case some files are redirected
 to *different hosts*, the files must be piece aligned or padded to be piece
 aligned.
 
-.. _`BEP 17`: http://bittorrent.org/beps/bep_0017.html
-.. _`BEP 19`: http://bittorrent.org/beps/bep_0019.html
+.. _`BEP 17`: https://bittorrent.org/beps/bep_0017.html
+.. _`BEP 19`: https://bittorrent.org/beps/bep_0019.html
 
 piece picker
 ============
@@ -775,6 +781,12 @@ The default peer class IDs are defined as enums in the ``session`` class:
 		local_peer_class_id
 	};
 
+The default peer classes are automatically created on session startup, and
+configured to apply to each respective type of connection. There's nothing
+preventing a client from reconfiguring the peer class ip- and type filters
+to disable or customize which peers they apply to. See set_peer_class_filter()
+and set_peer_class_type_filter().
+
 A peer class can be considered a more general form of *lables* that some
 clients have. Peer classes however are not just applied to torrents, but
 ultimately the peers.
@@ -784,9 +796,9 @@ object), and deleted with the delete_peer_class() call.
 
 Peer classes are configured with the set_peer_class() get_peer_class() calls.
 
-Custom peer classes can be assigned to torrents, with the ??? call, in which
-case all its peers will belong to the class. They can also be assigned based on
-the peer's IP address. See set_peer_class_filter() for more information.
+Custom peer classes can be assigned based on the peer's IP address or the type
+of transport protocol used. See set_peer_class_filter() and
+set_peer_class_type_filter() for more information.
 
 peer class examples
 -------------------
@@ -802,13 +814,11 @@ based peer class assignment:
 		ip_filter f;
 
 		// for every IPv4 address, assign the global peer class
-		f.add_rule(address_v4::from_string("0.0.0.0")
-			, address_v4::from_string("255.255.255.255")
-			, mask);
+		f.add_rule(make_address("0.0.0.0"), make_address("255.255.255.255"), mask);
 
 		// for every IPv6 address, assign the global peer class
-		f.add_rule(address_v6::from_string("::")
-			, address_v6::from_string("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
+		f.add_rule(make_address("::")
+			, make_address("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
 			, mask);
 		ses.set_peer_class_filter(f);
 
@@ -816,7 +826,7 @@ To make uTP sockets exempt from rate limiting:
 
 .. code:: c++
 
-	peer_class_type_filter flt;
+	peer_class_type_filter flt = ses.get_peer_class_type_filter();
 	// filter out the global and local peer class for uTP sockets, if these
 	// classes are set by the IP filter
 	flt.disallow(peer_class_type_filter::utp_socket, session::global_peer_class_id);
@@ -836,14 +846,10 @@ To make all peers on the internal network unthrottled:
 		ip_filter f;
 
 		// for every IPv4 address, assign the global peer class
-		f.add_rule(address_v4::from_string("0.0.0.0")
-			, address_v4::from_string("255.255.255.255")
-			, mask);
+		f.add_rule(make_address("0.0.0.0"), make_address("255.255.255.255"), mask);
 
-		// for every address on the local metwork, set the mastk to 0
-		f.add_rule(address_v4::from_string("10.0.0.0")
-			, address_v4::from_string("10.255.255.255")
-			, 0);
+		// for every address on the local metwork, set the mask to 0
+		f.add_rule(make_address("10.0.0.0"), make_address("10.255.255.255"), 0);
 		ses.set_peer_class_filter(f);
 
 SSL torrents
@@ -901,7 +907,7 @@ torrents it distributes, and issue separate peer certificates for each torrent.
 A peer receiving a certificate will not necessarily be able to access all
 torrents published by this root certificate (only if it has a "star cert").
 
-.. _`RFC 2818`: http://www.ietf.org/rfc/rfc2818.txt
+.. _`RFC 2818`: https://www.ietf.org/rfc/rfc2818.txt
 
 testing
 -------

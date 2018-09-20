@@ -17,7 +17,7 @@ extern void dict_to_add_torrent_params(dict params, add_torrent_params& p);
 
 namespace {
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	torrent_handle _add_magnet_uri(lt::session& s, std::string uri, dict params)
 	{
 		add_torrent_params p;
@@ -37,11 +37,10 @@ namespace {
 	}
 #endif
 
-	dict parse_magnet_uri_wrap(std::string const& uri)
+	dict parse_magnet_uri_dict(std::string const& uri)
 	{
-		add_torrent_params p;
 		error_code ec;
-		parse_magnet_uri(uri, p, ec);
+		add_torrent_params p = parse_magnet_uri(uri, ec);
 
 		if (ec) throw system_error(ec);
 
@@ -62,12 +61,20 @@ namespace {
 		ret["name"] = p.name;
 		ret["save_path"] = p.save_path;
 		ret["storage_mode"] = p.storage_mode;
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		ret["url"] = p.url;
 		ret["uuid"] = p.uuid;
 #endif
 		ret["flags"] = p.flags;
 		return ret;
+	}
+
+	add_torrent_params parse_magnet_uri_wrap(std::string const& uri)
+	{
+		error_code ec;
+		add_torrent_params p = parse_magnet_uri(uri, ec);
+		if (ec) throw system_error(ec);
+		return p;
 	}
 
 	std::string (*make_magnet_uri0)(torrent_handle const&) = make_magnet_uri;
@@ -76,10 +83,11 @@ namespace {
 
 void bind_magnet_uri()
 {
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	def("add_magnet_uri", &_add_magnet_uri);
 #endif
 	def("make_magnet_uri", make_magnet_uri0);
 	def("make_magnet_uri", make_magnet_uri1);
 	def("parse_magnet_uri", parse_magnet_uri_wrap);
+	def("parse_magnet_uri_dict", parse_magnet_uri_dict);
 }

@@ -80,7 +80,8 @@ namespace {
 	std::shared_ptr<lt::aux::listen_socket_t> sim_listen_socket(tcp::endpoint ep)
 	{
 		auto ls = std::make_shared<lt::aux::listen_socket_t>();
-		ls->external_address.cast_vote(ep.address(), 1, lt::address());
+		ls->external_address.cast_vote(ep.address()
+			, lt::aux::session_interface::source_dht, lt::address());
 		ls->local_endpoint = ep;
 		return ls;
 	}
@@ -108,8 +109,7 @@ struct dht_node final : lt::dht::socket_manager
 		sock().bind(asio::ip::udp::endpoint(
 			m_ipv6 ? lt::address(lt::address_v6::any()) : lt::address(lt::address_v4::any()), 6881));
 
-		udp::socket::non_blocking_io ioc(true);
-		sock().io_control(ioc);
+		sock().non_blocking(true);
 		sock().async_receive_from(asio::mutable_buffers_1(m_buffer, sizeof(m_buffer))
 			, m_ep, [&](lt::error_code const& ec, std::size_t bytes_transferred)
 				{ this->on_read(ec, bytes_transferred); });
@@ -139,13 +139,13 @@ struct dht_node final : lt::dht::socket_manager
 		// since the simulation is single threaded, we can get away with just
 		// allocating a single of these
 		static bdecode_node msg;
-		int ret = bdecode(m_buffer, m_buffer + bytes_transferred, msg, err, &pos, 10, 500);
+		int const ret = bdecode(m_buffer, m_buffer + bytes_transferred, msg, err, &pos, 10, 500);
 		if (ret != 0) return;
 
 		if (msg.type() != bdecode_node::dict_t) return;
 
 		lt::dht::msg m(msg, m_ep);
-		dht().incoming(m);
+		dht().incoming(m_ls, m);
 
 		sock().async_receive_from(asio::mutable_buffers_1(m_buffer, sizeof(m_buffer))
 			, m_ep, [&](lt::error_code const& ec, std::size_t bytes_transferred)
@@ -296,7 +296,7 @@ void print_routing_table(std::vector<lt::dht_routing_bucket> const& rt)
 		std::printf("%3d [%3d, %d] %s%s\n"
 			, bucket, i->num_nodes, i->num_replacements
 			, progress_bar + (128 - i->num_nodes)
-			, short_progress_bar + (8 - (std::min)(8, i->num_replacements)));
+			, short_progress_bar + (8 - std::min(8, i->num_replacements)));
 	}
 }
 

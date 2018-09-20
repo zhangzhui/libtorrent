@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -78,7 +78,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	struct lazy_entry;
 	// backwards compatibility
 	using type_error = system_error;
@@ -190,18 +190,18 @@ namespace aux {
 
 		// copies the structure of the right hand side into this
 		// entry.
-#ifndef TORRENT_NO_DEPRECATE
-		entry& operator=(lazy_entry const&);
+#if TORRENT_ABI_VERSION == 1
+		entry& operator=(lazy_entry const&) &;
 #endif
-		entry& operator=(bdecode_node const&);
-		entry& operator=(entry const&);
-		entry& operator=(entry&&) noexcept;
-		entry& operator=(dictionary_type);
-		entry& operator=(span<char const>);
+		entry& operator=(bdecode_node const&) &;
+		entry& operator=(entry const&) &;
+		entry& operator=(entry&&) & noexcept;
+		entry& operator=(dictionary_type) &;
+		entry& operator=(span<char const>) &;
 		template <typename U, typename Cond = typename std::enable_if<
 			std::is_same<U, entry::string_type>::value
 			|| std::is_same<U, char const*>::value>::type>
-		entry& operator=(U v)
+		entry& operator=(U v) &
 		{
 			destruct();
 			new(&data) string_type(std::move(v));
@@ -211,9 +211,9 @@ namespace aux {
 #endif
 			return *this;
 		}
-		entry& operator=(list_type);
-		entry& operator=(integer_type);
-		entry& operator=(preformatted_type);
+		entry& operator=(list_type) &;
+		entry& operator=(integer_type) &;
+		entry& operator=(preformatted_type) &;
 
 		// The ``integer()``, ``string()``, ``list()`` and ``dict()`` functions
 		// are accessors that return the respective type. If the ``entry`` object
@@ -274,7 +274,7 @@ namespace aux {
 		const preformatted_type& preformatted() const;
 
 		// swaps the content of *this* with ``e``.
-		void swap(entry& e) noexcept;
+		void swap(entry& e);
 
 		// All of these functions requires the entry to be a dictionary, if it
 		// isn't they will throw ``system_error``.
@@ -301,7 +301,7 @@ namespace aux {
 
 		// returns a pretty-printed string representation
 		// of the bencoded structure, with JSON-style syntax
-		std::string to_string() const;
+		std::string to_string(bool single_line = false) const;
 
 	protected:
 
@@ -311,7 +311,7 @@ namespace aux {
 
 	private:
 
-		void to_string_impl(std::string& out, int indent) const;
+		void to_string_impl(std::string& out, int indent, bool single_line) const;
 
 		aux::aligned_union<1
 #if TORRENT_COMPLETE_TYPES_REQUIRED

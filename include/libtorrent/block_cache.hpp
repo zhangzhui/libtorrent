@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2010-2016, Arvid Norberg
+Copyright (c) 2010-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -38,6 +38,10 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <vector>
 #include <unordered_set>
 #include <array>
+
+#include "libtorrent/aux_/disable_warnings_push.hpp"
+#include <boost/intrusive/list.hpp>
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
 
 #include "libtorrent/time.hpp"
 #include "libtorrent/error_code.hpp"
@@ -119,15 +123,14 @@ namespace aux {
 	struct cached_block_entry
 	{
 		cached_block_entry()
-			: buf(0)
-			, refcount(0)
+			: refcount(0)
 			, dirty(0)
 			, pending(0)
 			, cache_hit(0)
 		{
 		}
 
-		char* buf;
+		char* buf = nullptr;
 
 		static constexpr int max_refcount = (1 << 29) - 1;
 
@@ -170,19 +173,22 @@ namespace aux {
 
 	// list_node is here to be able to link this cache entry
 	// into one of the LRU lists
-	struct TORRENT_EXTRA_EXPORT cached_piece_entry : list_node<cached_piece_entry>
+	struct TORRENT_EXTRA_EXPORT cached_piece_entry
+		: list_node<cached_piece_entry>
+		, boost::intrusive::list_base_hook<boost::intrusive::link_mode<
+			boost::intrusive::auto_unlink>>
 	{
 		cached_piece_entry();
 		~cached_piece_entry();
-		cached_piece_entry(cached_piece_entry&&) noexcept = default;
-		cached_piece_entry& operator=(cached_piece_entry&&) noexcept = default;
+		cached_piece_entry(cached_piece_entry&&) = default;
+		cached_piece_entry& operator=(cached_piece_entry&&) = default;
 
 		bool ok_to_evict(bool ignore_hash = false) const
 		{
 			return refcount == 0
 				&& piece_refcount == 0
 				&& !hashing
-				&& read_jobs.size() == 0
+				&& read_jobs.empty()
 				&& outstanding_read == 0
 				&& (ignore_hash || !hash || hash->offset == 0);
 		}
@@ -218,7 +224,7 @@ namespace aux {
 		//TODO: make this 32 bits and to count seconds since the block cache was created
 		time_point expire = min_time();
 
-		piece_index_t piece;
+		piece_index_t piece{0};
 
 		// the number of dirty blocks in this piece
 		std::uint64_t num_dirty:14;
@@ -337,8 +343,7 @@ namespace aux {
 
 	struct TORRENT_EXTRA_EXPORT block_cache : disk_buffer_pool
 	{
-		block_cache(int block_size, io_service& ios
-			, std::function<void()> const& trigger_trim);
+		block_cache(io_service& ios, std::function<void()> const& trigger_trim);
 
 	private:
 
@@ -437,7 +442,8 @@ namespace aux {
 		// used to convert dirty blocks into non-dirty ones
 		// i.e. from being part of the write cache to being part
 		// of the read cache. it's used when flushing blocks to disk
-		void blocks_flushed(cached_piece_entry* pe, int const* flushed, int num_flushed);
+		// returns true if the piece entry was freed
+		bool blocks_flushed(cached_piece_entry* pe, int const* flushed, int num_flushed);
 
 		// adds a block to the cache, marks it as dirty and
 		// associates the job with it. When the block is
@@ -465,7 +471,7 @@ namespace aux {
 		void clear(tailqueue<disk_io_job>& jobs);
 
 		void update_stats_counters(counters& c) const;
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		void get_stats(cache_status* ret) const;
 #endif
 		void set_settings(aux::session_settings const& sett);

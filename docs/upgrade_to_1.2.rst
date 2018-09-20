@@ -50,6 +50,15 @@ The flags ``flag_override_resume_data``, ``flag_merge_resume_trackers``, ``flag_
 The old API is still supported as long as libtorrent is built with deprecated functions enabled (which is the default).
 It will be performing slightly better without deprecated functions present.
 
+rate_limit_utp changed defaults
+===============================
+
+The setting ``rate_limit_utp`` was deprecated in libtorrent 1.1.
+When building without deprecated features (``deprecated-functions=off``) the default behavior also changed to have rate limits apply to utp sockets too.
+In order to be more consistent between the two build configurations, the default value has changed to true.
+The new mechanism provided to apply special rate limiting rules is *peer classes*.
+In order to implement the old behavior of not rate limiting uTP peers, one cans set up a peer class for all uTP peers, to make the normal peer classes not apply to them (which is where the rate limits are set).
+
 announce entry multi-home support
 =================================
 
@@ -63,6 +72,17 @@ As part of the transition to a more efficient handling of alerts, 1.1 allocated 
 This means they are no longer heap allocated nor held by a smart pointer.
 The ``clone()`` member on alerts was deprecated in 1.1 and removed in 1.2.
 To pass alerts across threads, instead pull out the relevant information from the alerts and pass that across.
+
+progress alert category
+=======================
+
+The ``alert::progress_notification`` category has been deprecated.
+Alerts posted in this category are now also posted in one of these new categories:
+
+* ``alert::block_progress_notification``
+* ``alert::piece_progress_notification``
+* ``alert::file_progress_notification``
+* ``alert::upload_notification``
 
 boost replaced by std
 =====================
@@ -120,7 +140,7 @@ plugins
 =======
 
 libtorrent session plugins no longer have all callbacks called unconditionally.
-The callback has to register which callbacks it's interested in receiving by returning a bitmask from ``std::uint32_t implemented_features()``.
+The callback has to register which callbacks it's interested in receiving by returning a bitmask from ``feature_flags_t implemented_features()``.
 The return value is documented in the plugin class.
 
 RSS functions removed

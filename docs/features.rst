@@ -51,6 +51,8 @@ extensions
   scale well with the size of the content.
 * share-mode. This is a special mode torrents can be put in to optimize share
   ratio rather than downloading the torrent.
+* supports the Magnet URI extension - Select specific file indices for
+  download. `BEP 53`_.
 
 .. _article: utp.html
 .. _extensions: manual-ref.html#extensions
@@ -107,19 +109,20 @@ network
 
 
 .. _`DHT extensions`: dht_extensions.html
-.. _`BEP 5`: http://bittorrent.org/beps/bep_0005.html
-.. _`BEP 7`: http://bittorrent.org/beps/bep_0007.html
-.. _`BEP 9`: http://bittorrent.org/beps/bep_0009.html
-.. _`BEP 10`: http://bittorrent.org/beps/bep_0010.html
-.. _`BEP 12`: http://bittorrent.org/beps/bep_0012.html
-.. _`BEP 15`: http://bittorrent.org/beps/bep_0015.html
-.. _`BEP 16`: http://bittorrent.org/beps/bep_0016.html
-.. _`BEP 17`: http://bittorrent.org/beps/bep_0017.html
-.. _`BEP 19`: http://bittorrent.org/beps/bep_0019.html
-.. _`BEP 21`: http://bittorrent.org/beps/bep_0021.html
-.. _`BEP 24`: http://bittorrent.org/beps/bep_0024.html
-.. _`BEP 27`: http://bittorrent.org/beps/bep_0027.html
-.. _`BEP 29`: http://bittorrent.org/beps/bep_0029.html
+.. _`BEP 5`: https://bittorrent.org/beps/bep_0005.html
+.. _`BEP 7`: https://bittorrent.org/beps/bep_0007.html
+.. _`BEP 9`: https://bittorrent.org/beps/bep_0009.html
+.. _`BEP 10`: https://bittorrent.org/beps/bep_0010.html
+.. _`BEP 12`: https://bittorrent.org/beps/bep_0012.html
+.. _`BEP 15`: https://bittorrent.org/beps/bep_0015.html
+.. _`BEP 16`: https://bittorrent.org/beps/bep_0016.html
+.. _`BEP 17`: https://bittorrent.org/beps/bep_0017.html
+.. _`BEP 19`: https://bittorrent.org/beps/bep_0019.html
+.. _`BEP 21`: https://bittorrent.org/beps/bep_0021.html
+.. _`BEP 24`: https://bittorrent.org/beps/bep_0024.html
+.. _`BEP 27`: https://bittorrent.org/beps/bep_0027.html
+.. _`BEP 29`: https://bittorrent.org/beps/bep_0029.html
+.. _`BEP 53`: https://bittorrent.org/beps/bep_0053.html
 .. _`extension protocol`: extension_protocol.html
 
 highlighted features
@@ -290,11 +293,8 @@ code to implement a simple bittorrent client::
 	// usage a.out [torrent-file]
 	int main(int argc, char* argv[]) try
 	{
-		using namespace libtorrent;
-
-		session s;
-		s.listen_on(std::make_pair(6881, 6889));
-		add_torrent_params p;
+		lt::session s;
+		lt::add_torrent_params p;
 		p.save_path = "./";
 		p.ti = new torrent_info(argv[1]);
 		s.add_torrent(p);
@@ -322,10 +322,11 @@ portability
 
 libtorrent runs on most major operating systems, including Windows,
 MacOS X, Linux, BSD and Solaris.
-It uses Boost.Thread, Boost.Filesystem, Boost.Date_time and various other
-boost libraries. At least version 1.46.1 of boost is required.
+It uses Boost.Asio, Boost.Optional, Boost.System, Boost.Multiprecision,
+Boost.Intrusive, Boost.Pool, Boost.Python (for bindings), Boost.CRC and various
+other boost libraries. At least version 1.49 of boost is required.
 
-libtorrent uses asio, hence it will take full advantage of high performance
+Since libtorrent uses Boost.Asio it will take full advantage of high performance
 network APIs on the most popular platforms. I/O completion ports on windows,
 epoll on linux and kqueue on MacOS X and BSD.
 

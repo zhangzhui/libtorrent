@@ -43,7 +43,7 @@ namespace libtorrent { namespace dht {
 class get_item : public find_data
 {
 public:
-	typedef std::function<void(item const&, bool)> data_callback;
+	using data_callback = std::function<void(item const&, bool)>;
 
 	void got_data(bdecode_node const& v,
 		public_key const& pk,
@@ -80,9 +80,9 @@ class get_item_observer : public find_data_observer
 {
 public:
 	get_item_observer(
-		std::shared_ptr<traversal_algorithm> const& algorithm
+		std::shared_ptr<traversal_algorithm> algorithm
 		, udp::endpoint const& ep, node_id const& id)
-		: find_data_observer(algorithm, ep, id)
+		: find_data_observer(std::move(algorithm), ep, id)
 	{}
 
 	void reply(msg const&) override;

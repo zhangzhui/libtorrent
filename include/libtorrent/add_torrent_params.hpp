@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2009-2016, Arvid Norberg
+Copyright (c) 2009-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -47,6 +47,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/units.hpp"
 #include "libtorrent/torrent_flags.hpp"
+#include "libtorrent/download_priority.hpp"
 #include "libtorrent/aux_/noexcept_movable.hpp"
 
 namespace libtorrent {
@@ -54,6 +55,8 @@ namespace libtorrent {
 	class torrent_info;
 	struct torrent_plugin;
 	struct torrent_handle;
+
+TORRENT_VERSION_NAMESPACE_2
 
 	// The add_torrent_params is a parameter pack for adding torrents to a
 	// session. The key fields when adding a torrent are:
@@ -88,14 +91,13 @@ namespace libtorrent {
 		// data for the torrent. For more information, see the ``storage`` field.
 		explicit add_torrent_params(storage_constructor_type sc = default_storage_constructor);
 		add_torrent_params(add_torrent_params&&) noexcept;
-		// TODO: GCC did not make std::string nothrow move-assignable
-		add_torrent_params& operator=(add_torrent_params&&);
+		add_torrent_params& operator=(add_torrent_params&&) = default;
 		add_torrent_params(add_torrent_params const&);
 		add_torrent_params& operator=(add_torrent_params const&);
 
 		// These are all deprecated. use torrent_flags_t instead (in
 		// libtorrent/torrent_flags.hpp)
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 
 		using flags_t = torrent_flags_t;
 
@@ -123,7 +125,7 @@ namespace libtorrent {
 			DECL_FLAG(merge_resume_http_seeds);
 			DECL_FLAG(default_flags);
 #undef DECL_FLAG
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
 
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
@@ -173,11 +175,7 @@ namespace libtorrent {
 		// or encrypt the content on disk for instance. For more information
 		// about the storage_interface that needs to be implemented for a custom
 		// storage, see storage_interface.
-#ifdef __clang__
-		storage_constructor_type storage;
-#else
 		aux::noexcept_movable<storage_constructor_type> storage;
-#endif
 
 		// The ``userdata`` parameter is optional and will be passed on to the
 		// extension constructor functions, if any
@@ -189,7 +187,7 @@ namespace libtorrent {
 		// ``torrent_handle::prioritize_files()``. The file priorities specified
 		// in here take precedence over those specified in the resume data, if
 		// any.
-		aux::noexcept_movable<std::vector<std::uint8_t>> file_priorities;
+		aux::noexcept_movable<std::vector<download_priority_t>> file_priorities;
 
 		// torrent extension construction functions can be added to this vector
 		// to have them be added immediately when the torrent is constructed.
@@ -320,7 +318,7 @@ namespace libtorrent {
 		// element in the vector represent the piece with the same index. If you
 		// set both file- and piece priorities, file priorities will take
 		// precedence.
-		aux::noexcept_movable<std::vector<std::uint8_t>> piece_priorities;
+		aux::noexcept_movable<std::vector<download_priority_t>> piece_priorities;
 
 		// if this is a merkle tree torrent, and you're seeding, this field must
 		// be set. It is all the hashes in the binary tree, with the root as the
@@ -331,7 +329,10 @@ namespace libtorrent {
 		// applied before the torrent is added.
 		aux::noexcept_movable<std::map<file_index_t, std::string>> renamed_files;
 
-#ifndef TORRENT_NO_DEPRECATE
+		std::time_t last_download = 0;
+		std::time_t last_upload = 0;
+
+#if TORRENT_ABI_VERSION == 1
 		// deprecated in 1.2
 
 		// ``url`` can be set to a magnet link, in order to download the .torrent
@@ -366,17 +367,11 @@ namespace libtorrent {
 		// communicated forward into libtorrent via this field. If this is set, a
 		// fastresume_rejected_alert will be posted.
 		error_code internal_resume_data_error;
-#else
-		// hidden
-		// to maintain ABI compatibility
-		std::string deprecated5;
-		std::string deprecated1;
-		std::string deprecated2;
-		aux::noexcept_movable<std::vector<char>> deprecated3;
-		error_code deprecated4;
-#endif
+#endif // TORRENT_ABI_VERSION
 
 	};
+
+TORRENT_VERSION_NAMESPACE_2_END
 }
 
 #endif

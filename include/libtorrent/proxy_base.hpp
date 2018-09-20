@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2016, Arvid Norberg
+Copyright (c) 2007-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -47,10 +47,10 @@ public:
 
 	using handler_type = std::function<void(error_code const&)>;
 
-	typedef tcp::socket next_layer_type;
-	typedef tcp::socket::lowest_layer_type lowest_layer_type;
-	typedef tcp::socket::endpoint_type endpoint_type;
-	typedef tcp::socket::protocol_type protocol_type;
+	using next_layer_type = tcp::socket;
+	using lowest_layer_type = tcp::socket::lowest_layer_type;
+	using endpoint_type = tcp::socket::endpoint_type;
+	using protocol_type = tcp::socket::protocol_type;
 
 	explicit proxy_base(io_service& io_service);
 	~proxy_base();
@@ -62,6 +62,11 @@ public:
 		m_hostname = hostname;
 		m_port = port;
 	}
+
+#if BOOST_VERSION >= 106600
+	using executor_type = tcp::socket::executor_type;
+	executor_type get_executor() { return m_sock.get_executor(); }
+#endif
 
 	template <class Mutable_Buffers, class Handler>
 	void async_read_some(Mutable_Buffers const& buffers, Handler const& handler)
@@ -117,6 +122,18 @@ public:
 	void async_write_some(Const_Buffers const& buffers, Handler const& handler)
 	{
 		m_sock.async_write_some(buffers, handler);
+	}
+
+#ifndef BOOST_NO_EXCEPTIONS
+	void non_blocking(bool b)
+	{
+		m_sock.non_blocking(b);
+	}
+#endif
+
+	error_code non_blocking(bool b, error_code& ec)
+	{
+		return m_sock.non_blocking(b, ec);
 	}
 
 #ifndef BOOST_NO_EXCEPTIONS

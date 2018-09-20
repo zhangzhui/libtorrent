@@ -30,8 +30,6 @@ POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#ifndef TORRENT_DISABLE_DHT
-
 #include "libtorrent/config.hpp"
 #include "libtorrent/session.hpp"
 #include "libtorrent/kademlia/dht_settings.hpp"
@@ -53,6 +51,8 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "test.hpp"
 #include "setup_transfer.hpp"
+
+#ifndef TORRENT_DISABLE_DHT
 
 using namespace lt;
 using namespace lt::dht;
@@ -123,7 +123,6 @@ TORRENT_TEST(announce_peer)
 	TEST_CHECK(!peers.find_key("values"));
 }
 
-#if TORRENT_USE_IPV6
 TORRENT_TEST(dual_stack)
 {
 	dht::dht_settings sett = test_settings();
@@ -149,7 +148,6 @@ TORRENT_TEST(dual_stack)
 	s->get_peers(n1, false, false, address_v6(), peers6);
 	TEST_EQUAL(peers6["values"].list().size(), 2);
 }
-#endif
 
 TORRENT_TEST(put_items)
 {
@@ -185,11 +183,6 @@ TORRENT_TEST(counters)
 {
 	dht::dht_settings sett = test_settings();
 	std::unique_ptr<dht_storage_interface> s(create_default_dht_storage(sett));
-
-	sha1_hash const n1 = to_hash("5fbfbff10c5d6a4ec8a88e4c6ab4c28b95eee401");
-	sha1_hash const n2 = to_hash("5fbfbff10c5d6a4ec8a88e4c6ab4c28b95eee402");
-	sha1_hash const n3 = to_hash("5fbfbff10c5d6a4ec8a88e4c6ab4c28b95eee403");
-	sha1_hash const n4 = to_hash("5fbfbff10c5d6a4ec8a88e4c6ab4c28b95eee404");
 
 	TEST_EQUAL(s->counters().peers, 0);
 	TEST_EQUAL(s->counters().torrents, 0);
@@ -279,7 +272,7 @@ TORRENT_TEST(peer_limit)
 
 	for (int i = 0; i < 200; ++i)
 	{
-		s->announce_peer(n1, tcp::endpoint(rand_v4(), lt::random(0xffff))
+		s->announce_peer(n1, {rand_v4(), std::uint16_t(lt::random(0xffff))}
 			, "torrent_name", false);
 		dht_storage_counters cnt = s->counters();
 		TEST_CHECK(cnt.peers <= 42);
@@ -296,7 +289,7 @@ TORRENT_TEST(torrent_limit)
 
 	for (int i = 0; i < 200; ++i)
 	{
-		s->announce_peer(rand_hash(), tcp::endpoint(rand_v4(), lt::random(0xffff))
+		s->announce_peer(rand_hash(), {rand_v4(), std::uint16_t(lt::random(0xffff))}
 			, "", false);
 		dht_storage_counters cnt = s->counters();
 		TEST_CHECK(cnt.torrents <= 42);
@@ -395,14 +388,14 @@ TORRENT_TEST(update_node_ids)
 	std::unique_ptr<dht_storage_interface> s(dht_default_storage_constructor(sett));
 	TEST_CHECK(s != nullptr);
 
-	node_id const n1 = to_hash("0000000000000000000000000000000000000200");
-	node_id const n2 = to_hash("0000000000000000000000000000000000000400");
-	node_id const n3 = to_hash("0000000000000000000000000000000000000800");
+	node_id const nid1 = to_hash("0000000000000000000000000000000000000200");
+	node_id const nid2 = to_hash("0000000000000000000000000000000000000400");
+	node_id const nid3 = to_hash("0000000000000000000000000000000000000800");
 
 	std::vector<node_id> node_ids;
-	node_ids.push_back(n1);
-	node_ids.push_back(n2);
-	node_ids.push_back(n3);
+	node_ids.push_back(nid1);
+	node_ids.push_back(nid2);
+	node_ids.push_back(nid3);
 	s->update_node_ids(node_ids);
 
 	entry item;
@@ -510,5 +503,6 @@ TORRENT_TEST(infohashes_sample_dist)
 	std::printf("infohashes set size: %d\n", int(infohash_set.size()));
 	TEST_CHECK(infohash_set.size() > 500);
 }
-
+#else
+TORRENT_TEST(dummy) {}
 #endif

@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -59,7 +59,7 @@ namespace libtorrent {
 	void peer_class_set::remove_class(peer_class_pool& pool, peer_class_t const c)
 	{
 		auto const i = std::find(m_class.begin(), m_class.begin() + m_size, c);
-		int idx = int(i - m_class.begin());
+		int const idx = int(i - m_class.begin());
 		if (idx == m_size) return; // not found
 		if (idx < m_size - 1)
 		{

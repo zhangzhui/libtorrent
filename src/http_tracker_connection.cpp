@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -31,9 +31,9 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "libtorrent/config.hpp"
-#include "libtorrent/gzip.hpp"
 #include "libtorrent/socket_io.hpp"
 
+#include <string>
 #include <functional>
 #include <vector>
 #include <list>
@@ -45,18 +45,13 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/tracker_manager.hpp"
 #include "libtorrent/http_tracker_connection.hpp"
 #include "libtorrent/http_connection.hpp"
-#include "libtorrent/entry.hpp"
-#include "libtorrent/bencode.hpp"
-#include "libtorrent/torrent.hpp"
+#include "libtorrent/aux_/escape_string.hpp"
 #include "libtorrent/io.hpp"
 #include "libtorrent/socket.hpp"
-#include "libtorrent/broadcast_socket.hpp" // for is_local
 #include "libtorrent/string_util.hpp" // for is_i2p_url
 #include "libtorrent/aux_/session_settings.hpp"
 #include "libtorrent/resolver_interface.hpp"
 #include "libtorrent/ip_filter.hpp"
-
-using namespace std::placeholders;
 
 namespace libtorrent {
 
@@ -65,10 +60,7 @@ namespace libtorrent {
 		, tracker_manager& man
 		, tracker_request const& req
 		, std::weak_ptr<request_callback> c)
-		: tracker_connection(man, req, ios, c)
-#if TORRENT_USE_I2P
-		, m_i2p_conn(nullptr)
-#endif
+		: tracker_connection(man, req, ios, std::move(c))
 	{}
 
 	void http_tracker_connection::start()
@@ -90,7 +82,7 @@ namespace libtorrent {
 		}
 
 #if TORRENT_USE_I2P
-		bool i2p = is_i2p_url(url);
+		bool const i2p = is_i2p_url(url);
 #else
 		static const bool i2p = false;
 #endif
@@ -139,7 +131,7 @@ namespace libtorrent {
 				, (tracker_req().event != tracker_request::none) ? event_string[tracker_req().event - 1] : ""
 				, tracker_req().num_want);
 			url += str;
-#if !defined(TORRENT_DISABLE_ENCRYPTION) && !defined(TORRENT_DISABLE_EXTENSIONS)
+#if !defined TORRENT_DISABLE_ENCRYPTION
 			if (settings.get_int(settings_pack::in_enc_policy) != settings_pack::pe_disabled
 				&& settings.get_bool(settings_pack::announce_crypto_support))
 				url += "&supportcrypto=1";
@@ -160,7 +152,7 @@ namespace libtorrent {
 			{
 				if (tracker_req().i2pconn->local_endpoint().empty())
 				{
-					fail(errors::no_i2p_endpoint, -1, "Waiting for i2p acceptor from SAM bridge", seconds32(5));
+					fail(errors::no_i2p_endpoint, "Waiting for i2p acceptor from SAM bridge", seconds32(5));
 					return;
 				}
 				else
@@ -180,7 +172,6 @@ namespace libtorrent {
 			}
 		}
 
-#if TORRENT_USE_IPV6
 		if (!tracker_req().ipv6.empty() && !i2p)
 		{
 			for (auto const& v6 : tracker_req().ipv6)
@@ -192,14 +183,14 @@ namespace libtorrent {
 				url += escape_string(ip);
 			}
 		}
-#endif
 
 		if (!tracker_req().outgoing_socket)
 		{
-			fail(errors::invalid_listen_socket, -1, "outgoing socket was closed");
+			fail(errors::invalid_listen_socket, "outgoing socket was closed");
 			return;
 		}
 
+		using namespace std::placeholders;
 		m_tracker_connection = std::make_shared<http_connection>(get_io_service(), m_man.host_resolver()
 			, std::bind(&http_tracker_connection::on_response, shared_from_this(), _1, _2, _3)
 			, true, settings.get_int(settings_pack::max_http_recv_buffer_size)
@@ -232,7 +223,7 @@ namespace libtorrent {
 			, (tracker_req().event == tracker_request::stopped
 				? resolver_interface::cache_only : resolver_flags{})
 				| resolver_interface::abort_on_shutdown
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 			, tracker_req().auth
 #else
 			, ""
@@ -321,13 +312,13 @@ namespace libtorrent {
 		if (parser.status_code() != 200)
 		{
 			fail(error_code(parser.status_code(), http_category())
-				, parser.status_code(), parser.message().c_str());
+				, parser.message().c_str());
 			return;
 		}
 
 		if (ec && ec != boost::asio::error::eof)
 		{
-			fail(ec, parser.status_code());
+			fail(ec);
 			return;
 		}
 
@@ -351,7 +342,7 @@ namespace libtorrent {
 
 		if (ecode)
 		{
-			fail(ecode, parser.status_code(), resp.failure_reason.c_str()
+			fail(ecode, resp.failure_reason.c_str()
 				, resp.interval, resp.min_interval);
 			close();
 			return;
@@ -397,7 +388,7 @@ namespace libtorrent {
 		else
 		{
 			// if there's no peer_id, just initialize it to a bunch of zeroes
-			std::fill_n(ret.pid.begin(), 20, 0);
+			ret.pid.clear();
 		}
 
 		// extract ip
@@ -438,11 +429,8 @@ namespace libtorrent {
 		}
 
 		// if no interval is specified, default to 30 minutes
-		seconds32 interval(e.dict_find_int_value("interval", 1800));
-		seconds32 const min_interval(e.dict_find_int_value("min interval", 30));
-
-		resp.interval = interval;
-		resp.min_interval = min_interval;
+		resp.interval = seconds32{e.dict_find_int_value("interval", 1800)};
+		resp.min_interval = seconds32{e.dict_find_int_value("min interval", 30)};
 
 		bdecode_node const tracker_id = e.dict_find_string("tracker id");
 		if (tracker_id)
@@ -550,7 +538,6 @@ namespace libtorrent {
 			peers_ent.clear();
 		}
 
-#if TORRENT_USE_IPV6
 		bdecode_node ipv6_peers = e.dict_find_string("peers6");
 		if (ipv6_peers)
 		{
@@ -571,9 +558,6 @@ namespace libtorrent {
 		{
 			ipv6_peers.clear();
 		}
-#else
-		bdecode_node ipv6_peers;
-#endif
 /*
 		// if we didn't receive any peers. We don't care if we're stopping anyway
 		if (peers_ent == 0 && ipv6_peers == 0
@@ -589,10 +573,8 @@ namespace libtorrent {
 			char const* p = ip_ent.string_ptr();
 			if (ip_ent.string_length() == std::tuple_size<address_v4::bytes_type>::value)
 				resp.external_ip = detail::read_v4_address(p);
-#if TORRENT_USE_IPV6
 			else if (ip_ent.string_length() == std::tuple_size<address_v6::bytes_type>::value)
 				resp.external_ip = detail::read_v6_address(p);
-#endif
 		}
 
 		return resp;

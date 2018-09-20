@@ -33,13 +33,15 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "test.hpp"
 #include "libtorrent/http_parser.hpp"
 #include "libtorrent/parse_url.hpp"
+#include "libtorrent/string_view.hpp"
 
 #include <tuple>
 
 using namespace lt;
 
-// TODO: 3 use span here instead of zero-terminated string
-std::tuple<int, int, bool> feed_bytes(http_parser& parser, char const* str)
+namespace {
+
+std::tuple<int, int, bool> feed_bytes(http_parser& parser, string_view str)
 {
 	std::tuple<int, int, bool> ret(0, 0, false);
 	std::tuple<int, int, bool> prev(0, 0, false);
@@ -47,12 +49,12 @@ std::tuple<int, int, bool> feed_bytes(http_parser& parser, char const* str)
 	{
 		ret = std::make_tuple(0, 0, false);
 		parser.reset();
-		span<char const> recv_buf(str, 0);
+		string_view recv_buf;
 		for (;;)
 		{
-			int chunk_size = std::min(chunks, int(strlen(recv_buf.end())));
+			int const chunk_size = std::min(chunks, int(str.size() - recv_buf.size()));
 			if (chunk_size == 0) break;
-			recv_buf = span<char const>(recv_buf.data(), recv_buf.size() + chunk_size);
+			recv_buf = str.substr(0, recv_buf.size() + std::size_t(chunk_size));
 			int payload, protocol;
 			bool error = false;
 			std::tie(payload, protocol) = parser.incoming(recv_buf, error);
@@ -64,13 +66,15 @@ std::tuple<int, int, bool> feed_bytes(http_parser& parser, char const* str)
 		TEST_CHECK(prev == std::make_tuple(0, 0, false) || ret == prev || std::get<2>(ret));
 		if (!std::get<2>(ret))
 		{
-			TEST_EQUAL(std::get<0>(ret) + std::get<1>(ret), int(strlen(str)));
+			TEST_EQUAL(std::get<0>(ret) + std::get<1>(ret), int(str.size()));
 		}
 
 		prev = ret;
 	}
 	return ret;
 }
+
+} // anonymous namespace
 
 TORRENT_TEST(http_parser)
 {
@@ -91,12 +95,14 @@ TORRENT_TEST(http_parser)
 	TEST_CHECK(std::equal(body.begin(), body.end(), "test"));
 	TEST_CHECK(parser.header("content-type") == "text/plain");
 	TEST_CHECK(atoi(parser.header("content-length").c_str()) == 4);
+	TEST_CHECK(*parser.header_duration("content-length") == lt::seconds32(4));
+	TEST_CHECK(parser.header_duration("content-length-x") == boost::none);
 
 	parser.reset();
 
 	TEST_CHECK(!parser.finished());
 
-	char const* upnp_response =
+	char const upnp_response[] =
 		"HTTP/1.1 200 OK\r\n"
 		"ST:upnp:rootdevice\r\n"
 		"USN:uuid:000f-66d6-7296000099dc::upnp:rootdevice\r\n"
@@ -122,7 +128,7 @@ TORRENT_TEST(http_parser)
 
 	TEST_CHECK(!parser.finished());
 
-	char const* http1_response =
+	char const http1_response[] =
 		"HTTP/1.0 200 OK\r\n"
 		"Cache-Control: max-age=180\r\n"
 		"DATE: Fri, 02 Jan 1970 08:10:38 GMT\r\n\r\n";
@@ -138,7 +144,7 @@ TORRENT_TEST(http_parser)
 
 	TEST_CHECK(!parser.finished());
 
-	char const* close_response =
+	char const close_response[] =
 		"HTTP/1.1 200 OK\r\n"
 		"Connection: close\r\n"
 		"DATE: Fri, 02 Jan 1970 08:10:38 GMT\r\n\r\n";
@@ -154,7 +160,7 @@ TORRENT_TEST(http_parser)
 
 	TEST_CHECK(!parser.finished());
 
-	char const* keep_alive_response =
+	char const keep_alive_response[] =
 		"HTTP/1.1 200 OK\r\n"
 		"Connection: keep-alive\r\n"
 		"DATE: Fri, 02 Jan 1970 08:10:38 GMT\r\n\r\n";
@@ -169,7 +175,7 @@ TORRENT_TEST(http_parser)
 	parser.reset();
 	TEST_CHECK(!parser.finished());
 
-	char const* upnp_notify =
+	char const upnp_notify[] =
 		"NOTIFY * HTTP/1.1\r\n"
 		"Host:239.255.255.250:1900\r\n"
 		"NT:urn:schemas-upnp-org:device:MediaServer:1\r\n"
@@ -189,7 +195,7 @@ TORRENT_TEST(http_parser)
 	parser.reset();
 	TEST_CHECK(!parser.finished());
 
-	char const* bt_lsd = "BT-SEARCH * HTTP/1.1\r\n"
+	char const bt_lsd[] = "BT-SEARCH * HTTP/1.1\r\n"
 		"Host: 239.192.152.143:6771\r\n"
 		"Port: 6881\r\n"
 		"Infohash: 12345678901234567890\r\n"
@@ -209,7 +215,7 @@ TORRENT_TEST(http_parser)
 	TEST_CHECK(!parser.finished());
 
 	// test chunked encoding
-	char const* chunked_test = "HTTP/1.1 200 OK\r\n"
+	char const chunked_test[] = "HTTP/1.1 200 OK\r\n"
 		"Content-Length: 20\r\n"
 		"Content-Type: text/plain\r\n"
 		"Transfer-Encoding: chunked\r\n"
@@ -233,14 +239,14 @@ TORRENT_TEST(http_parser)
 	TEST_CHECK(parser.header("content-type") == "text/plain");
 	TEST_CHECK(atoi(parser.header("content-length").c_str()) == 20);
 	TEST_CHECK(parser.chunked_encoding());
-	typedef std::pair<std::int64_t, std::int64_t> chunk_range;
+	using chunk_range = std::pair<std::int64_t, std::int64_t>;
 	std::vector<chunk_range> cmp;
 	cmp.push_back(chunk_range(96, 100));
 	cmp.push_back(chunk_range(106, 122));
 	TEST_CHECK(cmp == parser.chunks());
 
 	// make sure we support trackers with incorrect line endings
-	char const* tracker_response =
+	char const tracker_response[] =
 		"HTTP/1.1 200 OK\n"
 		"content-length: 5\n"
 		"content-type: test/plain\n"
@@ -256,7 +262,7 @@ TORRENT_TEST(http_parser)
 
 	// make sure we support content-range responses
 	// and that we're case insensitive
-	char const* web_seed_response =
+	char const web_seed_response[] =
 		"HTTP/1.1 206 OK\n"
 		"contEnt-rAngE: bYTes 0-4\n"
 		"conTent-TyPe: test/plain\n"
@@ -272,7 +278,7 @@ TORRENT_TEST(http_parser)
 	parser.reset();
 
 	// test invalid content range
-	char const* invalid_range_response =
+	char const invalid_range_response[] =
 		"HTTP/1.1 206 OK\n"
 		"content-range: bytes 4-0\n"
 		"content-type: test/plain\n"
@@ -286,7 +292,7 @@ TORRENT_TEST(http_parser)
 	parser.reset();
 
 	// test invalid status line
-	char const* invalid_status_response =
+	char const invalid_status_response[] =
 		"HTTP/1.1 206\n"
 		"content-range: bytes 4-0\n"
 		"content-type: test/plain\n"
@@ -300,7 +306,7 @@ TORRENT_TEST(http_parser)
 	parser.reset();
 
 	// test invalid status line 2
-	char const* invalid_status_response2 =
+	char const invalid_status_response2[] =
 		"HTTP/1.1\n"
 		"content-range: bytes 4-0\n"
 		"content-type: test/plain\n"
@@ -315,7 +321,7 @@ TORRENT_TEST(http_parser)
 
 	// make sure we support content-range responses
 	// and that we're case insensitive
-	char const* one_hundred_response =
+	char const one_hundred_response[] =
 		"HTTP/1.1 100 Continue\n"
 		"\r\n"
 		"HTTP/1.1 200 OK\n"
@@ -499,7 +505,7 @@ TORRENT_TEST(http_parser)
 
 TORRENT_TEST(chunked_encoding)
 {
-	char const* chunked_input =
+	char const chunked_input[] =
 		"HTTP/1.1 200 OK\r\n"
 		"Transfer-Encoding: chunked\r\n"
 		"Content-Type: text/plain\r\n"
@@ -525,7 +531,7 @@ TORRENT_TEST(chunked_encoding)
 
 TORRENT_TEST(invalid_content_length)
 {
-	char const* chunked_input =
+	char const chunked_input[] =
 		"HTTP/1.1 200 OK\r\n"
 		"Transfer-Encoding: chunked\r\n"
 		"Content-Length: -45345\r\n"
@@ -540,7 +546,7 @@ TORRENT_TEST(invalid_content_length)
 
 TORRENT_TEST(invalid_chunked)
 {
-	char const* chunked_input =
+	char const chunked_input[] =
 		"HTTP/1.1 200 OK\r\n"
 		"Transfer-Encoding: chunked\r\n"
 		"\r\n"
@@ -556,7 +562,7 @@ TORRENT_TEST(invalid_chunked)
 
 TORRENT_TEST(invalid_content_range_start)
 {
-	char const* chunked_input =
+	char const chunked_input[] =
 		"HTTP/1.1 206 OK\n"
 		"Content-Range: bYTes -3-4\n"
 		"\n";
@@ -570,7 +576,7 @@ TORRENT_TEST(invalid_content_range_start)
 
 TORRENT_TEST(invalid_content_range_end)
 {
-	char const* chunked_input =
+	char const chunked_input[] =
 		"HTTP/1.1 206 OK\n"
 		"Content-Range: bYTes 3--434\n"
 		"\n";
@@ -582,7 +588,69 @@ TORRENT_TEST(invalid_content_range_end)
 	TEST_CHECK(std::get<2>(received) == true);
 }
 
-TORRENT_TEST(invalid_chunk_afl)
+TORRENT_TEST(overflow_content_length)
+{
+	char const* chunked_input =
+		"HTTP/1.1 200 OK\r\n"
+		"Content-Length: 9999999999999999999999999999\r\n"
+		"\r\n";
+
+	http_parser parser;
+	std::tuple<int, int, bool> const received
+		= feed_bytes(parser, chunked_input);
+
+	TEST_CHECK(std::get<2>(received) == true);
+}
+
+TORRENT_TEST(overflow_content_range_end)
+{
+	char const* chunked_input =
+		"HTTP/1.1 206 OK\n"
+		"Content-Range: bytes 0-999999999999999999999999\n"
+		"\n";
+
+	http_parser parser;
+	std::tuple<int, int, bool> const received
+		= feed_bytes(parser, chunked_input);
+
+	TEST_CHECK(std::get<2>(received) == true);
+}
+
+TORRENT_TEST(overflow_content_range_begin)
+{
+	char const* chunked_input =
+		"HTTP/1.1 206 OK\n"
+		"Content-Range: bytes 999999999999999999999999-0\n"
+		"\n";
+
+	http_parser parser;
+	std::tuple<int, int, bool> const received
+		= feed_bytes(parser, chunked_input);
+
+	TEST_CHECK(std::get<2>(received) == true);
+}
+
+TORRENT_TEST(missing_chunked_header)
+{
+	char const input[] =
+		"HTTP/1.1 200 OK\r\n"
+		"Transfer-Encoding: chunked\r\n"
+		"\r\n"
+		"\n";
+
+	// make the inpout not be null terminated. If the parser reads off the end,
+	// address sanitizer will trigger
+	char chunked_input[sizeof(input)-1];
+	std::memcpy(chunked_input, input, sizeof(chunked_input));
+
+	http_parser parser;
+	std::tuple<int, int, bool> const received
+		= feed_bytes(parser, {chunked_input, sizeof(chunked_input)});
+
+	TEST_CHECK(std::get<2>(received) == false);
+}
+
+TORRENT_TEST(invalid_chunk_1)
 {
 	std::uint8_t const invalid_chunked_input[] = {
 		0x48, 0x6f, 0x54, 0x50, 0x2f, 0x31, 0x2e, 0x31, // HoTP/1.1 200 OK
@@ -609,8 +677,53 @@ TORRENT_TEST(invalid_chunk_afl)
 
 	http_parser parser;
 	std::tuple<int, int, bool> const received
-		= feed_bytes(parser, reinterpret_cast<char const*>(invalid_chunked_input));
+		= feed_bytes(parser, {reinterpret_cast<char const*>(invalid_chunked_input), sizeof(invalid_chunked_input)});
 
-	TEST_CHECK(std::get<2>(received) == true);
+	TEST_CHECK(std::get<2>(received) == false);
 }
 
+TORRENT_TEST(invalid_chunk_2)
+{
+	std::uint8_t const invalid_chunked_input[] = {
+		0x48, 0x54, 0x54, 0x50, 0x2f, 0x31, 0x2e, 0x31,
+		0x20, 0x32, 0x30, 0x30, 0x20, 0x4f, 0x4b, 0x0a, // HTTP/1.1 20x00, OK.
+		0x54, 0x72, 0x61, 0x6e, 0x73, 0x66, 0x65, 0x72, // Transfer-Encodin
+		0x2d, 0x45, 0x6e, 0x63, 0x6f, 0x64, 0x69, 0x6e, // g: chunked.Date:
+		0x67, 0x3a, 0x20, 0x63, 0x68, 0x75, 0x6e, 0x6b, //  Sat, 0x31, Aug 200
+		0x65, 0x64, 0x0a, 0x44, 0x61, 0x74, 0x65, 0x3a, // 2 00:24:0x08, GMT.C
+		0x20, 0x53, 0x61, 0x74, 0x2c, 0x20, 0x33, 0x31, // onnection: close
+		0x20, 0x41, 0x75, 0x67, 0x20, 0x32, 0x30, 0x30,
+		0x32, 0x20, 0x30, 0x30, 0x3a, 0x32, 0x34, 0x3a,
+		0x30, 0x38, 0x20, 0x47, 0x4d, 0x54, 0x0a, 0x43,
+		0x6f, 0x6e, 0x6e, 0x65, 0x63, 0x74, 0x69, 0x6f,
+		0x6e, 0x3a, 0x20, 0x63, 0x6c, 0x6f, 0x73, 0x65,
+		0x0a, 0x0a, 0x31, 0x0a, 0x72, 0x0a, 0x30, 0x0a,
+		0x0a
+	};
+
+	http_parser parser;
+	feed_bytes(parser, {reinterpret_cast<char const*>(invalid_chunked_input), sizeof(invalid_chunked_input)});
+}
+
+TORRENT_TEST(invalid_chunk_3)
+{
+	std::uint8_t const invalid_chunked_input[] = {
+		0x48, 0xff, 0xff, 0xff, 0xfd, 0x54, 0x54, 0x50, 0x2f, 0x31, 0x2e, 0x31, 0x20, 0x32, 0x30, 0x30,  // H....TTP/1.1 200
+		0x20, 0x4f, 0x4b, 0x0a, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x66, 0x65, 0x72, 0x2d, 0x45, 0x6e, 0x63,  //  OK.Transfer-Enc
+		0x6f, 0x64, 0x69, 0x6e, 0x67, 0x3a, 0x20, 0x63, 0x68, 0x75, 0x6e, 0x6b, 0x65, 0x64, 0x0a, 0x44,  // oding: chunked.D
+		0x61, 0x74, 0x65, 0x3a, 0x20, 0x53, 0x61, 0x74, 0x2c, 0x20, 0x33, 0x31, 0x20, 0x41, 0x75, 0x67,  // ate: Sat, 0x31, Aug
+		0x20, 0x32, 0x30, 0x30, 0x32, 0x20, 0x30, 0x30, 0x3a, 0x32, 0x34, 0x3a, 0x30, 0x38, 0x20, 0x47,  //  2002 0x00,:0x24,:0x08, G
+		0x4d, 0x54, 0x0a, 0x43, 0x6f, 0x6e, 0x6e, 0x65, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x3a, 0x20, 0x63,  // MT.Connection: c
+		0x6c, 0x6f, 0x73, 0x65, 0x0a, 0x0a, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30,  // lose..0000000000
+		0x36, 0x34, 0x0a, 0x6c, 0x72, 0x79, 0x6d, 0x68, 0x74, 0x67, 0x6b, 0x7a, 0x71, 0x74, 0x71, 0x71,  // 0x64,.lrymhtgkzqtqq
+		0x62, 0x75, 0x71, 0x69, 0x66, 0x76, 0x69, 0x74, 0x6b, 0x70, 0x69, 0x63, 0x6f, 0x64, 0x67, 0x77,  // buqifvitkpicodgw
+		0x6d, 0x69, 0x6a, 0x64, 0x67, 0x76, 0x6b, 0x63, 0x65, 0x78, 0x64, 0x75, 0x71, 0x74, 0x6e, 0x74,  // mijdgvkcexduqtnt
+		0x6e, 0x66, 0x62, 0x75, 0x64, 0x6d, 0x6e, 0x6e, 0x62, 0x78, 0x72, 0x72, 0x63, 0x78, 0x6e, 0x70,  // nfbudmnnbxrrcxnp
+		0x66, 0x79, 0x73, 0x6f, 0x74, 0x66, 0x71, 0x7a, 0x63, 0x74, 0x77, 0x75, 0x6d, 0x6a, 0x6e, 0x63,  // fysotfqzctwumjnc
+		0x6f, 0x71, 0x77, 0x72, 0x63, 0x6d, 0x67, 0x64, 0x6c, 0x78, 0x77, 0x6f, 0x78, 0x6c, 0x64, 0x65,  // oqwrcmgdlxwoxlde
+		0x6a, 0x76, 0x73, 0x66, 0x63, 0x6b, 0x65, 0x0a, 0x30, 0x0a, 0x0a, 0x0a,              // jvsfcke.0...
+	};
+
+	http_parser parser;
+	feed_bytes(parser, {reinterpret_cast<char const*>(invalid_chunked_input), sizeof(invalid_chunked_input)});
+}

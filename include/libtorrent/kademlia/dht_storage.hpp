@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2012-2016, Arvid Norberg, Alden Torres
+Copyright (c) 2012-2018, Arvid Norberg, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -54,10 +54,10 @@ namespace libtorrent { namespace dht {
 	// This structure hold the relevant counters for the storage
 	struct TORRENT_EXPORT dht_storage_counters
 	{
-		std::int32_t torrents;
-		std::int32_t peers;
-		std::int32_t immutable_data;
-		std::int32_t mutable_data;
+		std::int32_t torrents = 0;
+		std::int32_t peers = 0;
+		std::int32_t immutable_data = 0;
+		std::int32_t mutable_data = 0;
 
 		// This member function set the counters to zero.
 		void reset();
@@ -78,7 +78,7 @@ namespace libtorrent { namespace dht {
 	//
 	struct TORRENT_EXPORT dht_storage_interface
 	{
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		// This function returns the number of torrents tracked by
 		// the DHT at the moment. It's used to fill session_status.
 		// It's deprecated.

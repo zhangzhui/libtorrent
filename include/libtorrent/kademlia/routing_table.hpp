@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2006-2016, Arvid Norberg
+Copyright (c) 2006-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -40,26 +40,19 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <tuple>
 #include <array>
 
+#include <libtorrent/fwd.hpp>
 #include <libtorrent/kademlia/node_id.hpp>
 #include <libtorrent/kademlia/node_entry.hpp>
 #include <libtorrent/assert.hpp>
 #include <libtorrent/time.hpp>
 #include <libtorrent/aux_/vector.hpp>
 
-namespace libtorrent {
-
-#ifndef TORRENT_NO_DEPRECATE
-	struct session_status;
-#endif
-	struct dht_routing_bucket;
-}
-
 namespace libtorrent { namespace dht {
 
 struct dht_settings;
 struct dht_logger;
 
-typedef aux::vector<node_entry> bucket_t;
+using bucket_t = aux::vector<node_entry>;
 
 struct routing_table_node
 {
@@ -77,7 +70,6 @@ struct ipv4_hash
 	}
 };
 
-#if TORRENT_USE_IPV6
 struct ipv6_hash
 {
 	using argument_type = address_v6::bytes_type;
@@ -87,7 +79,6 @@ struct ipv6_hash
 		return std::hash<std::uint64_t>()(*reinterpret_cast<std::uint64_t const*>(&ip[0]));
 	}
 };
-#endif
 
 struct ip_set
 {
@@ -98,26 +89,18 @@ struct ip_set
 	void clear()
 	{
 		m_ip4s.clear();
-#if TORRENT_USE_IPV6
 		m_ip6s.clear();
-#endif
 	}
 
 	bool operator==(ip_set const& rh)
 	{
-#if TORRENT_USE_IPV6
 		return m_ip4s == rh.m_ip4s && m_ip6s == rh.m_ip6s;
-#else
-		return m_ip4s == rh.m_ip4s;
-#endif
 	}
 
 	// these must be multisets because there can be multiple routing table
 	// entries for a single IP when restrict_routing_ips is set to false
 	std::unordered_multiset<address_v4::bytes_type, ipv4_hash> m_ip4s;
-#if TORRENT_USE_IPV6
 	std::unordered_multiset<address_v6::bytes_type, ipv6_hash> m_ip6s;
-#endif
 };
 
 // differences in the implementation from the description in
@@ -129,16 +112,6 @@ struct ip_set
 // 	the most times is replaced. If none of the nodes in the
 // 	bucket has failed, then it is put in the replacement
 // 	cache (just like in the paper).
-
-namespace impl
-{
-	template <typename F>
-	inline void forwarder(void* userdata, node_entry const& node)
-	{
-		F* f = reinterpret_cast<F*>(userdata);
-		(*f)(node);
-	}
-}
 
 TORRENT_EXTRA_EXPORT bool compare_ip_cidr(address const& lhs, address const& rhs);
 
@@ -158,7 +131,7 @@ public:
 	routing_table(routing_table const&) = delete;
 	routing_table& operator=(routing_table const&) = delete;
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	void status(session_status& s) const;
 #endif
 
@@ -171,7 +144,7 @@ public:
 	void add_router_node(udp::endpoint const& router);
 
 	// iterates over the router nodes added
-	typedef std::set<udp::endpoint>::const_iterator router_iterator;
+	using router_iterator = std::set<udp::endpoint>::const_iterator;
 	router_iterator begin() const { return m_router_nodes.begin(); }
 	router_iterator end() const { return m_router_nodes.end(); }
 

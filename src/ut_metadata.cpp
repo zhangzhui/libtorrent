@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2016, Arvid Norberg
+Copyright (c) 2007-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -126,7 +126,7 @@ namespace libtorrent {namespace {
 		}
 
 		bool received_metadata(ut_metadata_peer_plugin& source
-			, char const* buf, int const size, int const piece, int const total_size);
+			, char const* buf, int size, int piece, int total_size);
 
 		// returns a piece of the metadata that
 		// we should request.
@@ -145,9 +145,12 @@ namespace libtorrent {namespace {
 		{
 			if (m_metadata_size > 0 || size <= 0 || size > 4 * 1024 * 1024) return;
 			m_metadata_size = size;
-			m_metadata.reset(new char[size]);
+			m_metadata.reset(new char[std::size_t(size)]);
 			m_requested_metadata.resize(div_round_up(size, 16 * 1024));
 		}
+
+		// explicitly disallow assignment, to silence msvc warning
+		ut_metadata_plugin& operator=(ut_metadata_plugin const&) = delete;
 
 	private:
 		torrent& m_torrent;
@@ -174,9 +177,6 @@ namespace libtorrent {namespace {
 		// block has been requested and who we ended up getting it from
 		// std::numeric_limits<int>::max() means we have the piece
 		aux::vector<metadata_piece> m_requested_metadata;
-
-		// explicitly disallow assignment, to silence msvc warning
-		ut_metadata_plugin& operator=(ut_metadata_plugin const&);
 	};
 
 
@@ -253,17 +253,17 @@ namespace libtorrent {namespace {
 
 			if (type == 1)
 			{
-				TORRENT_ASSERT(piece >= 0 && piece < int(m_tp.get_metadata_size() + 16 * 1024 - 1)/(16*1024));
+				TORRENT_ASSERT(piece >= 0 && piece < (m_tp.get_metadata_size() + 16 * 1024 - 1) / (16 * 1024));
 				TORRENT_ASSERT(m_pc.associated_torrent().lock()->valid_metadata());
 				TORRENT_ASSERT(m_torrent.valid_metadata());
 
-				int offset = piece * 16 * 1024;
+				int const offset = piece * 16 * 1024;
 				metadata = m_tp.metadata().data() + offset;
-				metadata_piece_size = (std::min)(
+				metadata_piece_size = std::min(
 					m_tp.get_metadata_size() - offset, 16 * 1024);
 				TORRENT_ASSERT(metadata_piece_size > 0);
 				TORRENT_ASSERT(offset >= 0);
-				TORRENT_ASSERT(offset + metadata_piece_size <= int(m_tp.get_metadata_size()));
+				TORRENT_ASSERT(offset + metadata_piece_size <= m_tp.get_metadata_size());
 			}
 
 			// TODO: 3 use the aux::write_* functions and the span here instead, it
@@ -291,8 +291,8 @@ namespace libtorrent {namespace {
 			m_pc.stats_counters().inc_stats_counter(counters::num_outgoing_metadata);
 		}
 
-		bool on_extended(int length
-			, int extended_msg, span<char const> body) override
+		bool on_extended(int const length
+			, int const extended_msg, span<char const> body) override
 		{
 			if (extended_msg != 2) return false;
 			if (m_message_index == 0) return false;
@@ -303,7 +303,7 @@ namespace libtorrent {namespace {
 				m_pc.peer_log(peer_log_alert::incoming_message, "UT_METADATA"
 					, "packet too big %d", length);
 #endif
-				m_pc.disconnect(errors::invalid_metadata_message, operation_t::bittorrent, 2);
+				m_pc.disconnect(errors::invalid_metadata_message, operation_t::bittorrent, peer_connection_interface::peer_error);
 				return true;
 			}
 
@@ -317,7 +317,7 @@ namespace libtorrent {namespace {
 				m_pc.peer_log(peer_log_alert::incoming_message, "UT_METADATA"
 					, "not a dictionary");
 #endif
-				m_pc.disconnect(errors::invalid_metadata_message, operation_t::bittorrent, 2);
+				m_pc.disconnect(errors::invalid_metadata_message, operation_t::bittorrent, peer_connection_interface::peer_error);
 				return true;
 			}
 
@@ -330,11 +330,12 @@ namespace libtorrent {namespace {
 				m_pc.peer_log(peer_log_alert::incoming_message, "UT_METADATA"
 					, "missing or invalid keys");
 #endif
-				m_pc.disconnect(errors::invalid_metadata_message, operation_t::bittorrent, 2);
+				m_pc.disconnect(errors::invalid_metadata_message, operation_t::bittorrent, peer_connection_interface::peer_error);
 				return true;
 			}
-			int type = int(type_ent->integer());
-			int piece = int(piece_ent->integer());
+			// TODO: make this an enum class
+			auto const type = int(type_ent->integer());
+			auto const piece = int(piece_ent->integer());
 
 #ifndef TORRENT_DISABLE_LOGGING
 			m_pc.peer_log(peer_log_alert::incoming_message, "UT_METADATA"
@@ -393,7 +394,7 @@ namespace libtorrent {namespace {
 				break;
 				case metadata_dont_have:
 				{
-					m_request_limit = (std::max)(aux::time_now() + minutes(1), m_request_limit);
+					m_request_limit = std::max(aux::time_now() + minutes(1), m_request_limit);
 					auto const i = std::find(m_sent_requests.begin()
 						, m_sent_requests.end(), piece);
 					// unwanted piece?
@@ -417,7 +418,7 @@ namespace libtorrent {namespace {
 			while (!m_incoming_requests.empty()
 				&& m_pc.send_buffer_size() < send_buffer_limit)
 			{
-				int piece = m_incoming_requests.front();
+				int const piece = m_incoming_requests.front();
 				m_incoming_requests.erase(m_incoming_requests.begin());
 				write_metadata_packet(metadata_piece, piece);
 			}
@@ -436,7 +437,7 @@ namespace libtorrent {namespace {
 				&& m_sent_requests.size() < 2
 				&& has_metadata())
 			{
-				int piece = m_tp.metadata_request(m_pc.has_metadata());
+				int const piece = m_tp.metadata_request(m_pc.has_metadata());
 				if (piece == -1) return;
 
 				m_sent_requests.push_back(piece);
@@ -453,6 +454,9 @@ namespace libtorrent {namespace {
 		{
 			m_request_limit = now + seconds(20 + random(50));
 		}
+
+		// explicitly disallow assignment, to silence msvc warning
+		ut_metadata_peer_plugin& operator=(ut_metadata_peer_plugin const&) = delete;
 
 	private:
 
@@ -473,16 +477,12 @@ namespace libtorrent {namespace {
 		torrent& m_torrent;
 		bt_peer_connection& m_pc;
 		ut_metadata_plugin& m_tp;
-
-		// explicitly disallow assignment, to silence msvc warning
-		ut_metadata_peer_plugin& operator=(ut_metadata_peer_plugin const&);
 	};
 
 	std::shared_ptr<peer_plugin> ut_metadata_plugin::new_connection(
 		peer_connection_handle const& pc)
 	{
-		if (pc.type() != connection_type::bittorrent)
-			return std::shared_ptr<peer_plugin>();
+		if (pc.type() != connection_type::bittorrent) return {};
 
 		bt_peer_connection* c = static_cast<bt_peer_connection*>(pc.native_handle().get());
 		return std::make_shared<ut_metadata_peer_plugin>(m_torrent, *c, *this);
@@ -493,7 +493,7 @@ namespace libtorrent {namespace {
 	// from requesting this block by setting a timeout on it.
 	int ut_metadata_plugin::metadata_request(bool const has_metadata)
 	{
-		std::vector<metadata_piece>::iterator i = std::min_element(
+		auto i = std::min_element(
 			m_requested_metadata.begin(), m_requested_metadata.end());
 
 		if (m_requested_metadata.empty())
@@ -507,7 +507,7 @@ namespace libtorrent {namespace {
 		int const piece = int(i - m_requested_metadata.begin());
 
 		// don't request the same block more than once every 3 seconds
-		time_point now = aux::time_now();
+		time_point const now = aux::time_now();
 		if (m_requested_metadata[piece].last_request != min_time()
 			&& total_seconds(now - m_requested_metadata[piece].last_request) < 3)
 			return -1;
@@ -550,7 +550,7 @@ namespace libtorrent {namespace {
 				return false;
 			}
 
-			m_metadata.reset(new char[total_size]);
+			m_metadata.reset(new char[std::size_t(total_size)]);
 			m_requested_metadata.resize(div_round_up(total_size, 16 * 1024));
 			m_metadata_size = total_size;
 		}
@@ -595,7 +595,7 @@ namespace libtorrent {namespace {
 		{
 			if (!m_torrent.valid_metadata())
 			{
-				time_point now = aux::time_now();
+				time_point const now = aux::time_now();
 				// any peer that we downloaded metadata from gets a random time
 				// penalty, from 5 to 30 seconds or so. During this time we don't
 				// make any metadata requests from those peers (to mix it up a bit
@@ -622,7 +622,8 @@ namespace libtorrent {namespace {
 		metadata();
 
 		// clear the storage for the bitfield
-		std::vector<metadata_piece>().swap(m_requested_metadata);
+		m_requested_metadata.clear();
+		m_requested_metadata.shrink_to_fit();
 
 		return true;
 	}
@@ -635,7 +636,7 @@ namespace libtorrent {
 	{
 		torrent* t = th.native_handle().get();
 		// don't add this extension if the torrent is private
-		if (t->valid_metadata() && t->torrent_file().priv()) return std::shared_ptr<torrent_plugin>();
+		if (t->valid_metadata() && t->torrent_file().priv()) return {};
 		return std::make_shared<ut_metadata_plugin>(*t);
 	}
 }

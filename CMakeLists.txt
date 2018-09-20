@@ -1,10 +1,267 @@
-cmake_minimum_required(VERSION 3.1.0 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.11.0 FATAL_ERROR)
 
-project(libtorrent)
+project(libtorrent
+	DESCRIPTION "Bittorrent library"
+	VERSION 1.2.0
+)
 set (SOVERSION "10")
-set (VERSION "1.2.0")
 
 list(APPEND CMAKE_MODULE_PATH ${libtorrent_SOURCE_DIR}/cmake/Modules)
+include(FeatureSummary)
+include(GNUInstallDirs)
+include(GeneratePkgConfig)
+
+set(libtorrent_include_files
+	add_torrent_params
+	address
+	alert
+	alert_manager
+	alert_types
+	allocator
+	announce_entry
+	assert
+	bandwidth_limit
+	bandwidth_manager
+	bandwidth_queue_entry
+	bandwidth_socket
+	bdecode
+	bencode
+	bitfield
+	block_cache
+	bloom_filter
+	broadcast_socket
+	bt_peer_connection
+	buffer
+	chained_buffer
+	choker
+	close_reason
+	config
+	ConvertUTF
+	copy_ptr
+	crc32c
+	create_torrent
+	deadline_timer
+	debug
+	disk_buffer_holder
+	disk_buffer_pool
+	disk_interface
+	disk_io_job
+	disk_io_thread
+	disk_io_thread_pool
+	disk_job_pool
+	disk_observer
+	download_priority
+	ed25519
+	entry
+	enum_net
+	error
+	error_code
+	extensions
+	file
+	file_pool
+	file_storage
+	fingerprint
+	flags
+	fwd
+	gzip
+	hasher
+	hasher512
+	heterogeneous_queue
+	hex
+	http_connection
+	http_parser
+	http_seed_connection
+	http_stream
+	http_tracker_connection
+	i2p_stream
+	identify_client
+	index_range
+	invariant_check
+	io
+	io_service
+	io_service_fwd
+	ip_filter
+	ip_voter
+	lazy_entry
+	link
+	linked_list
+	lsd
+	magnet_uri
+	natpmp
+	netlink
+	operations
+	optional
+	packet_buffer
+	packet_pool
+	parse_url
+	part_file
+	pe_crypto
+	peer
+	peer_class
+	peer_class_set
+	peer_class_type_filter
+	peer_connection
+	peer_connection_handle
+	peer_connection_interface
+	peer_id
+	peer_info
+	peer_list
+	peer_request
+	performance_counters
+	pex_flags
+	piece_block
+	piece_block_progress
+	piece_picker
+	platform_util
+	portmap
+	proxy_base
+	puff
+	random
+	read_resume_data
+	receive_buffer
+	request_blocks
+	resolve_links
+	resolver
+	resolver_interface
+	session
+	session_handle
+	session_settings
+	session_stats
+	session_status
+	session_types
+	settings_pack
+	sha1
+	sha1_hash
+	sha512
+	sliding_average
+	socket
+	socket_io
+	socks5_stream
+	span
+	ssl_stream
+	stack_allocator
+	stat
+	stat_cache
+	storage
+	storage_defs
+	string_util
+	string_view
+	tailqueue
+	time
+	timestamp_history
+	torrent
+	torrent_flags
+	torrent_handle
+	torrent_info
+	torrent_peer
+	torrent_peer_allocator
+	torrent_status
+	tracker_manager
+	udp_socket
+	udp_tracker_connection
+	union_endpoint
+	units
+	upnp
+	utf8
+	utp_socket_manager
+	utp_stream
+	vector_utils
+	version
+	web_connection_base
+	web_peer_connection
+	write_resume_data
+	xml_parse)
+
+set(libtorrent_kademlia_include_files
+	announce_flags
+	dht_observer
+	dht_settings
+	dht_state
+	dht_storage
+	dht_tracker
+	direct_request
+	dos_blocker
+	ed25519
+	find_data
+	get_item
+	get_peers
+	io
+	item
+	msg
+	node
+	node_entry
+	node_id
+	observer
+	put_data
+	refresh
+	routing_table
+	rpc_manager
+	sample_infohashes
+	traversal_algorithm
+	types)
+
+set(libtorrent_extensions_include_files
+	smart_ban
+	ut_metadata
+	ut_pex)
+
+set(libtorrent_aux_include_files
+	aligned_storage
+	aligned_union
+	alloca
+	allocating_handler
+	array
+	bind_to_device
+	block_cache_reference
+	byteswap
+	cppint_import_export
+	cpuid
+	deferred_handler
+	deque
+	dev_random
+	disable_warnings_pop
+	disable_warnings_push
+	disk_job_fence
+	escape_string
+	export
+	ffs
+	file_progress
+	has_block
+	instantiate_connection
+	io
+	ip_notifier
+	listen_socket_handle
+	lsd
+	max_path
+	merkle
+	noexcept_movable
+	numeric_cast
+	openssl
+	path
+	portmap
+	proxy_settings
+	range
+	route
+	scope_end
+	session_call
+	session_impl
+	session_interface
+	session_settings
+	session_udp_sockets
+	set_socket_buffer
+	socket_type
+	storage_piece_set
+	storage_utils
+	string_ptr
+	suggest_piece
+	throw
+	time
+	torrent_impl
+	typed_span
+	unique_ptr
+	vector
+	win_crypto_provider
+	win_util)
 
 set(sources
 	web_connection_base
@@ -31,6 +288,7 @@ set(sources
 	error_code
 	file_storage
 	file_progress
+	generate_peer_id
 	lazy_bdecode
 	escape_string
 	string_util
@@ -170,147 +428,293 @@ set(ed25519_sources
 	verify
 )
 
-set(includes include ed25519/src)
-
-option(shared "build libtorrent as a shared library" ON)
-option(static_runtime "build libtorrent with static runtime" OFF)
-option(encryption "link against openssl and enable encryption" ON)
-option(dht "enable support for Mainline DHT" ON)
-option(deprecated-functions "enable deprecated functions for backwards compatibility" ON)
-option(exceptions "build with exception support" ON)
-option(libiconv "enable linking against system libiconv" OFF)
-option(logging "build with logging" ON)
-option(build_tests "build tests" OFF)
-option(build_examples "build examples" OFF)
-
-find_package(Threads REQUIRED)
-
-include_directories(${includes})
-
-if (encryption)
-	list(APPEND sources pe_crypto)
-else()
-	if (NOT WIN32 AND NOT APPLE)
-		list(APPEND sources sha1)
+function(target_optional_compile_definitions _target _scope)
+	set(options FEATURE)
+	set(oneValueArgs NAME DESCRIPTION DEFAULT)
+	set(multiValueArgs ENABLED DISABLED)
+	cmake_parse_arguments(TOCD ${options} "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+	option(${TOCD_NAME} "${TOCD_DESCRIPTION}" ${TOCD_DEFAULT})
+	if (${${TOCD_NAME}})
+		target_compile_definitions(${_target} ${_scope} ${TOCD_ENABLED})
+	else()
+		target_compile_definitions(${_target} ${_scope} ${TOCD_DISABLED})
 	endif()
-endif (encryption)
-
-foreach(s ${sources})
-	list(APPEND sources2 src/${s})
-endforeach(s)
-
-if (dht)
-	foreach(s ${kademlia_sources})
-		list(APPEND sources2 src/kademlia/${s})
-	endforeach(s)
-	foreach(s ${ed25519_sources})
-		list(APPEND sources2 ed25519/src/${s})
-	endforeach(s)
-	list(APPEND sources2 src/hasher512)
-	if (NOT encryption AND NOT WIN32 AND NOT APPLE)
-		list(APPEND sources2 src/sha512)
+	if(${TOCD_FEATURE})
+		add_feature_info(${TOCD_NAME} ${TOCD_NAME} "${TOCD_DESCRIPTION}")
 	endif()
+endfunction()
+
+macro(feature_option _name _description _default)
+	option(${_name} "${_description}" ${_default})
+	add_feature_info(${_name} ${_name} "${_description}")
+endmacro()
+
+# these options control target creation and thus have to be declared before the add_library() call
+feature_option(BUILD_SHARED_LIBS "build libtorrent as a shared library" ON)
+feature_option(static_runtime "build libtorrent with static runtime" OFF)
+
+macro(find_public_dependency _name)
+	find_package(${_name} ${ARGN})
+	string(TOUPPER "${_name}" _name_uppercased)
+	if (${_name}_FOUND OR ${_name_uppercased}_FOUND)
+		# Dependencies to be used below for generating Config.cmake file
+		# We don't need the 'REQUIRED' argument there
+		set(_args "${_name}")
+		list(APPEND _args "${ARGN}")
+		list(REMOVE_ITEM _args "REQUIRED")
+		list(REMOVE_ITEM _args "") # just in case
+		string(REPLACE ";" " " _args "${_args}")
+		list(APPEND _package_dependencies "${_args}")
+	endif()
+endmacro()
+
+find_public_dependency(Threads REQUIRED)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES Clang)
+	add_compile_options(
+		-Weverything
+		-Wno-documentation
+		-Wno-c++98-compat-pedantic
+		-Wno-padded
+		-Wno-global-constructors
+		-Wno-exit-time-destructors
+		-Wno-weak-vtables)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES GNU)
+	add_compile_options(
+		-Wall
+		-Wextra
+		-Wpedantic
+		-Wparentheses
+		-Wvla
+		-Wc++11-compat
+		-Wno-format-zero-length
+		-ftemplate-depth=512)
+elseif(MSVC)
+	add_compile_options(
+		/W4
+		# C4251: 'identifier' : class 'type' needs to have dll-interface to be
+		#        used by clients of class 'type2'
+		/wd4251
+		# C4275: non DLL-interface classkey 'identifier' used as base for
+		#        DLL-interface classkey 'identifier'
+		/wd4275
+		# C4373: virtual function overrides, previous versions of the compiler
+		#        did not override when parameters only differed by const/volatile qualifiers
+		/wd4373
+		# C4268: 'identifier' : 'const' static/global data initialized
+		#        with compiler generated default constructor fills the object with zeros
+		/wd4268
+		# C4503: 'identifier': decorated name length exceeded, name was truncated
+		/wd4503)
 endif()
 
-if (shared)
-	add_library(torrent-rasterbar SHARED ${sources2})
-	target_compile_definitions(torrent-rasterbar PRIVATE TORRENT_BUILDING_SHARED)
-	if(NOT MSVC)
-		set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fvisibility=hidden")
-		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden -fvisibility-inlines-hidden")
-	endif()
-else()
-	if(static_runtime)
-		# fix /MT flag:
-		set(CompilerFlags
-				CMAKE_CXX_FLAGS
-				CMAKE_CXX_FLAGS_DEBUG
-				CMAKE_CXX_FLAGS_RELWITHDEBINFO
-				CMAKE_CXX_FLAGS_RELEASE
-				CMAKE_C_FLAGS
-				CMAKE_C_FLAGS_DEBUG
-				CMAKE_CXX_FLAGS_RELWITHDEBINFO
-				CMAKE_C_FLAGS_RELEASE
-				)
-		foreach(CompilerFlag ${CompilerFlags})
-			string(REPLACE "/MD" "/MT" ${CompilerFlag} "${${CompilerFlag}}")
-		endforeach()
-		set(Boost_USE_MULTITHREADED ON)
+if(static_runtime)
+	include(ucm_flags)
+	ucm_set_runtime(STATIC)
+	set(Boost_USE_MULTITHREADED ON)
+	set(Boost_USE_STATIC_RUNTIME ON)
+	set(OPENSSL_USE_STATIC_LIBS TRUE)
+	set(OPENSSL_MSVC_STATIC_RT TRUE)
+endif()
 
-		set(Boost_USE_STATIC_RUNTIME ON)
-	endif()
+if (NOT BUILD_SHARED_LIBS)
 	set(Boost_USE_STATIC_LIBS ON)
-	add_library(torrent-rasterbar STATIC ${sources2})
 endif()
 
-target_compile_definitions(torrent-rasterbar PUBLIC $<$<CONFIG:Debug>:TORRENT_DEBUG>)
+add_library(torrent-rasterbar
+	src/$<JOIN:${sources}, src/>
+	include/libtorrent/$<JOIN:${libtorrent_include_files}, include/libtorrent/>
+	include/libtorrent/extensions/$<JOIN:${libtorrent_extensions_include_files}, include/libtorrent/extensions/>
+	include/libtorrent/aux_/$<JOIN:${libtorrent_aux_include_files}, include/libtorrent/aux_/>
+)
 
-target_compile_definitions(torrent-rasterbar PRIVATE TORRENT_BUILDING_LIBRARY)
+if (BUILD_SHARED_LIBS)
+	target_compile_definitions(torrent-rasterbar
+		PRIVATE TORRENT_BUILDING_SHARED
+		INTERFACE TORRENT_LINKING_SHARED
+	)
+endif()
 
-if (build_tests)
-	# this will make some internal functions available in the
-	# DLL interface, for the tests to access
-	target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_EXPORT_EXTRA)
-endif (build_tests)
+set_target_properties(torrent-rasterbar
+	PROPERTIES
+		CXX_VISIBILITY_PRESET "hidden"
+		VISIBILITY_INLINES_HIDDEN "true"
+		VERSION ${PROJECT_VERSION}
+		SOVERSION ${SOVERSION}
+)
 
-if (libiconv)
-	find_package(Iconv REQUIRED)
+if (cxx_std_14 IN_LIST CMAKE_CXX_COMPILE_FEATURES)
+	target_compile_features(torrent-rasterbar PUBLIC cxx_std_14)
+	message(STATUS "Building in C++14 mode")
+else()
+	target_compile_features(torrent-rasterbar PUBLIC cxx_std_11)
+	message(STATUS "Building in C++11 mode")
+endif()
+
+target_include_directories(torrent-rasterbar PUBLIC
+	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+	$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+
+target_compile_definitions(torrent-rasterbar
+	PUBLIC
+		$<$<CONFIG:Debug>:TORRENT_USE_ASSERTS>
+	PRIVATE
+		TORRENT_BUILDING_LIBRARY
+		_FILE_OFFSET_BITS=64
+		BOOST_EXCEPTION_DISABLE
+		BOOST_ASIO_ENABLE_CANCELIO
+		BOOST_ASIO_HAS_STD_CHRONO
+)
+
+target_link_libraries(torrent-rasterbar
+	PUBLIC
+		Threads::Threads
+)
+
+# Unconditional platform-specific settings
+if (WIN32)
+	target_link_libraries(torrent-rasterbar
+		PRIVATE
+			wsock32 ws2_32 Iphlpapi
+			debug dbghelp
+	)
+
+	target_compile_definitions(torrent-rasterbar
+		PUBLIC
+			_WIN32_WINNT=0x0600 # target Windows Vista or later
+			WIN32_LEAN_AND_MEAN # prevent winsock1 to be included
+	)
+
+	if (MSVC)
+		target_compile_definitions(torrent-rasterbar
+			PUBLIC
+				BOOST_ALL_NO_LIB
+				_SCL_SECURE_NO_DEPRECATE _CRT_SECURE_NO_DEPRECATE # disable bogus deprecation warnings on msvc8
+		)
+		target_compile_options(torrent-rasterbar
+			PRIVATE
+				/Zc:wchar_t /Zc:forScope # these compiler settings just make the compiler standard conforming
+				/MP # for multi-core compilation
+				/bigobj # increase the number of sections for obj files
+		)
+		set_target_properties(torrent-rasterbar PROPERTIES LINK_FLAGS_RELEASE "/OPT:ICF=5 /OPT:REF")
+	endif()
+endif()
+
+if (ANDROID)
+	target_link_libraries(torrent-rasterbar PRIVATE ${CMAKE_DL_LIBS})
+endif()
+
+if (APPLE)
+	# for ip_notifier
+	target_link_libraries(torrent-rasterbar PRIVATE "-framework CoreFoundation" "-framework SystemConfiguration")
+endif()
+
+feature_option(build_tests "build tests" OFF)
+feature_option(build_examples "build examples" OFF)
+feature_option(build_tools "build tools" OFF)
+feature_option(python-bindings "build python bindings" OFF)
+
+# these options require existing target
+feature_option(dht "enable support for Mainline DHT" ON)
+if(NOT build_tests) # tests require deprecated symbols
+	target_optional_compile_definitions(torrent-rasterbar PUBLIC FEATURE NAME deprecated-functions DEFAULT ON
+		DESCRIPTION "enable deprecated functions for backwards compatibility" DISABLED TORRENT_NO_DEPRECATE)
+endif()
+feature_option(encryption "Enables encryption in libtorrent" ON)
+feature_option(exceptions "build with exception support" ON)
+target_optional_compile_definitions(torrent-rasterbar PUBLIC FEATURE NAME extensions DEFAULT ON
+	DESCRIPTION "Enables protocol extensions" DISABLED TORRENT_DISABLE_EXTENSIONS)
+target_optional_compile_definitions(torrent-rasterbar PUBLIC FEATURE NAME i2p DEFAULT ON
+	DESCRIPTION "build with I2P support" DISABLED TORRENT_USE_I2P=0)
+target_optional_compile_definitions(torrent-rasterbar PUBLIC FEATURE NAME logging DEFAULT ON
+	DESCRIPTION "build with logging" DISABLED TORRENT_DISABLE_LOGGING)
+target_optional_compile_definitions(torrent-rasterbar PUBLIC FEATURE NAME mutable-torrents DEFAULT ON
+	DESCRIPTION "Enables mutable torrent support" DISABLED TORRENT_DISABLE_MUTABLE_TORRENTS)
+
+find_public_dependency(Iconv)
+if(MSVC)
+	set(iconv_package_type OPTIONAL)
+else()
+	set(iconv_package_type RECOMMENDED)
+endif()
+
+set_package_properties(Iconv
+	PROPERTIES
+		URL "https://www.gnu.org/software/libiconv/"
+		DESCRIPTION "GNU encoding conversion library"
+		TYPE ${iconv_package_type}
+		PURPOSE "Convert strings between various encodings"
+)
+
+if(Iconv_FOUND)
 	target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_USE_ICONV)
-	target_include_directories(torrent-rasterbar SYSTEM PUBLIC ${ICONV_INCLUDE_DIR})
-endif (libiconv)
+	target_link_libraries(torrent-rasterbar PRIVATE Iconv::Iconv)
+endif()
+
+find_public_dependency(OpenSSL)
+set_package_properties(OpenSSL
+	PROPERTIES
+		URL "https://www.openssl.org/"
+		DESCRIPTION "Full-strength general purpose cryptography library"
+		TYPE RECOMMENDED
+		PURPOSE "Provides HTTPS support to libtorrent"
+)
+
+if(OPENSSL_FOUND)
+	target_link_libraries(torrent-rasterbar PUBLIC OpenSSL::SSL)
+	target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_USE_OPENSSL)
+	target_sources(torrent-rasterbar PRIVATE src/pe_crypto)
+endif()
+
+if(OPENSSL_FOUND)
+	target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_USE_LIBCRYPTO)
+else(OPENSSL_FOUND)
+	find_public_dependency(LibGcrypt)
+	set_package_properties(LibGcrypt
+		PROPERTIES
+			URL "https://www.gnupg.org/software/libgcrypt/index.html"
+			DESCRIPTION "A general purpose cryptographic library"
+			TYPE RECOMMENDED
+			PURPOSE "Use GCrypt instead of the built-in functions for RC4 and SHA1"
+	)
+	if (LibGcrypt_FOUND)
+		target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_USE_LIBGCRYPT)
+		target_link_libraries(torrent-rasterbar PRIVATE LibGcrypt::LibGcrypt)
+	else()
+		if (NOT WIN32 AND NOT APPLE)
+			target_sources(torrent-rasterbar PRIVATE src/sha1)
+		endif()
+	endif()
+endif(OPENSSL_FOUND)
 
 if (encryption)
-	if(NOT DEFINED OPENSSL_INCLUDE_DIR OR NOT DEFINED OPENSSL_LIBRARIES)
-		FIND_PACKAGE(OpenSSL REQUIRED)
-	endif()
-	target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_USE_OPENSSL TORRENT_USE_LIBCRYPTO)
-	target_include_directories(torrent-rasterbar PUBLIC ${OPENSSL_INCLUDE_DIR})
+	target_sources(torrent-rasterbar PRIVATE src/pe_crypto)
 else()
 	target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_DISABLE_ENCRYPTION)
 endif()
 
-if (NOT logging)
-	target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_DISABLE_LOGGING)
-endif()
+if (dht)
+	target_sources(torrent-rasterbar PRIVATE
+		src/kademlia/$<JOIN:${kademlia_sources}, src/kademlia/>
+		ed25519/src/$<JOIN:${ed25519_sources}, ed25519/src/>
+		include/libtorrent/kademlia/$<JOIN:${libtorrent_kademlia_include_files}, include/libtorrent/kademlia/>
+		src/hasher512
+	)
+	target_include_directories(torrent-rasterbar PRIVATE ed25519/src)
 
-if (NOT dht)
+	if (NOT OpenSSL_FOUND AND NOT LibGcrypt_FOUND AND NOT WIN32 AND NOT APPLE)
+		target_sources(torrent-rasterbar PRIVATE src/sha512)
+	endif()
+else()
 	target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_DISABLE_DHT)
 endif()
 
 # Boost
-if(NOT DEFINED Boost_INCLUDE_DIR OR NOT DEFINED Boost_LIBRARIES)
-	FIND_PACKAGE(Boost REQUIRED COMPONENTS system)
-endif()
-include_directories(${Boost_INCLUDE_DIRS})
-target_link_libraries(torrent-rasterbar ${Boost_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
-
-if (WIN32)
-	target_link_libraries(torrent-rasterbar wsock32 ws2_32 Iphlpapi)
-	# target Windows Vista or later
-	target_compile_definitions(torrent-rasterbar PUBLIC _WIN32_WINNT=0x0600)
-	# prevent winsock1 to be included
-	target_compile_definitions(torrent-rasterbar PUBLIC WIN32_LEAN_AND_MEAN)
-	if (MSVC)
-		target_compile_definitions(torrent-rasterbar PUBLIC BOOST_ALL_NO_LIB)
-	endif()
-endif()
-
-if(APPLE)
-	# for ip_notifier
-	target_link_libraries(torrent-rasterbar "-framework CoreFoundation" "-framework SystemConfiguration")
-endif (APPLE)
-
-if (encryption)
-	target_link_libraries(torrent-rasterbar ${OPENSSL_LIBRARIES})
-endif()
-
-if (libiconv)
-	target_link_libraries(torrent-rasterbar ${ICONV_LIBRARIES})
-endif (libiconv)
-
-if (NOT deprecated-functions)
-	target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_NO_DEPRECATE)
-endif()
+find_public_dependency(Boost REQUIRED COMPONENTS system)
+target_include_directories(torrent-rasterbar PUBLIC ${Boost_INCLUDE_DIRS})
+target_link_libraries(torrent-rasterbar PUBLIC ${Boost_SYSTEM_LIBRARY})
 
 if (exceptions)
 	if (MSVC)
@@ -326,84 +730,118 @@ else()
 	endif (MSVC)
 endif()
 
-if (MSVC)
-	# disable bogus deprecation warnings on msvc8
-	target_compile_definitions(torrent-rasterbar PUBLIC _SCL_SECURE_NO_DEPRECATE _CRT_SECURE_NO_DEPRECATE)
-	# these compiler settings just make the compiler standard conforming
-	target_compile_options(torrent-rasterbar PUBLIC /Zc:wchar_t /Zc:forScope)
-	# for multi-core compilation
-	target_compile_options(torrent-rasterbar PUBLIC /MP)
+# developer options
+option(developer-options "Activates options useful for a developer")
+if(developer-options)
+	set(asserts "auto" CACHE STRING "use assertions")
+	set_property(CACHE asserts PROPERTY STRINGS auto on off production system)
+	if ("${asserts}" MATCHES "on|production|system")
+		target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_USE_ASSERTS=1)
+	endif()
+	if ("${asserts}" STREQUAL "production")
+		target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_PRODUCTION_ASSERTS=1)
+	elseif("${asserts}" STREQUAL "system")
+		target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_USE_SYSTEM_ASSERTS=1)
+	endif()
+
+	target_optional_compile_definitions(torrent-rasterbar PUBLIC NAME asio-debugging DEFAULT OFF
+		ENABLED TORRENT_ASIO_DEBUGGING)
+	target_optional_compile_definitions(torrent-rasterbar PUBLIC NAME picker-debugging DEFAULT OFF
+		ENABLED TORRENT_DEBUG_REFCOUNTS)
+	set(invariant-checks "off" CACHE STRING "")
+	set_property(CACHE invariant-checks PROPERTY STRINGS off on full)
+	if (invariant-checks MATCHES "on|full")
+		target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_USE_INVARIANT_CHECKS=1)
+	endif()
+	if (invariant-checks STREQUAL "full")
+		target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_EXPENSIVE_INVARIANT_CHECKS)
+	endif()
+
+	target_optional_compile_definitions(torrent-rasterbar PUBLIC NAME utp-log DEFAULT OFF
+		ENABLED TORRENT_UTP_LOG_ENABLE)
+	target_optional_compile_definitions(torrent-rasterbar PUBLIC NAME simulate-slow-read DEFAULT OFF
+		ENABLED TORRENT_SIMULATE_SLOW_READ)
+	option(debug-iterators "" OFF)
+	if (debug-iterators)
+		if (MSVC)
+			target_compile_definitions(torrent-rasterbar PUBLIC _ITERATOR_DEBUG_LEVEL=2)
+		endif()
+		if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+			target_compile_definitions(torrent-rasterbar PUBLIC _GLIBCXX_DEBUG _GLIBCXX_DEBUG_PEDANTIC)
+		endif()
+	endif()
+	target_optional_compile_definitions(torrent-rasterbar PUBLIC NAME profile-calls DEFAULT OFF
+		ENABLED TORRENT_PROFILE_CALLS=1)
 endif()
 
-target_compile_definitions(torrent-rasterbar PUBLIC _FILE_OFFSET_BITS=64)
-target_compile_definitions(torrent-rasterbar PUBLIC BOOST_EXCEPTION_DISABLE)
-target_compile_definitions(torrent-rasterbar PUBLIC BOOST_ASIO_ENABLE_CANCELIO)
-target_compile_definitions(torrent-rasterbar PUBLIC BOOST_ASIO_HAS_STD_CHRONO)
+generate_and_install_pkg_config_file(torrent-rasterbar)
 
-set_target_properties(torrent-rasterbar PROPERTIES
-	SOVERSION ${SOVERSION})
+include(CheckCXXCompilerFlag)
 
-# libtorrent requires at least C++11
-set_property(TARGET torrent-rasterbar PROPERTY CXX_STANDARD 11)
-set_property(TARGET torrent-rasterbar PROPERTY CXX_STANDARD_REQUIRED ON)
+add_subdirectory(bindings)
 
-get_property (COMPILETIME_OPTIONS_LIST
-	DIRECTORY ${CMAKE_CURRENT_SOURCE_DIRECTORY}
-	PROPERTY COMPILE_DEFINITIONS
-	)
-foreach (s ${COMPILETIME_OPTIONS_LIST})
-	set (COMPILETIME_OPTIONS "${COMPILETIME_OPTIONS} -D${s}")
-endforeach (s)
-
-configure_file(libtorrent-rasterbar-cmake.pc.in libtorrent-rasterbar.pc)
-
-string (COMPARE EQUAL "${CMAKE_SIZEOF_VOID_P}" "8" IS64BITS)
-
-if (IS64BITS AND RESPECTLIB64)
-	set (LIBDIR "lib64")
-else()
-	set (LIBDIR "lib")
-endif()
-
-install(TARGETS torrent-rasterbar EXPORT torrent-rasterbarTargets
-	DESTINATION ${LIBDIR} INCLUDES DESTINATION include)
-install(DIRECTORY include/libtorrent DESTINATION include)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/libtorrent-rasterbar.pc DESTINATION ${LIBDIR}/pkgconfig)
+install(TARGETS torrent-rasterbar EXPORT LibtorrentRasterbarTargets
+	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(DIRECTORY include/libtorrent DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} FILES_MATCHING PATTERN "*.h*")
 
 # === generate a CMake Config File ===
 include(CMakePackageConfigHelpers)
+set(ConfigPackageLocation ${CMAKE_INSTALL_LIBDIR}/cmake/LibtorrentRasterbar)
+string(REGEX REPLACE "([^;]+)" "find_dependency(\\1)" _find_dependency_calls "${_package_dependencies}")
+string(REPLACE ";" "\n" _find_dependency_calls "${_find_dependency_calls}")
+
+if(CMAKE_VERSION VERSION_LESS "3.11.0")
+	set(_compatibility ExactVersion)
+else()
+	set(_compatibility SameMinorVersion)
+endif()
+
 write_basic_package_version_file(
-	"${CMAKE_CURRENT_BINARY_DIR}/libtorrent-rasterbar/libtorrent-rasterbarConfigVersion.cmake"
-	VERSION ${VERSION}
-	COMPATIBILITY ExactVersion
+	"${CMAKE_CURRENT_BINARY_DIR}/LibtorrentRasterbar/LibtorrentRasterbarConfigVersion.cmake"
+	VERSION ${libtorrent_VERSION}
+	COMPATIBILITY ${_compatibility}
 )
 
-export(EXPORT torrent-rasterbarTargets
-	FILE "${CMAKE_CURRENT_BINARY_DIR}/libtorrent-rasterbar/libtorrent-rasterbarTargets.cmake"
-	NAMESPACE Libtorrent::
+export(EXPORT LibtorrentRasterbarTargets
+	FILE "${CMAKE_CURRENT_BINARY_DIR}/LibtorrentRasterbar/LibtorrentRasterbarTargets.cmake"
+	NAMESPACE LibtorrentRasterbar::
 )
 
-configure_file(libtorrent-rasterbarConfig.cmake
-	"${CMAKE_CURRENT_BINARY_DIR}/libtorrent-rasterbar/libtorrent-rasterbarConfig.cmake"
-	COPYONLY
+configure_package_config_file(LibtorrentRasterbarConfig.cmake.in
+	"${CMAKE_CURRENT_BINARY_DIR}/LibtorrentRasterbar/LibtorrentRasterbarConfig.cmake"
+	INSTALL_DESTINATION "${ConfigPackageLocation}"
+	NO_SET_AND_CHECK_MACRO
+	NO_CHECK_REQUIRED_COMPONENTS_MACRO
 )
 
-set(ConfigPackageLocation lib/cmake/libtorrent-rasterbar)
-install(EXPORT torrent-rasterbarTargets
-	FILE
-		libtorrent-rasterbarTargets.cmake
+install(EXPORT LibtorrentRasterbarTargets
 	NAMESPACE
-		Libtorrent::
+		LibtorrentRasterbar::
 	DESTINATION
 		${ConfigPackageLocation}
 )
 install(
 	FILES
-		libtorrent-rasterbarConfig.cmake
-		"${CMAKE_CURRENT_BINARY_DIR}/libtorrent-rasterbar/libtorrent-rasterbarConfigVersion.cmake"
+		"${CMAKE_CURRENT_BINARY_DIR}/LibtorrentRasterbar/LibtorrentRasterbarConfig.cmake"
+		"${CMAKE_CURRENT_BINARY_DIR}/LibtorrentRasterbar/LibtorrentRasterbarConfigVersion.cmake"
 	DESTINATION
 		${ConfigPackageLocation}
 )
+
+install(
+	FILES
+		${CMAKE_CURRENT_SOURCE_DIR}/examples/cmake/FindLibtorrentRasterbar.cmake
+	DESTINATION
+		${CMAKE_INSTALL_DATADIR}/cmake/Modules
+)
+
+# === build tools ===
+if (build_tools)
+	add_subdirectory(tools)
+endif()
 
 # === build examples ===
 if (build_examples)
@@ -412,29 +850,10 @@ endif()
 
 # === build tests ===
 if(build_tests)
-	if (NOT logging)
-		message(FATAL_ERROR "tests require logging to be enabled")
-	endif()
-
-	file(GLOB tests RELATIVE "${PROJECT_SOURCE_DIR}" "test/test_*.cpp")
-	list(REMOVE_ITEM tests "test/test_natpmp.cpp") # doesn't build at time of writing
-	list(REMOVE_ITEM tests "test/test_utils.cpp") # helper file, not a test
-
-	add_library(test_common STATIC test/main.cpp test/test.cpp
-		test/setup_transfer.cpp test/dht_server.cpp test/udp_tracker.cpp
-		test/peer_server.cpp test/web_seed_suite.cpp test/swarm_suite.cpp
-		test/test_utils.cpp test/make_torrent.hpp test/make_torrent.cpp
-		test/settings.hpp test/settings.cpp)
-	set_target_properties(test_common PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON)
-	target_link_libraries(test_common torrent-rasterbar)
 	enable_testing()
-
-	foreach(s ${tests})
-		get_filename_component (sn ${s} NAME_WE)
-		add_executable(${sn} ${s})
-		target_link_libraries(${sn} test_common)
-		set_target_properties(${sn} PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/test")
-		set_target_properties(${sn} PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON)
-		add_test(NAME ${sn} COMMAND ${sn} WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/test")
-	endforeach(s)
+	# this will make some internal functions available in the DLL interface
+	target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_EXPORT_EXTRA)
+	add_subdirectory(test)
 endif()
+
+feature_summary(DEFAULT_DESCRIPTION WHAT ALL)

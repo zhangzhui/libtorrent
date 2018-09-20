@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2006-2016, Arvid Norberg
+Copyright (c) 2006-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -71,6 +71,9 @@ namespace libtorrent { namespace dht {
 
 namespace {
 
+// the write tokens we generate are 4 bytes
+constexpr int write_token_size = 4;
+
 void nop() {}
 
 node_id calculate_node_id(node_id const& nid, aux::listen_socket_handle const& sock)
@@ -85,7 +88,7 @@ node_id calculate_node_id(node_id const& nid, aux::listen_socket_handle const& s
 		return generate_random_id();
 	}
 
-	if (nid == node_id::min() || !verify_id(nid, external_address))
+	if (nid.is_all_zeros() || !verify_id(nid, external_address))
 		return generate_id(external_address);
 
 	return nid;
@@ -96,8 +99,8 @@ void incoming_error(entry& e, char const* msg, int error_code = 203)
 {
 	e["y"] = "e";
 	entry::list_type& l = e["e"].list();
-	l.push_back(entry(error_code));
-	l.push_back(entry(msg));
+	l.emplace_back(error_code);
+	l.emplace_back(msg);
 }
 
 } // anonymous namespace
@@ -111,15 +114,15 @@ node::node(aux::listen_socket_handle const& sock, socket_manager* sock_man
 	, dht_storage_interface& storage)
 	: m_settings(settings)
 	, m_id(calculate_node_id(nid, sock))
-	, m_table(m_id, sock.get_local_endpoint().protocol() == tcp::v4() ? udp::v4() : udp::v6(), 8, settings, observer)
+	, m_table(m_id, is_v4(sock.get_local_endpoint()) ? udp::v4() : udp::v6(), 8, settings, observer)
 	, m_rpc(m_id, m_settings, m_table, sock, sock_man, observer)
-	, m_get_foreign_node(get_foreign_node)
+	, m_sock(sock)
+	, m_sock_man(sock_man)
+	, m_get_foreign_node(std::move(get_foreign_node))
 	, m_observer(observer)
-	, m_protocol(map_protocol_to_descriptor(sock.get_local_endpoint().protocol() == tcp::v4() ? udp::v4() : udp::v6()))
+	, m_protocol(map_protocol_to_descriptor(is_v4(sock.get_local_endpoint()) ? udp::v4() : udp::v6()))
 	, m_last_tracker_tick(aux::time_now())
 	, m_last_self_refresh(min_time())
-	, m_sock_man(sock_man)
-	, m_sock(sock)
 	, m_counters(cnt)
 	, m_storage(storage)
 {
@@ -157,7 +160,7 @@ void node::update_node_id()
 bool node::verify_token(string_view token, sha1_hash const& info_hash
 	, udp::endpoint const& addr) const
 {
-	if (token.length() != 4)
+	if (token.length() != write_token_size)
 	{
 #ifndef TORRENT_DISABLE_LOGGING
 		if (m_observer != nullptr)
@@ -193,7 +196,7 @@ std::string node::generate_token(udp::endpoint const& addr
 	, sha1_hash const& info_hash)
 {
 	std::string token;
-	token.resize(4);
+	token.resize(write_token_size);
 	hasher h;
 	error_code ec;
 	std::string const address = addr.address().to_string(ec);
@@ -203,7 +206,7 @@ std::string node::generate_token(udp::endpoint const& addr
 	h.update(info_hash);
 
 	sha1_hash const hash = h.final();
-	std::copy(hash.begin(), hash.begin() + 4, token.begin());
+	std::copy(hash.begin(), hash.begin() + write_token_size, token.begin());
 	TORRENT_ASSERT(std::equal(token.begin(), token.end(), hash.data()));
 	return token;
 }
@@ -223,10 +226,6 @@ void node::bootstrap(std::vector<udp::endpoint> const& nodes
 
 	for (auto const& n : nodes)
 	{
-#if !TORRENT_USE_IPV6
-		if (n.protocol() == udp::v6()) continue;
-#endif
-
 #ifndef TORRENT_DISABLE_LOGGING
 		++count;
 #endif
@@ -256,7 +255,7 @@ void node::unreachable(udp::endpoint const& ep)
 	m_rpc.unreachable(ep);
 }
 
-void node::incoming(msg const& m)
+void node::incoming(aux::listen_socket_handle const& s, msg const& m)
 {
 	// is this a reply?
 	bdecode_node const y_ent = m.message.dict_find_string("y");
@@ -270,7 +269,7 @@ void node::incoming(msg const& m)
 		return;
 	}
 
-	char y = *(y_ent.string_ptr());
+	const char y = *(y_ent.string_ptr());
 
 	bdecode_node ext_ip = m.message.dict_find_string("ip");
 
@@ -282,23 +281,19 @@ void node::incoming(msg const& m)
 			ext_ip = r.dict_find_string("ip");
 	}
 
-#if TORRENT_USE_IPV6
-	if (ext_ip && ext_ip.string_length() >= 16)
+	if (ext_ip && ext_ip.string_length() >= int(detail::address_size(udp::v6())))
 	{
 		// this node claims we use the wrong node-ID!
-		address_v6::bytes_type b;
-		std::memcpy(&b[0], ext_ip.string_ptr(), 16);
+		char const* ptr = ext_ip.string_ptr();
 		if (m_observer != nullptr)
-			m_observer->set_external_address(m_sock, address_v6(b)
+			m_observer->set_external_address(m_sock, detail::read_v6_address(ptr)
 				, m.addr.address());
-	} else
-#endif
-	if (ext_ip && ext_ip.string_length() >= 4)
+	}
+	else if (ext_ip && ext_ip.string_length() >= int(detail::address_size(udp::v4())))
 	{
-		address_v4::bytes_type b;
-		std::memcpy(&b[0], ext_ip.string_ptr(), 4);
+		char const* ptr = ext_ip.string_ptr();
 		if (m_observer != nullptr)
-			m_observer->set_external_address(m_sock, address_v4(b)
+			m_observer->set_external_address(m_sock, detail::read_v4_address(ptr)
 				, m.addr.address());
 	}
 
@@ -317,7 +312,8 @@ void node::incoming(msg const& m)
 			// responds to 'query' messages that it receives.
 			if (m_settings.read_only) break;
 
-			if (!native_address(m.addr)) break;
+			// only respond to requests if they're addressed to this node
+			if (s != m_sock) break;
 
 			if (!m_sock_man->has_quota())
 			{
@@ -360,7 +356,7 @@ void node::incoming(msg const& m)
 namespace {
 
 	void announce_fun(std::vector<std::pair<node_entry, std::string>> const& v
-		, node& node, int const listen_port, sha1_hash const& ih, int const flags)
+		, node& node, int const listen_port, sha1_hash const& ih, announce_flags_t const flags)
 	{
 #ifndef TORRENT_DISABLE_LOGGING
 		auto logger = node.observer();
@@ -397,8 +393,8 @@ namespace {
 			a["info_hash"] = ih;
 			a["port"] = listen_port;
 			a["token"] = p.second;
-			a["seed"] = (flags & node::flag_seed) ? 1 : 0;
-			if (flags & node::flag_implied_port) a["implied_port"] = 1;
+			a["seed"] = (flags & announce::seed) ? 1 : 0;
+			if (flags & announce::implied_port) a["implied_port"] = 1;
 			node.stats_counters().inc_stats_counter(counters::dht_announce_peer_out);
 			node.m_rpc.invoke(e, p.first.ep(), o);
 		}
@@ -428,10 +424,11 @@ void node::add_node(udp::endpoint const& node)
 void node::get_peers(sha1_hash const& info_hash
 	, std::function<void(std::vector<tcp::endpoint> const&)> dcallback
 	, std::function<void(std::vector<std::pair<node_entry, std::string>> const&)> ncallback
-	, bool noseeds)
+	, announce_flags_t const flags)
 {
 	// search for nodes with ids close to id or with peers
 	// for info-hash id. then send announce_peer to them.
+	bool const noseeds = bool(flags & announce::seed);
 
 	auto ta = m_settings.privacy_lookups
 		? std::make_shared<dht::obfuscated_get_peers>(*this, info_hash, dcallback, ncallback, noseeds)
@@ -440,7 +437,7 @@ void node::get_peers(sha1_hash const& info_hash
 	ta->start();
 }
 
-void node::announce(sha1_hash const& info_hash, int const listen_port, int const flags
+void node::announce(sha1_hash const& info_hash, int listen_port, announce_flags_t const flags
 	, std::function<void(std::vector<tcp::endpoint> const&)> f)
 {
 #ifndef TORRENT_DISABLE_LOGGING
@@ -451,9 +448,16 @@ void node::announce(sha1_hash const& info_hash, int const listen_port, int const
 	}
 #endif
 
-	get_peers(info_hash, f
+	if (listen_port == 0 && m_observer != nullptr)
+	{
+		listen_port = m_observer->get_listen_port(
+			flags & announce::ssl_torrent ? aux::transport::ssl : aux::transport::plaintext
+			, m_sock);
+	}
+
+	get_peers(info_hash, std::move(f)
 		, std::bind(&announce_fun, _1, std::ref(*this)
-		, listen_port, info_hash, flags), flags & node::flag_seed);
+		, listen_port, info_hash, flags), flags);
 }
 
 void node::direct_request(udp::endpoint const& ep, entry& e
@@ -462,7 +466,7 @@ void node::direct_request(udp::endpoint const& ep, entry& e
 	// not really a traversal
 	auto algo = std::make_shared<direct_traversal>(*this, node_id(), f);
 
-	auto o = m_rpc.allocate_observer<direct_observer>(algo, ep, node_id());
+	auto o = m_rpc.allocate_observer<direct_observer>(std::move(algo), ep, node_id());
 	if (!o) return;
 #if TORRENT_USE_ASSERTS
 	o->m_in_constructor = false;
@@ -506,15 +510,15 @@ void node::get_item(public_key const& pk, std::string const& salt
 namespace {
 
 void put(std::vector<std::pair<node_entry, std::string>> const& nodes
-	, std::shared_ptr<put_data> ta)
+	, std::shared_ptr<put_data> const& ta)
 {
 	ta->set_targets(nodes);
 	ta->start();
 }
 
 void put_data_cb(item i, bool auth
-	, std::shared_ptr<put_data> ta
-	, std::function<void(item&)> f)
+	, std::shared_ptr<put_data> const& ta
+	, std::function<void(item&)> const& f)
 {
 	// call data_callback only when we got authoritative data.
 	if (auth)
@@ -602,9 +606,9 @@ void node::sample_infohashes(udp::endpoint const& ep, sha1_hash const& target
 struct ping_observer : observer
 {
 	ping_observer(
-		std::shared_ptr<traversal_algorithm> const& algorithm
+		std::shared_ptr<traversal_algorithm> algorithm
 		, udp::endpoint const& ep, node_id const& id)
-		: observer(algorithm, ep, id)
+		: observer(std::move(algorithm), ep, id)
 	{}
 
 	// parses out "nodes"
@@ -674,8 +678,8 @@ void node::send_single_refresh(udp::endpoint const& ep, int const bucket
 	target |= m_id & mask;
 
 	// create a dummy traversal_algorithm
-	auto const algo = std::make_shared<traversal_algorithm>(*this, node_id());
-	auto o = m_rpc.allocate_observer<ping_observer>(algo, ep, id);
+	auto algo = std::make_shared<traversal_algorithm>(*this, node_id());
+	auto o = m_rpc.allocate_observer<ping_observer>(std::move(algo), ep, id);
 	if (!o) return;
 #if TORRENT_USE_ASSERTS
 	o->m_in_constructor = false;
@@ -723,7 +727,7 @@ void node::status(std::vector<dht_routing_bucket>& table
 
 	for (auto const& r : m_running_requests)
 	{
-		requests.push_back(dht_lookup());
+		requests.emplace_back();
 		dht_lookup& lookup = requests.back();
 		r->status(lookup);
 	}
@@ -736,7 +740,7 @@ std::tuple<int, int, int> node::get_stats_counters() const
 	return std::make_tuple(nodes, replacements, m_rpc.num_allocated_observers());
 }
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 // TODO: 2 use the non deprecated function instead of this one
 void node::status(session_status& s)
 {
@@ -744,12 +748,11 @@ void node::status(session_status& s)
 
 	m_table.status(s);
 	s.dht_total_allocations += m_rpc.num_allocated_observers();
-	for (std::set<traversal_algorithm*>::iterator i = m_running_requests.begin()
-		, end(m_running_requests.end()); i != end; ++i)
+	for (auto& r : m_running_requests)
 	{
-		s.active_requests.push_back(dht_lookup());
+		s.active_requests.emplace_back();
 		dht_lookup& lookup = s.active_requests.back();
-		(*i)->status(lookup);
+		r->status(lookup);
 	}
 }
 #endif
@@ -770,7 +773,7 @@ entry write_nodes_entry(std::vector<node_entry> const& nodes)
 	for (auto const& n : nodes)
 	{
 		std::copy(n.id.begin(), n.id.end(), out);
-		detail::write_endpoint(udp::endpoint(n.addr(), std::uint16_t(n.port())), out);
+		detail::write_endpoint(n.ep(), out);
 	}
 	return r;
 }
@@ -821,7 +824,7 @@ void node::incoming_request(msg const& m, entry& e)
 	// mirror back the other node's external port
 	reply["p"] = m.addr.port();
 
-	string_view query = top_level[0].string_value();
+	string_view const query = top_level[0].string_value();
 
 	if (m_observer && m_observer->on_dht_request(query, m, e))
 		return;
@@ -911,7 +914,7 @@ void node::incoming_request(msg const& m, entry& e)
 			return;
 		}
 
-		int port = int(msg_keys[1].int_value());
+		auto port = int(msg_keys[1].int_value());
 
 		// is the announcer asking to ignore the explicit
 		// listen port and instead use the source port of the packet?
@@ -994,7 +997,7 @@ void node::incoming_request(msg const& m, entry& e)
 
 		// pointer and length to the whole entry
 		span<char const> buf = msg_keys[1].data_section();
-		if (buf.size() > 1000 || buf.size() <= 0)
+		if (buf.size() > 1000 || buf.empty())
 		{
 			m_counters.inc_stats_counter(counters::dht_invalid_put);
 			incoming_error(e, "message too big", 205);
@@ -1094,7 +1097,7 @@ void node::incoming_request(msg const& m, entry& e)
 	}
 	else if (query == "get")
 	{
-		key_desc_t msg_desc[] = {
+		static key_desc_t const msg_desc[] = {
 			{"seq", bdecode_node::int_t, 0, key_desc_t::optional},
 			{"target", bdecode_node::string_t, 20, 0},
 			{"want", bdecode_node::list_t, 0, key_desc_t::optional},
@@ -1220,7 +1223,7 @@ void node::write_nodes_entries(sha1_hash const& info_hash
 
 node::protocol_descriptor const& node::map_protocol_to_descriptor(udp protocol)
 {
-	static std::array<protocol_descriptor, 2> descriptors =
+	static std::array<protocol_descriptor, 2> const descriptors =
 	{{
 		{udp::v4(), "n4", "nodes"},
 		{udp::v6(), "n6", "nodes6"}

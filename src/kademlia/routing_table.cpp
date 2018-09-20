@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2006-2016, Arvid Norberg
+Copyright (c) 2006-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <vector>
-#include <iterator> // std::distance()
+#include <iterator> // std::distance(), std::next
 #include <algorithm> // std::copy, std::remove_copy_if
 #include <functional>
 #include <numeric>
@@ -78,31 +78,25 @@ namespace {
 
 void ip_set::insert(address const& addr)
 {
-#if TORRENT_USE_IPV6
 	if (addr.is_v6())
 		m_ip6s.insert(addr.to_v6().to_bytes());
 	else
-#endif
 		m_ip4s.insert(addr.to_v4().to_bytes());
 }
 
 bool ip_set::exists(address const& addr) const
 {
-#if TORRENT_USE_IPV6
 	if (addr.is_v6())
 		return m_ip6s.find(addr.to_v6().to_bytes()) != m_ip6s.end();
 	else
-#endif
 		return m_ip4s.find(addr.to_v4().to_bytes()) != m_ip4s.end();
 }
 
 void ip_set::erase(address const& addr)
 {
-#if TORRENT_USE_IPV6
 	if (addr.is_v6())
 		erase_one(m_ip6s, addr.to_v6().to_bytes());
 	else
-#endif
 		erase_one(m_ip4s, addr.to_v4().to_bytes());
 }
 
@@ -145,7 +139,7 @@ void routing_table::status(std::vector<dht_routing_bucket>& s) const
 	}
 }
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 // TODO: 2 use the non deprecated function instead of this one
 void routing_table::status(session_status& s) const
 {
@@ -167,7 +161,7 @@ void routing_table::status(session_status& s) const
 		dht_routing_bucket b;
 		b.num_nodes = int(i.live_nodes.size());
 		b.num_replacements = int(i.replacements.size());
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		b.last_active = 0;
 #endif
 		s.dht_routing_table.push_back(b);
@@ -244,25 +238,38 @@ node_entry const* routing_table::next_refresh()
 	node_entry* candidate = nullptr;
 
 	// this will have a bias towards pinging nodes close to us first.
-	for (table_t::reverse_iterator i = m_buckets.rbegin()
-		, end(m_buckets.rend()); i != end; ++i)
+	for (auto i = m_buckets.rbegin(), end(m_buckets.rend()); i != end; ++i)
 	{
-		for (bucket_t::iterator j = i->live_nodes.begin()
-			, end2(i->live_nodes.end()); j != end2; ++j)
+		for (auto& n : i->live_nodes)
 		{
 			// this shouldn't happen
-			TORRENT_ASSERT(m_id != j->id);
-			if (j->id == m_id) continue;
+			TORRENT_ASSERT(m_id != n.id);
+			if (n.id == m_id) continue;
 
-			if (j->last_queried == min_time())
+			if (n.last_queried == min_time())
 			{
-				candidate = &*j;
+				candidate = &n;
 				goto out;
 			}
 
-			if (candidate == nullptr || j->last_queried < candidate->last_queried)
+			if (candidate == nullptr || n.last_queried < candidate->last_queried)
 			{
-				candidate = &*j;
+				candidate = &n;
+			}
+		}
+
+		if (i == m_buckets.rbegin()
+			|| int(i->live_nodes.size()) < bucket_limit(int(std::distance(i, end)) - 1))
+		{
+			// this bucket isn't full or it can be split
+			// check for an unpinged replacement
+			// node which may be eligible for the live bucket if confirmed
+			auto r = std::find_if(i->replacements.begin(), i->replacements.end()
+				, [](node_entry const& e) { return !e.pinged() && e.last_queried == min_time(); });
+			if (r != i->replacements.end())
+			{
+				candidate = &*r;
+				goto out;
 			}
 		}
 	}
@@ -287,7 +294,7 @@ routing_table::table_t::iterator routing_table::find_bucket(node_id const& id)
 		++num_buckets;
 	}
 
-	int bucket_index = (std::min)(159 - distance_exp(m_id, id), num_buckets - 1);
+	int bucket_index = std::min(159 - distance_exp(m_id, id), num_buckets - 1);
 	TORRENT_ASSERT(bucket_index < int(m_buckets.size()));
 	TORRENT_ASSERT(bucket_index >= 0);
 
@@ -302,7 +309,6 @@ bool compare_ip_cidr(address const& lhs, address const& rhs)
 {
 	TORRENT_ASSERT(lhs.is_v4() == rhs.is_v4());
 
-#if TORRENT_USE_IPV6
 	if (lhs.is_v6())
 	{
 		// if IPv6 addresses is in the same /64, they're too close and we won't
@@ -318,7 +324,6 @@ bool compare_ip_cidr(address const& lhs, address const& rhs)
 		return mask == 0;
 	}
 	else
-#endif
 	{
 		// if IPv4 addresses is in the same /24, they're too close and we won't
 		// trust the second one
@@ -331,19 +336,16 @@ bool compare_ip_cidr(address const& lhs, address const& rhs)
 node_entry* routing_table::find_node(udp::endpoint const& ep
 	, routing_table::table_t::iterator* bucket)
 {
-	for (table_t::iterator i = m_buckets.begin()
-		, end(m_buckets.end()); i != end; ++i)
+	for (auto i = m_buckets.begin() , end(m_buckets.end()); i != end; ++i)
 	{
-		for (bucket_t::iterator j = i->replacements.begin();
-			j != i->replacements.end(); ++j)
+		for (auto j = i->replacements.begin(); j != i->replacements.end(); ++j)
 		{
 			if (j->addr() != ep.address()) continue;
 			if (j->port() != ep.port()) continue;
 			*bucket = i;
 			return &*j;
 		}
-		for (bucket_t::iterator j = i->live_nodes.begin();
-			j != i->live_nodes.end(); ++j)
+		for (auto j = i->live_nodes.begin(); j != i->live_nodes.end(); ++j)
 		{
 			if (j->addr() != ep.address()) continue;
 			if (j->port() != ep.port()) continue;
@@ -372,7 +374,7 @@ void routing_table::fill_from_replacements(table_t::iterator bucket)
 	while (int(b.size()) < bucket_size && !rb.empty())
 	{
 		auto j = std::find_if(rb.begin(), rb.end(), std::bind(&node_entry::pinged, _1));
-		if (j == rb.end()) j = rb.begin();
+		if (j == rb.end()) break;
 		b.push_back(*j);
 		rb.erase(j);
 	}
@@ -492,6 +494,9 @@ routing_table::add_node_status_t routing_table::add_node_impl(node_entry e)
 				existing->update_rtt(e.rtt);
 				existing->last_queried = e.last_queried;
 			}
+			// if this was a replacement node it may be elligible for
+			// promotion to the live bucket
+			fill_from_replacements(existing_bucket);
 			return node_added;
 		}
 		else if (existing->id.is_all_zeros())
@@ -619,11 +624,11 @@ routing_table::add_node_status_t routing_table::add_node_impl(node_entry e)
 ip_ok:
 
 	// can we split the bucket?
-	// only nodes that haven't failed can split the bucket, and we can only
+	// only nodes that have been confirmed can split the bucket, and we can only
 	// split the last bucket
 	bool const can_split = (std::next(i) == m_buckets.end()
 		&& m_buckets.size() < 159)
-		&& e.fail_count() == 0
+		&& e.confirmed()
 		&& (i == m_buckets.begin() || std::prev(i)->live_nodes.size() > 1);
 
 	// if there's room in the main bucket, just insert it
@@ -631,7 +636,7 @@ ip_ok:
 	// bucket's size limit. This makes use split the low-numbered buckets split
 	// earlier when we have larger low buckets, to make it less likely that we
 	// lose nodes
-	if (int(b.size()) < (can_split ? next_bucket_size_limit : bucket_size_limit))
+	if (e.pinged() && int(b.size()) < (can_split ? next_bucket_size_limit : bucket_size_limit))
 	{
 		if (b.empty()) b.reserve(bucket_size_limit);
 		b.push_back(e);
@@ -639,9 +644,7 @@ ip_ok:
 		return node_added;
 	}
 
-	// if there is no room, we look for nodes that are not 'pinged',
-	// i.e. we haven't confirmed that they respond to messages.
-	// Then we look for nodes marked as stale
+	// if there is no room, we look for nodes marked as stale
 	// in the k-bucket. If we find one, we can replace it.
 	// then we look for nodes with the same 3 bit prefix (or however
 	// many bits prefix the bucket size warrants). If there is no other
@@ -649,24 +652,8 @@ ip_ok:
 	// as the last replacement strategy, if the node we found matching our
 	// bit prefix has higher RTT than the new node, replace it.
 
-	if (e.pinged() && e.fail_count() == 0)
+	if (e.confirmed())
 	{
-		// if the node we're trying to insert is considered pinged,
-		// we may replace other nodes that aren't pinged
-
-		j = std::find_if(b.begin(), b.end()
-			, [](node_entry const& ne) { return !ne.pinged(); });
-
-		if (j != b.end() && !j->pinged())
-		{
-			// j points to a node that has not been pinged.
-			// Replace it with this new one
-			m_ips.erase(j->addr());
-			*j = e;
-			m_ips.insert(e.addr());
-			return node_added;
-		}
-
 		// A node is considered stale if it has failed at least one
 		// time. Here we choose the node that has failed most times.
 		// If we don't find one, place this node in the replacement-
@@ -904,7 +891,7 @@ void routing_table::split_bucket()
 	{
 		if (distance_exp(m_id, j->id) >= 159 - bucket_index)
 		{
-			if (int(b.size()) >= bucket_size_limit)
+			if (!j->pinged() || int(b.size()) >= bucket_size_limit)
 			{
 				++j;
 				continue;
@@ -914,7 +901,7 @@ void routing_table::split_bucket()
 		else
 		{
 			// this entry belongs in the new bucket
-			if (int(new_bucket.size()) < new_bucket_size)
+			if (j->pinged() && int(new_bucket.size()) < new_bucket_size)
 				new_bucket.push_back(*j);
 			else
 				new_replacement_bucket.push_back(*j);
@@ -1149,6 +1136,7 @@ void routing_table::check_invariant() const
 		for (auto const& j : i.live_nodes)
 		{
 			TORRENT_ASSERT(j.addr().is_v4() == i.live_nodes.begin()->addr().is_v4());
+			TORRENT_ASSERT(j.pinged());
 			all_ips.insert(j.addr());
 		}
 	}
@@ -1163,7 +1151,7 @@ bool routing_table::is_full(int const bucket) const
 	if (num_buckets == 0) return false;
 	if (bucket >= num_buckets) return false;
 
-	table_t::const_iterator i = m_buckets.begin();
+	auto i = m_buckets.cbegin();
 	std::advance(i, bucket);
 	return (int(i->live_nodes.size()) >= bucket_limit(bucket)
 		&& int(i->replacements.size()) >= m_bucket_size);

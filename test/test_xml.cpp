@@ -34,6 +34,9 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/upnp.hpp"
 #include "test.hpp"
 #include <iostream>
+#include <functional>
+
+namespace {
 
 char upnp_xml[] =
 "<root>"
@@ -304,6 +307,8 @@ void test_parse(char const* in, char const* expected)
 		, in, out.c_str(), expected);
 	TEST_EQUAL(out, expected);
 }
+
+} // anonymous namespace
 
 TORRENT_TEST(upnp_parser1)
 {

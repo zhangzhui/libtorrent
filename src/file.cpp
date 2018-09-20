@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -32,6 +32,8 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/config.hpp"
 #include "libtorrent/aux_/disable_warnings_push.hpp"
+#include "libtorrent/span.hpp"
+#include <mutex> // for call_once
 
 #ifdef __GNUC__
 #pragma GCC diagnostic push
@@ -53,6 +55,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef TORRENT_WINDOWS
 #include <sys/uio.h> // for iovec
 #else
+#include <boost/scope_exit.hpp>
 namespace {
 struct iovec
 {
@@ -166,25 +169,22 @@ namespace {
 	// sure we wait for all of them, partially in sequence
 	DWORD wait_for_multiple_objects(int num_handles, HANDLE* h)
 	{
-		int batch_size = (std::min)(num_handles, MAXIMUM_WAIT_OBJECTS);
+		int batch_size = std::min(num_handles, MAXIMUM_WAIT_OBJECTS);
 		while (WaitForMultipleObjects(batch_size, h, TRUE, INFINITE) != WAIT_FAILED)
 		{
 			h += batch_size;
 			num_handles -= batch_size;
-			batch_size = (std::min)(num_handles, MAXIMUM_WAIT_OBJECTS);
+			batch_size = std::min(num_handles, MAXIMUM_WAIT_OBJECTS);
 			if (batch_size <= 0) return WAIT_OBJECT_0;
 		}
 		return WAIT_FAILED;
 	}
 
-	int preadv(HANDLE fd, ::iovec const* bufs, int num_bufs, std::int64_t file_offset)
+	int allocate_overlapped(::iovec const* bufs, lt::span<OVERLAPPED> ol
+		, lt::span<HANDLE> h, std::int64_t file_offset)
 	{
-		TORRENT_ALLOCA(ol, OVERLAPPED, num_bufs);
-		std::memset(ol.data(), 0, sizeof(OVERLAPPED) * num_bufs);
-
-		TORRENT_ALLOCA(h, HANDLE, num_bufs);
-
-		for (int i = 0; i < num_bufs; ++i)
+		std::memset(ol.data(), 0, sizeof(OVERLAPPED) * ol.size());
+		for (std::size_t i = 0; i < ol.size(); ++i)
 		{
 			ol[i].OffsetHigh = file_offset >> 32;
 			ol[i].Offset = file_offset & 0xffffffff;
@@ -193,83 +193,90 @@ namespace {
 			if (h[i] == nullptr)
 			{
 				// we failed to create the event, roll-back and return an error
-				for (int j = 0; j < i; ++j) CloseHandle(h[i]);
+				for (std::size_t j = 0; j < i; ++j) CloseHandle(h[i]);
 				return -1;
 			}
 			file_offset += bufs[i].iov_len;
 		}
+		return 0;
+	}
 
-		int ret = 0;
+	int preadv(HANDLE fd, ::iovec const* bufs, int num_bufs, std::int64_t const file_offset)
+	{
+		TORRENT_ALLOCA(ol, OVERLAPPED, num_bufs);
+		TORRENT_ALLOCA(h, HANDLE, num_bufs);
+
+		if (allocate_overlapped(bufs, ol, h, file_offset) < 0) return -1;
+
+		BOOST_SCOPE_EXIT_ALL(&h) {
+			for (auto hnd : h)
+				CloseHandle(hnd);
+		};
+
+		int num_waits = num_bufs;
 		for (int i = 0; i < num_bufs; ++i)
 		{
 			DWORD num_read;
-			if (ReadFile(fd, bufs[i].iov_base, DWORD(bufs[i].iov_len), &num_read, &ol[i]) == FALSE
-				&& GetLastError() != ERROR_IO_PENDING
-#ifdef ERROR_CANT_WAIT
-				&& GetLastError() != ERROR_CANT_WAIT
-#endif
-				)
+			if (ReadFile(fd, bufs[i].iov_base, DWORD(bufs[i].iov_len), &num_read, &ol[i]) == FALSE)
 			{
-				ret = -1;
-				goto done;
+				DWORD const last_error = GetLastError();
+				if (last_error == ERROR_HANDLE_EOF)
+				{
+					num_waits = i;
+					break;
+				}
+				else if (last_error != ERROR_IO_PENDING
+#ifdef ERROR_CANT_WAIT
+					&& last_error != ERROR_CANT_WAIT
+#endif
+					)
+				{
+					return -1;
+				}
 			}
 		}
 
-		if (wait_for_multiple_objects(int(h.size()), h.data()) == WAIT_FAILED)
-		{
-			ret = -1;
-			goto done;
-		}
+		if (num_waits == 0) return 0;
 
-		for (auto& o : ol)
+		if (wait_for_multiple_objects(num_waits, h.data()) == WAIT_FAILED)
+			return -1;
+
+		int ret = 0;
+		for (auto& o : ol.first(num_waits))
 		{
 			if (WaitForSingleObject(o.hEvent, INFINITE) == WAIT_FAILED)
-			{
-				ret = -1;
-				break;
-			}
+				return -1;
+
 			DWORD num_read;
 			if (GetOverlappedResult(fd, &o, &num_read, FALSE) == FALSE)
 			{
+				DWORD const last_error = GetLastError();
+				if (last_error != ERROR_HANDLE_EOF)
+				{
 #ifdef ERROR_CANT_WAIT
-				TORRENT_ASSERT(GetLastError() != ERROR_CANT_WAIT);
+					TORRENT_ASSERT(last_error != ERROR_CANT_WAIT);
 #endif
-				ret = -1;
-				break;
+					return -1;
+				}
 			}
 			ret += num_read;
 		}
-done:
-
-		for (auto hnd : h)
-			CloseHandle(hnd);
 
 		return ret;
 	}
 
-	int pwritev(HANDLE fd, ::iovec const* bufs, int num_bufs, std::int64_t file_offset)
+	int pwritev(HANDLE fd, ::iovec const* bufs, int num_bufs, std::int64_t const file_offset)
 	{
 		TORRENT_ALLOCA(ol, OVERLAPPED, num_bufs);
-		std::memset(ol.data(), 0, sizeof(OVERLAPPED) * num_bufs);
-
 		TORRENT_ALLOCA(h, HANDLE, num_bufs);
 
-		for (int i = 0; i < num_bufs; ++i)
-		{
-			ol[i].OffsetHigh = file_offset >> 32;
-			ol[i].Offset = file_offset & 0xffffffff;
-			ol[i].hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-			h[i] = ol[i].hEvent;
-			if (h[i] == nullptr)
-			{
-				// we failed to create the event, roll-back and return an error
-				for (int j = 0; j < i; ++j) CloseHandle(h[i]);
-				return -1;
-			}
-			file_offset += bufs[i].iov_len;
-		}
+		if (allocate_overlapped(bufs, ol, h, file_offset) < 0) return -1;
 
-		int ret = 0;
+		BOOST_SCOPE_EXIT_ALL(&h) {
+			for (auto hnd : h)
+				CloseHandle(hnd);
+		};
+
 		for (int i = 0; i < num_bufs; ++i)
 		{
 			DWORD num_written;
@@ -280,43 +287,33 @@ done:
 #endif
 				)
 			{
-				ret = -1;
-				goto done;
+				return -1;
 			}
 		}
 
 		if (wait_for_multiple_objects(int(h.size()), h.data()) == WAIT_FAILED)
-		{
-			ret = -1;
-			goto done;
-		}
+			return -1;
 
+		int ret = 0;
 		for (auto& o : ol)
 		{
 			if (WaitForSingleObject(o.hEvent, INFINITE) == WAIT_FAILED)
-			{
-				ret = -1;
-				break;
-			}
+				return -1;
+
 			DWORD num_written;
 			if (GetOverlappedResult(fd, &o, &num_written, FALSE) == FALSE)
 			{
 #ifdef ERROR_CANT_WAIT
 				TORRENT_ASSERT(GetLastError() != ERROR_CANT_WAIT);
 #endif
-				ret = -1;
-				break;
+				return -1;
 			}
 			ret += num_written;
 		}
-done:
-
-		for (auto hnd : h)
-			CloseHandle(hnd);
 
 		return ret;
 	}
-}
+} // namespace
 # else
 #  undef _BSD_SOURCE
 #  define _BSD_SOURCE // deprecated since glibc 2.20
@@ -475,10 +472,7 @@ static_assert(!(open_mode::sparse & open_mode::attribute_mask), "internal flags 
 
 
 #ifdef TORRENT_WINDOWS
-	bool get_manage_volume_privs();
-
-	// this needs to be run before CreateFile
-	bool file::has_manage_volume_privs = get_manage_volume_privs();
+	void acquire_manage_volume_privs();
 #endif
 
 	file::file() : m_file_handle(INVALID_HANDLE_VALUE)
@@ -530,16 +524,24 @@ static_assert(!(open_mode::sparse & open_mode::attribute_mask), "internal flags 
 
 		TORRENT_ASSERT(static_cast<std::uint32_t>(mode & open_mode::rw_mask) < mode_array.size());
 		win_open_mode_t const& m = mode_array[static_cast<std::uint32_t>(mode & open_mode::rw_mask)];
-		DWORD a = attrib_array[static_cast<std::uint32_t>(mode & open_mode::attribute_mask) >> 12];
+		DWORD a = attrib_array[static_cast<std::uint32_t>(mode & open_mode::attribute_mask) >> 7];
 
 		// one might think it's a good idea to pass in FILE_FLAG_RANDOM_ACCESS. It
 		// turns out that it isn't. That flag will break your operating system:
 		// http://support.microsoft.com/kb/2549369
 
 		DWORD const flags = ((mode & open_mode::random_access) ? 0 : FILE_FLAG_SEQUENTIAL_SCAN)
-			| (a ? a : FILE_ATTRIBUTE_NORMAL)
+			| a
 			| FILE_FLAG_OVERLAPPED
 			| ((mode & open_mode::no_cache) ? FILE_FLAG_WRITE_THROUGH : 0);
+
+		if (!(mode & open_mode::sparse))
+		{
+			// Enable privilege required by SetFileValidData()
+			// https://docs.microsoft.com/en-us/windows/desktop/api/fileapi/nf-fileapi-setfilevaliddata
+			static std::once_flag flag;
+			std::call_once(flag, acquire_manage_volume_privs);
+		}
 
 		handle_type handle = CreateFileW(file_path.c_str(), m.rw_mode
 			, FILE_SHARE_READ | FILE_SHARE_WRITE
@@ -760,7 +762,6 @@ typedef struct _FILE_ALLOCATED_RANGE_BUFFER {
 
 	namespace {
 
-#if !TORRENT_USE_PREADV
 	void gather_copy(span<iovec_t const> bufs, char* dst)
 	{
 		std::size_t offset = 0;
@@ -784,8 +785,8 @@ typedef struct _FILE_ALLOCATED_RANGE_BUFFER {
 	bool coalesce_read_buffers(span<iovec_t const>& bufs
 		, iovec_t& tmp)
 	{
-		std::size_t const buf_size = aux::numeric_cast<std::size_t>(bufs_size(bufs));
-		char* buf = new char[buf_size];
+		auto const buf_size = aux::numeric_cast<std::size_t>(bufs_size(bufs));
+		auto buf = new char[buf_size];
 		tmp = { buf, buf_size };
 		bufs = span<iovec_t const>(tmp);
 		return true;
@@ -801,15 +802,15 @@ typedef struct _FILE_ALLOCATED_RANGE_BUFFER {
 	bool coalesce_write_buffers(span<iovec_t const>& bufs
 		, iovec_t& tmp)
 	{
-		std::size_t const buf_size = aux::numeric_cast<std::size_t>(bufs_size(bufs));
-		char* buf = new char[buf_size];
+		auto const buf_size = aux::numeric_cast<std::size_t>(bufs_size(bufs));
+		auto buf = new char[buf_size];
 		gather_copy(bufs, buf);
 		tmp = { buf, buf_size };
 		bufs = span<iovec_t const>(tmp);
 		return true;
 	}
-#else
 
+#if TORRENT_USE_PREADV
 namespace {
 	int bufs_size(span<::iovec> bufs)
 	{
@@ -835,7 +836,7 @@ namespace {
 			++it;
 		}
 
-		int ret = 0;
+		std::int64_t ret = 0;
 		while (!vec.empty())
 		{
 #ifdef IOV_MAX
@@ -844,7 +845,7 @@ namespace {
 			auto const nbufs = vec;
 #endif
 
-			int tmp_ret = 0;
+			std::int64_t tmp_ret = 0;
 			tmp_ret = f(fd, nbufs.data(), int(nbufs.size()), file_offset);
 			if (tmp_ret < 0)
 			{
@@ -862,7 +863,7 @@ namespace {
 			// just need to issue the read/write operation again. In either case,
 			// punt that to the upper layer, as reissuing the operations is
 			// complicated here
-			const int expected_len = bufs_size(nbufs);
+			int const expected_len = bufs_size(nbufs);
 			if (tmp_ret < expected_len) break;
 
 			vec = vec.subspan(nbufs.size());
@@ -952,11 +953,6 @@ namespace {
 		TORRENT_ASSERT(!bufs.empty());
 		TORRENT_ASSERT(is_open());
 
-#if TORRENT_USE_PREADV
-		TORRENT_UNUSED(flags);
-		std::int64_t ret = iov(&::preadv, native_handle(), file_offset, bufs, ec);
-#else
-
 		// there's no point in coalescing single buffer writes
 		if (bufs.size() == 1)
 		{
@@ -972,7 +968,9 @@ namespace {
 				flags &= ~open_mode::coalesce_buffers;
 		}
 
-#if TORRENT_USE_PREAD
+#if TORRENT_USE_PREADV
+		std::int64_t ret = iov(&::preadv, native_handle(), file_offset, tmp_bufs, ec);
+#elif TORRENT_USE_PREAD
 		std::int64_t ret = iov(&::pread, native_handle(), file_offset, tmp_bufs, ec);
 #else
 		std::int64_t ret = iov(&::read, native_handle(), file_offset, tmp_bufs, ec);
@@ -982,7 +980,6 @@ namespace {
 			coalesce_read_buffers_end(bufs
 				, tmp.data(), !ec);
 
-#endif
 		return ret;
 	}
 
@@ -1008,12 +1005,6 @@ namespace {
 
 		ec.clear();
 
-#if TORRENT_USE_PREADV
-		TORRENT_UNUSED(flags);
-
-		std::int64_t ret = iov(&::pwritev, native_handle(), file_offset, bufs, ec);
-#else
-
 		// there's no point in coalescing single buffer writes
 		if (bufs.size() == 1)
 		{
@@ -1028,7 +1019,9 @@ namespace {
 				flags &= ~open_mode::coalesce_buffers;
 		}
 
-#if TORRENT_USE_PREAD
+#if TORRENT_USE_PREADV
+		std::int64_t ret = iov(&::pwritev, native_handle(), file_offset, bufs, ec);
+#elif TORRENT_USE_PREAD
 		std::int64_t ret = iov(&::pwrite, native_handle(), file_offset, bufs, ec);
 #else
 		std::int64_t ret = iov(&::write, native_handle(), file_offset, bufs, ec);
@@ -1037,7 +1030,6 @@ namespace {
 		if (flags & open_mode::coalesce_buffers)
 			delete[] tmp.data();
 
-#endif
 #if TORRENT_USE_FDATASYNC \
 	&& !defined F_NOCACHE && \
 	!defined DIRECTIO_ON
@@ -1055,25 +1047,14 @@ namespace {
 	}
 
 #ifdef TORRENT_WINDOWS
-	bool get_manage_volume_privs()
+	void acquire_manage_volume_privs()
 	{
-		typedef BOOL (WINAPI *OpenProcessToken_t)(
-			HANDLE ProcessHandle,
-			DWORD DesiredAccess,
-			PHANDLE TokenHandle);
+		using OpenProcessToken_t = BOOL (WINAPI*)(HANDLE, DWORD, PHANDLE);
 
-		typedef BOOL (WINAPI *LookupPrivilegeValue_t)(
-			LPCSTR lpSystemName,
-			LPCSTR lpName,
-			PLUID lpLuid);
+		using LookupPrivilegeValue_t = BOOL (WINAPI*)(LPCSTR, LPCSTR, PLUID);
 
-		typedef BOOL (WINAPI *AdjustTokenPrivileges_t)(
-			HANDLE TokenHandle,
-			BOOL DisableAllPrivileges,
-			PTOKEN_PRIVILEGES NewState,
-			DWORD BufferLength,
-			PTOKEN_PRIVILEGES PreviousState,
-			PDWORD ReturnLength);
+		using AdjustTokenPrivileges_t = BOOL (WINAPI*)(
+			HANDLE, BOOL, PTOKEN_PRIVILEGES, DWORD, PTOKEN_PRIVILEGES, PDWORD);
 
 		auto OpenProcessToken =
 			aux::get_library_procedure<aux::advapi32, OpenProcessToken_t>("OpenProcessToken");
@@ -1082,44 +1063,48 @@ namespace {
 		auto AdjustTokenPrivileges =
 			aux::get_library_procedure<aux::advapi32, AdjustTokenPrivileges_t>("AdjustTokenPrivileges");
 
-		if (OpenProcessToken == nullptr || LookupPrivilegeValue == nullptr || AdjustTokenPrivileges == nullptr) return false;
+		if (OpenProcessToken == nullptr
+			|| LookupPrivilegeValue == nullptr
+			|| AdjustTokenPrivileges == nullptr)
+		{
+			return;
+		}
 
 
 		HANDLE token;
 		if (!OpenProcessToken(GetCurrentProcess()
 			, TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token))
-			return false;
+			return;
 
-		TOKEN_PRIVILEGES privs;
+		BOOST_SCOPE_EXIT_ALL(&token) {
+			CloseHandle(token);
+		};
+
+		TOKEN_PRIVILEGES privs{};
 		if (!LookupPrivilegeValue(nullptr, "SeManageVolumePrivilege"
 			, &privs.Privileges[0].Luid))
 		{
-			CloseHandle(token);
-			return false;
+			return;
 		}
 
 		privs.PrivilegeCount = 1;
 		privs.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
 
-		bool ret = AdjustTokenPrivileges(token, FALSE, &privs, 0, nullptr, nullptr)
-			&& GetLastError() == ERROR_SUCCESS;
-
-		CloseHandle(token);
-
-		return ret;
+		AdjustTokenPrivileges(token, FALSE, &privs, 0, nullptr, nullptr);
 	}
 
 	void set_file_valid_data(HANDLE f, std::int64_t size)
 	{
-		typedef BOOL (WINAPI *SetFileValidData_t)(HANDLE, LONGLONG);
+		using SetFileValidData_t = BOOL (WINAPI*)(HANDLE, LONGLONG);
 		auto SetFileValidData =
 			aux::get_library_procedure<aux::kernel32, SetFileValidData_t>("SetFileValidData");
 
-		if (SetFileValidData == nullptr) return;
-
-		// we don't necessarily expect to have enough
-		// privilege to do this, so ignore errors.
-		SetFileValidData(f, size);
+		if (SetFileValidData)
+		{
+			// we don't necessarily expect to have enough
+			// privilege to do this, so ignore errors.
+			SetFileValidData(f, size);
+		}
 	}
 #endif
 
@@ -1153,35 +1138,7 @@ namespace {
 				ec.assign(GetLastError(), system_category());
 				return false;
 			}
-		}
-
-#if _WIN32_WINNT >= 0x0600 // only if Windows Vista or newer
-		if (!(m_open_mode & open_mode::sparse))
-		{
-			typedef DWORD (WINAPI *GetFileInformationByHandleEx_t)(HANDLE hFile
-				, FILE_INFO_BY_HANDLE_CLASS FileInformationClass
-				, LPVOID lpFileInformation
-				, DWORD dwBufferSize);
-
-			auto GetFileInformationByHandleEx =
-				aux::get_library_procedure<aux::kernel32, GetFileInformationByHandleEx_t>("GetFileInformationByHandleEx");
-
-			offs.QuadPart = 0;
-			if (GetFileInformationByHandleEx != nullptr)
-			{
-				// only allocate the space if the file
-				// is not fully allocated
-				FILE_STANDARD_INFO inf;
-				if (GetFileInformationByHandleEx(native_handle()
-					, FileStandardInfo, &inf, sizeof(inf)) == FALSE)
-				{
-					ec.assign(GetLastError(), system_category());
-					if (ec) return false;
-				}
-				offs = inf.AllocationSize;
-			}
-
-			if (offs.QuadPart < s)
+			if (!(m_open_mode & open_mode::sparse))
 			{
 				// if the user has permissions, avoid filling
 				// the file with zeroes, but just fill it with
@@ -1189,9 +1146,8 @@ namespace {
 				set_file_valid_data(m_file_handle, s);
 			}
 		}
-#endif // if Windows Vista
 #else // NON-WINDOWS
-		struct stat st;
+		struct stat st{};
 		if (::fstat(native_handle(), &st) != 0)
 		{
 			ec.assign(errno, system_category());
@@ -1222,17 +1178,23 @@ namespace {
 			fstore_t f = {F_ALLOCATECONTIG, F_PEOFPOSMODE, 0, s, 0};
 			if (fcntl(native_handle(), F_PREALLOCATE, &f) < 0)
 			{
-				if (errno != ENOSPC)
+				// It appears Apple's new filesystem (APFS) does not
+				// support this control message and fails with EINVAL
+				// if so, just skip it
+				if (errno != EINVAL)
 				{
-					ec.assign(errno, system_category());
-					return false;
-				}
-				// ok, let's try to allocate non contiguous space then
-				f.fst_flags = F_ALLOCATEALL;
-				if (fcntl(native_handle(), F_PREALLOCATE, &f) < 0)
-				{
-					ec.assign(errno, system_category());
-					return false;
+					if (errno != ENOSPC)
+					{
+						ec.assign(errno, system_category());
+						return false;
+					}
+					// ok, let's try to allocate non contiguous space then
+					f.fst_flags = F_ALLOCATEALL;
+					if (fcntl(native_handle(), F_PREALLOCATE, &f) < 0)
+					{
+						ec.assign(errno, system_category());
+						return false;
+					}
 				}
 			}
 #endif // F_PREALLOCATE
@@ -1258,7 +1220,7 @@ namespace {
 			int const ret = posix_fallocate(native_handle(), 0, s);
 			// posix_allocate fails with EINVAL in case the underlying
 			// filesystem does not support this operation
-			if (ret != 0 && ret != EINVAL)
+			if (ret != 0 && ret != EINVAL && ret != ENOTSUP)
 			{
 				ec.assign(ret, system_category());
 				return false;
@@ -1280,7 +1242,7 @@ namespace {
 		}
 		return file_size.QuadPart;
 #else
-		struct stat fs;
+		struct stat fs = {};
 		if (::fstat(native_handle(), &fs) != 0)
 		{
 			ec.assign(errno, system_category());

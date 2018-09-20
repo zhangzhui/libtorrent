@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2012-2016, Arvid Norberg
+Copyright (c) 2012-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -185,7 +185,7 @@ namespace {
 				return "UTF error";
 			}
 
-			std::string message(int ev) const BOOST_SYSTEM_NOEXCEPT override
+			std::string message(int ev) const override
 			{
 				static char const* error_messages[] = {
 					"ok",
@@ -201,9 +201,7 @@ namespace {
 
 			boost::system::error_condition default_error_condition(
 				int ev) const BOOST_SYSTEM_NOEXCEPT override
-			{
-				return boost::system::error_condition(ev, *this);
-			}
+			{ return {ev, *this}; }
 		};
 	} // anonymous namespace
 
@@ -211,7 +209,7 @@ namespace {
 	{
 		boost::system::error_code make_error_code(utf8_errors::error_code_enum e)
 		{
-			return error_code(e, utf8_category());
+			return {e, utf8_category()};
 		}
 	} // utf_errors namespace
 

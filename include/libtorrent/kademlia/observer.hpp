@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2016, Arvid Norberg
+Copyright (c) 2007-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -48,28 +48,17 @@ struct observer;
 struct msg;
 struct traversal_algorithm;
 
-struct observer_flags_tag;
-using observer_flags_t = libtorrent::flags::bitfield_flag<std::uint8_t, observer_flags_tag>;
+using observer_flags_t = libtorrent::flags::bitfield_flag<std::uint8_t, struct observer_flags_tag>;
 
 struct TORRENT_EXTRA_EXPORT observer
 	: std::enable_shared_from_this<observer>
 {
-	observer(std::shared_ptr<traversal_algorithm> const& a
+	observer(std::shared_ptr<traversal_algorithm> a
 		, udp::endpoint const& ep, node_id const& id)
-		: m_sent()
-		, m_algorithm(a)
+		: m_algorithm(std::move(a))
 		, m_id(id)
-		, m_port(0)
-		, m_transaction_id()
-		, flags{}
 	{
-		TORRENT_ASSERT(a);
-#if TORRENT_USE_ASSERTS
-		m_in_constructor = true;
-		m_was_sent = false;
-		m_was_abandoned = false;
-		m_in_use = true;
-#endif
+		TORRENT_ASSERT(m_algorithm);
 		set_target(ep);
 	}
 
@@ -111,12 +100,6 @@ struct TORRENT_EXTRA_EXPORT observer
 	void set_id(node_id const& id);
 	node_id const& id() const { return m_id; }
 
-	void set_transaction_id(std::uint16_t tid)
-	{ m_transaction_id = tid; }
-
-	std::uint16_t transaction_id() const
-	{ return m_transaction_id; }
-
 	static constexpr observer_flags_t flag_queried = 0_bit;
 	static constexpr observer_flags_t flag_initial = 1_bit;
 	static constexpr observer_flags_t flag_no_id = 2_bit;
@@ -143,24 +126,20 @@ private:
 
 	union addr_t
 	{
-#if TORRENT_USE_IPV6
 		address_v6::bytes_type v6;
-#endif
 		address_v4::bytes_type v4;
 	} m_addr;
 
-	std::uint16_t m_port;
+	std::uint16_t m_port = 0;
 
-	// the transaction ID for this call
-	std::uint16_t m_transaction_id;
 public:
-	observer_flags_t flags;
+	observer_flags_t flags{};
 
 #if TORRENT_USE_ASSERTS
-	bool m_in_constructor:1;
-	bool m_was_sent:1;
-	bool m_was_abandoned:1;
-	bool m_in_use:1;
+	bool m_in_constructor = true;
+	bool m_was_sent = false;
+	bool m_was_abandoned = false;
+	bool m_in_use = true;
 #endif
 };
 

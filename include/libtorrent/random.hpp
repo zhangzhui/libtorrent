@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2011-2016, Arvid Norberg
+Copyright (c) 2011-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -57,5 +57,5 @@ namespace libtorrent { namespace aux {
 		TORRENT_EXTRA_EXPORT void random_bytes(span<char> buffer);
 	}
 
-	TORRENT_EXTRA_EXPORT std::uint32_t random(std::uint32_t max);
+	TORRENT_EXTRA_EXPORT std::uint32_t random(std::uint32_t m);
 }

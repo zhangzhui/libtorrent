@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2009-2016, Arvid Norberg
+Copyright (c) 2009-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -130,6 +130,7 @@ POSSIBILITY OF SUCH DAMAGE.
 	}
 
 namespace libtorrent {
+namespace aux {
 
 	template <class S>
 	struct socket_type_int_impl
@@ -258,6 +259,14 @@ namespace libtorrent {
 		error_code set_option(SettableSocketOption const& opt, error_code& ec)
 		{ TORRENT_SOCKTYPE_FORWARD_RET(set_option(opt, ec), ec) }
 
+		void non_blocking(bool b, error_code& ec)
+		{ TORRENT_SOCKTYPE_FORWARD(non_blocking(b, ec)) }
+
+#ifndef BOOST_NO_EXCEPTIONS
+		void non_blocking(bool b)
+		{ TORRENT_SOCKTYPE_FORWARD(non_blocking(b)) }
+#endif
+
 #ifndef BOOST_NO_EXCEPTIONS
 		template <class GettableSocketOption>
 		void get_option(GettableSocketOption& opt)
@@ -288,9 +297,10 @@ namespace libtorrent {
 			return reinterpret_cast<S const*>(&m_data);
 		}
 
-	private:
 		// explicitly disallow assignment, to silence msvc warning
-		socket_type& operator=(socket_type const&);
+		socket_type& operator=(socket_type const&) = delete;
+
+	private:
 
 		void destruct();
 		void construct(int type, void* userdata);
@@ -332,6 +342,7 @@ namespace libtorrent {
 
 	// properly shuts down SSL sockets. holder keeps s alive
 	void async_shutdown(socket_type& s, std::shared_ptr<void> holder);
+}
 }
 
 #endif

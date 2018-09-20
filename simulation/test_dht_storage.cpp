@@ -30,9 +30,11 @@ POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#ifndef TORRENT_DISABLE_DHT
 
 #include "test.hpp"
+
+#ifndef TORRENT_DISABLE_DHT
+
 #include "settings.hpp"
 #include "setup_transfer.hpp" // for ep()
 #include "libtorrent/config.hpp"
@@ -84,7 +86,6 @@ void timer_tick(dht_storage_interface* s
 	, dht_storage_counters const& c
 	, boost::system::error_code const&)
 {
-	lt::aux::update_time_now();
 	s->tick();
 
 	TEST_EQUAL(s->counters().peers, c.peers);
@@ -200,7 +201,6 @@ TORRENT_TEST(dht_storage_infohashes_sample)
 	timer.expires_from_now(hours(1)); // expiration of torrents
 	timer.async_wait([&s](boost::system::error_code const& ec)
 	{
-		lt::aux::update_time_now();
 		// tick here to trigger the torrents expiration
 		s->tick();
 
@@ -212,5 +212,6 @@ TORRENT_TEST(dht_storage_infohashes_sample)
 	boost::system::error_code ec;
 	sim.run(ec);
 }
-
+#else
+TORRENT_TEST(disabled) {}
 #endif // TORRENT_DISABLE_DHT

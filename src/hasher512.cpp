@@ -68,7 +68,7 @@ namespace libtorrent {
 		gcry_md_copy(&m_context, h.m_context);
 	}
 
-	hasher512& hasher512::operator=(hasher512 const& h)
+	hasher512& hasher512::operator=(hasher512 const& h) &
 	{
 		if (this == &h) return;
 		gcry_md_close(m_context);
@@ -77,7 +77,7 @@ namespace libtorrent {
 	}
 #else
 	hasher512::hasher512(hasher512 const&) = default;
-	hasher512& hasher512::operator=(hasher512 const&) = default;
+	hasher512& hasher512::operator=(hasher512 const&) & = default;
 #endif
 
 	hasher512& hasher512::update(span<char const> data)
@@ -102,7 +102,7 @@ namespace libtorrent {
 		sha512_hash digest;
 #ifdef TORRENT_USE_LIBGCRYPT
 		gcry_md_final(m_context);
-		digest.assign((char const*)gcry_md_read(m_context, 0));
+		digest.assign(reinterpret_cast<char const*>(gcry_md_read(m_context, 0)));
 #elif TORRENT_USE_COMMONCRYPTO
 		CC_SHA512_Final(reinterpret_cast<unsigned char*>(digest.data()), &m_context);
 #elif TORRENT_USE_CRYPTOAPI_SHA_512
@@ -130,12 +130,14 @@ namespace libtorrent {
 #endif
 	}
 
+#if defined TORRENT_USE_LIBGCRYPT
 	hasher512::~hasher512()
 	{
-#if defined TORRENT_USE_LIBGCRYPT
 		gcry_md_close(m_context);
-#endif
 	}
+#else
+	hasher512::~hasher512() = default;
+#endif
 
 #ifdef TORRENT_MACOS_DEPRECATED_LIBCRYPTO
 #pragma clang diagnostic pop

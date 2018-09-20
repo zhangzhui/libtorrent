@@ -16,7 +16,7 @@ There are several ways to contribute to libtorrent at various levels. Any help i
 much appreciated. If you're interested in something libtorrent related that's not
 enumerated on this page, please contact arvid@libtorrent.org or the `mailing list`_.
 
-.. _`mailing list`: http://lists.sourceforge.net/lists/listinfo/libtorrent-discuss
+.. _`mailing list`: https://lists.sourceforge.net/lists/listinfo/libtorrent-discuss
 
 1. Testing
 	This is not just limited to finding bugs and ways to reproduce crashes, but also
@@ -48,11 +48,13 @@ enumerated on this page, please contact arvid@libtorrent.org or the `mailing lis
 
 For an overview of the internals of libtorrent, see the hacking_ page.
 
-For outstanding things to do, see the `todo list`_.
+For outstanding things to do, see the `todo list`_ or the `sonarqube analysis`_ of master.
 
 .. _hacking: hacking.html
 
 .. _`pull request`: https://github.com/arvidn/libtorrent
 
 .. _`todo list`: todo.html
+
+.. _`sonarqube analysis`: https://sonarcloud.io/dashboard?id=libtorrent
 

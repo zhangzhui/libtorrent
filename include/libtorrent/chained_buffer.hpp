@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2016, Arvid Norberg
+Copyright (c) 2007-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -86,7 +86,7 @@ namespace libtorrent {
 				used_size = rhs.used_size;
 				move_holder(&holder, &rhs.holder);
 			}
-			buffer_t& operator=(buffer_t&& rhs) noexcept
+			buffer_t& operator=(buffer_t&& rhs) & noexcept
 			{
 				destruct_holder(&holder);
 				destruct_holder = rhs.destruct_holder;
@@ -99,7 +99,7 @@ namespace libtorrent {
 			}
 			buffer_t(buffer_t const& rhs) noexcept
 				: buffer_t(std::move(const_cast<buffer_t&>(rhs))) {}
-			buffer_t& operator=(buffer_t const& rhs) noexcept
+			buffer_t& operator=(buffer_t const& rhs) & noexcept
 			{ return this->operator=(std::move(const_cast<buffer_t&>(rhs))); }
 #else
 			buffer_t(buffer_t&&) = delete;
@@ -112,10 +112,10 @@ namespace libtorrent {
 #if TORRENT_CPP98_DEQUE
 			move_construct_holder_fun move_holder;
 #endif
-			aux::aligned_storage<24>::type holder;
-			char* buf; // the first byte of the buffer
-			int size; // the total size of the buffer
-			int used_size; // this is the number of bytes to send/receive
+			aux::aligned_storage<32>::type holder;
+			char* buf = nullptr; // the first byte of the buffer
+			int size = 0; // the total size of the buffer
+			int used_size = 0; // this is the number of bytes to send/receive
 		};
 
 	public:
@@ -199,7 +199,7 @@ namespace libtorrent {
 			new (&b.holder) Holder(std::move(buf));
 
 			m_bytes += used_size;
-			TORRENT_ASSERT(m_capacity < std::numeric_limits<int>::max() - b.size);
+			TORRENT_ASSERT(m_capacity < (std::numeric_limits<int>::max)() - b.size);
 			m_capacity += b.size;
 			TORRENT_ASSERT(m_bytes <= m_capacity);
 		}

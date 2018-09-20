@@ -54,13 +54,22 @@ POSSIBILITY OF SUCH DAMAGE.
 using namespace lt;
 using namespace std::placeholders;
 
+namespace {
+
 void log(char const* fmt, ...)
 {
 	va_list v;
 	va_start(v, fmt);
 
 	char buf[1024];
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+#endif
 	std::vsnprintf(buf, sizeof(buf), fmt, v);
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 	va_end(v);
 
 	std::printf("\x1b[1m\x1b[36m%s: %s\x1b[0m\n"
@@ -92,7 +101,7 @@ int read_message(tcp::socket& s, char* buffer, int max_size)
 		return -1;
 	}
 
-	boost::asio::read(s, boost::asio::buffer(buffer, length)
+	boost::asio::read(s, boost::asio::buffer(buffer, std::size_t(length))
 		, boost::asio::transfer_all(), ec);
 	if (ec)
 	{
@@ -108,22 +117,22 @@ void print_message(char const* buffer, int len)
 		, "have", "bitfield", "request", "piece", "cancel", "dht_port", "", "", ""
 		, "suggest_piece", "have_all", "have_none", "reject_request", "allowed_fast"};
 
-	char message[50];
+	std::stringstream message;
 	char extra[300];
 	extra[0] = 0;
 	if (len == 0)
 	{
-		strcpy(message, "keepalive");
+		message << "keepalive";
 	}
 	else
 	{
 		int msg = buffer[0];
 		if (msg >= 0 && msg < int(sizeof(message_name)/sizeof(message_name[0])))
-			strcpy(message, message_name[msg]);
+			message << message_name[msg];
 		else if (msg == 20)
-			std::snprintf(message, sizeof(message), "extension msg [%d]", buffer[1]);
+			message << "extension msg [" << int(buffer[1]) << "]";
 		else
-			std::snprintf(message, sizeof(message), "unknown[%d]", msg);
+			message << "unknown[" << msg << "]";
 
 		if (msg == 0x6 && len == 13)
 		{
@@ -148,7 +157,7 @@ void print_message(char const* buffer, int len)
 		}
 	}
 
-	log("<== %s %s", message, extra);
+	log("<== %s %s", message.str().c_str(), extra);
 }
 
 void send_allow_fast(tcp::socket& s, int piece)
@@ -274,11 +283,7 @@ void do_handshake(tcp::socket& s, sha1_hash const& ih, char* buffer)
 
 	// check for extension protocol support
 	bool const lt_extension_protocol = (extensions[5] & 0x10) != 0;
-#ifndef TORRENT_DISABLE_EXTENSIONS
 	TEST_CHECK(lt_extension_protocol == true);
-#else
-	TEST_CHECK(lt_extension_protocol == false);
-#endif
 
 	// check for DHT support
 	bool const dht_support = (extensions[7] & 0x1) != 0;
@@ -354,6 +359,7 @@ entry read_extension_handshake(tcp::socket& s, char* recv_buffer, int size)
 	}
 }
 
+#ifndef TORRENT_DISABLE_EXTENSIONS
 void send_ut_metadata_msg(tcp::socket& s, int ut_metadata_msg, int type, int piece)
 {
 	std::vector<char> buf;
@@ -405,6 +411,7 @@ entry read_ut_metadata_msg(tcp::socket& s, char* recv_buffer, int size)
 		return bdecode(recv_buffer + 2, recv_buffer + len);
 	}
 }
+#endif // TORRENT_DISABLE_EXTENSIONS
 
 std::shared_ptr<torrent_info> setup_peer(tcp::socket& s, sha1_hash& ih
 	, std::shared_ptr<lt::session>& ses, bool incoming = true
@@ -424,6 +431,9 @@ std::shared_ptr<torrent_info> setup_peer(tcp::socket& s, sha1_hash& ih
 	sett.set_int(settings_pack::out_enc_policy, settings_pack::pe_disabled);
 	sett.set_bool(settings_pack::enable_outgoing_utp, false);
 	sett.set_bool(settings_pack::enable_incoming_utp, false);
+#if TORRENT_ABI_VERSION == 1
+	sett.set_bool(settings_pack::rate_limit_utp, true);
+#endif
 	ses.reset(new lt::session(sett, lt::session::add_default_plugins));
 
 	error_code ec;
@@ -441,10 +451,7 @@ std::shared_ptr<torrent_info> setup_peer(tcp::socket& s, sha1_hash& ih
 	if (th) *th = ret;
 
 	// wait for the torrent to be ready
-	if (!(flags & torrent_flags::seed_mode))
-	{
-		wait_for_downloading(*ses, "ses");
-	}
+	wait_for_downloading(*ses, "ses");
 
 	if (incoming)
 	{
@@ -468,6 +475,8 @@ std::shared_ptr<torrent_info> setup_peer(tcp::socket& s, sha1_hash& ih
 
 	return t;
 }
+
+} // anonymous namespace
 
 // makes sure that pieces that are allowed and then
 // rejected aren't requested again
@@ -735,7 +744,7 @@ TORRENT_TEST(multiple_bitfields)
 	print_session_log(*ses);
 
 	std::string bitfield;
-	bitfield.resize(ti->num_pieces(), '0');
+	bitfield.resize(std::size_t(ti->num_pieces()), '0');
 	send_bitfield(s, bitfield.c_str());
 	print_session_log(*ses);
 	bitfield[0] = '1';
@@ -783,7 +792,6 @@ TORRENT_TEST(multiple_have_all)
 	print_session_log(*ses);
 }
 
-#ifndef TORRENT_DISABLE_EXTENSIONS
 // makes sure that pieces that are lost are not requested
 TORRENT_TEST(dont_have)
 {
@@ -885,6 +893,43 @@ TORRENT_TEST(dont_have)
 	print_session_log(*ses);
 }
 
+TORRENT_TEST(extension_handshake)
+{
+	using namespace lt::detail;
+
+	sha1_hash ih;
+	std::shared_ptr<lt::session> ses;
+	io_service ios;
+	tcp::socket s(ios);
+	std::shared_ptr<torrent_info> ti = setup_peer(s, ih, ses);
+
+	char recv_buffer[1000];
+	do_handshake(s, ih, recv_buffer);
+	print_session_log(*ses);
+	send_have_all(s);
+	print_session_log(*ses);
+
+	entry extensions;
+	send_extension_handshake(s, extensions);
+
+	extensions = read_extension_handshake(s, recv_buffer, sizeof(recv_buffer));
+
+	std::cout << extensions << '\n';
+
+	// these extensions are built-in
+	TEST_CHECK(extensions["m"]["lt_donthave"].integer() != 0);
+	TEST_CHECK(extensions["m"]["share_mode"].integer() != 0);
+	TEST_CHECK(extensions["m"]["upload_only"].integer() != 0);
+	TEST_CHECK(extensions["m"]["ut_holepunch"].integer() != 0);
+
+	// these require extensions to be enabled
+#ifndef TORRENT_DISABLE_EXTENSIONS
+	TEST_CHECK(extensions["m"]["ut_metadata"].integer() != 0);
+	TEST_CHECK(extensions["m"]["ut_pex"].integer() != 0);
+#endif
+}
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
 // TEST metadata extension messages and edge cases
 
 // this tests sending a request for a metadata piece that's too high. This is
@@ -892,8 +937,6 @@ TORRENT_TEST(dont_have)
 TORRENT_TEST(invalid_metadata_request)
 {
 	using namespace lt::detail;
-
-	std::cout << "\n === test invalid metadata ===\n" << std::endl;
 
 	sha1_hash ih;
 	std::shared_ptr<lt::session> ses;
@@ -943,6 +986,8 @@ TORRENT_TEST(invalid_metadata_request)
 
 	print_session_log(*ses);
 }
+#endif // TORRENT_DISABLE_EXTENSIONS
+
 
 TORRENT_TEST(invalid_request)
 {
@@ -965,6 +1010,8 @@ TORRENT_TEST(invalid_request)
 	req.length = 0x4000;
 	send_request(s, req);
 }
+
+namespace {
 
 void have_all_test(bool const incoming)
 {
@@ -1003,6 +1050,8 @@ void have_all_test(bool const incoming)
 	}
 }
 
+} // anonymous namespace
+
 TORRENT_TEST(outgoing_have_all)
 {
 	std::cout << "\n === test outgoing have-all ===\n" << std::endl;
@@ -1015,8 +1064,5 @@ TORRENT_TEST(incoming_have_all)
 	have_all_test(false);
 }
 
-#endif // TORRENT_DISABLE_EXTENSIONS
-
 // TODO: test sending invalid requests (out of bound piece index, offsets and
 // sizes)
-

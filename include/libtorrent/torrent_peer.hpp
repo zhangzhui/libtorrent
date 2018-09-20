@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2012-2016, Arvid Norberg
+Copyright (c) 2012-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -54,6 +54,11 @@ namespace libtorrent {
 	struct TORRENT_EXTRA_EXPORT torrent_peer
 	{
 		torrent_peer(std::uint16_t port, bool connectable, peer_source_flags_t src);
+#if TORRENT_USE_ASSERTS
+		torrent_peer(torrent_peer const&) = default;
+		torrent_peer& operator=(torrent_peer const&) = default;
+		~torrent_peer() { TORRENT_ASSERT(in_use); in_use = false; }
+#endif
 
 		std::int64_t total_download() const;
 		std::int64_t total_upload() const;
@@ -152,7 +157,7 @@ namespace libtorrent {
 		peer_source_flags_t peer_source() const
 		{ return peer_source_flags_t(source); }
 
-#if !defined(TORRENT_DISABLE_ENCRYPTION) && !defined(TORRENT_DISABLE_EXTENSIONS)
+#if !defined TORRENT_DISABLE_ENCRYPTION
 		// Hints encryption support of torrent_peer. Only effective
 		// for and when the outgoing encryption policy
 		// allows both encrypted and non encrypted
@@ -165,11 +170,9 @@ namespace libtorrent {
 		bool pe_support:1;
 #endif
 
-#if TORRENT_USE_IPV6
 		// this is true if the v6 union member in addr is
 		// the one to use, false if it's the v4 one
 		bool is_v6_addr:1;
-#endif
 #if TORRENT_USE_I2P
 		// set if the i2p_destination is in use in the addr union
 		bool is_i2p_addr:1;
@@ -199,7 +202,7 @@ namespace libtorrent {
 		// never considered a connect candidate
 		bool web_seed:1;
 #if TORRENT_USE_ASSERTS
-		bool in_use:1;
+		bool in_use = true;
 #endif
 	};
 
@@ -225,7 +228,6 @@ namespace libtorrent {
 	};
 #endif
 
-#if TORRENT_USE_IPV6
 	struct TORRENT_EXTRA_EXPORT ipv6_peer : torrent_peer
 	{
 		ipv6_peer(tcp::endpoint const& ip, bool connectable, peer_source_flags_t src);
@@ -233,7 +235,6 @@ namespace libtorrent {
 
 		const address_v6::bytes_type addr;
 	};
-#endif
 
 	struct peer_address_compare
 	{
@@ -271,4 +272,3 @@ namespace libtorrent {
 }
 
 #endif
-

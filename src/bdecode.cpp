@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2015-2016, Arvid Norberg
+Copyright (c) 2015-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -137,14 +137,14 @@ namespace {
 				ec = bdecode_errors::expected_digit;
 				return start;
 			}
-			if (val > (std::numeric_limits<std::int64_t>::max)() / 10)
+			if (val > std::numeric_limits<std::int64_t>::max() / 10)
 			{
 				ec = bdecode_errors::overflow;
 				return start;
 			}
 			val *= 10;
 			int digit = *start - '0';
-			if (val > (std::numeric_limits<std::int64_t>::max)() - digit)
+			if (val > std::numeric_limits<std::int64_t>::max() - digit)
 			{
 				ec = bdecode_errors::overflow;
 				return start;
@@ -159,10 +159,10 @@ namespace {
 	struct bdecode_error_category : boost::system::error_category
 	{
 		const char* name() const BOOST_SYSTEM_NOEXCEPT override;
-		std::string message(int ev) const BOOST_SYSTEM_NOEXCEPT override;
+		std::string message(int ev) const override;
 		boost::system::error_condition default_error_condition(
 			int ev) const BOOST_SYSTEM_NOEXCEPT override
-		{ return boost::system::error_condition(ev, *this); }
+		{ return {ev, *this}; }
 	};
 
 	const char* bdecode_error_category::name() const BOOST_SYSTEM_NOEXCEPT
@@ -170,7 +170,7 @@ namespace {
 		return "bdecode error";
 	}
 
-	std::string bdecode_error_category::message(int ev) const BOOST_SYSTEM_NOEXCEPT
+	std::string bdecode_error_category::message(int ev) const
 	{
 		static char const* msgs[] =
 		{
@@ -198,19 +198,9 @@ namespace {
 	{
 		boost::system::error_code make_error_code(error_code_enum e)
 		{
-			return boost::system::error_code(e, bdecode_category());
+			return {e, bdecode_category()};
 		}
 	}
-
-	bdecode_node::bdecode_node()
-		: m_root_tokens(nullptr)
-		, m_buffer(nullptr)
-		, m_buffer_size(0)
-		, m_token_idx(-1)
-		, m_last_index(-1)
-		, m_last_token(-1)
-		, m_size(-1)
-	{}
 
 	bdecode_node::bdecode_node(bdecode_node const& n)
 		: m_tokens(n.m_tokens)
@@ -246,7 +236,6 @@ namespace {
 	}
 
 	bdecode_node::bdecode_node(bdecode_node&&) noexcept = default;
-	bdecode_node& bdecode_node::operator=(bdecode_node&&) noexcept = default;
 
 	bdecode_node::bdecode_node(bdecode_token const* tokens, char const* buf
 		, int len, int idx)
@@ -282,7 +271,7 @@ namespace {
 		m_last_token = -1;
 	}
 
-	void bdecode_node::switch_underlying_buffer(char const* buf)
+	void bdecode_node::switch_underlying_buffer(char const* buf) noexcept
 	{
 		TORRENT_ASSERT(!m_tokens.empty());
 		if (m_tokens.empty()) return;
@@ -379,16 +368,16 @@ namespace {
 		return false;
 	}
 
-	bdecode_node::type_t bdecode_node::type() const
+	bdecode_node::type_t bdecode_node::type() const noexcept
 	{
 		if (m_token_idx == -1) return none_t;
 		return static_cast<bdecode_node::type_t>(m_root_tokens[m_token_idx].type);
 	}
 
-	bdecode_node::operator bool() const
+	bdecode_node::operator bool() const noexcept
 	{ return m_token_idx != -1; }
 
-	span<char const> bdecode_node::data_section() const
+	span<char const> bdecode_node::data_section() const noexcept
 	{
 		if (m_token_idx == -1) return {};
 

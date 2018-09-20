@@ -35,6 +35,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "utils.hpp"
 #include "libtorrent/session.hpp"
 #include "libtorrent/socket.hpp"
+#include "libtorrent/alert_types.hpp"
+#include "libtorrent/extensions.hpp"
 #include "simulator/simulator.hpp"
 #include "simulator/utils.hpp" // for timer
 #include "settings.hpp"
@@ -64,3 +66,112 @@ TORRENT_TEST(seed_mode)
 		});
 }
 
+#ifndef TORRENT_DISABLE_LOGGING
+TORRENT_TEST(ip_notifier_setting)
+{
+	int s_tick = 0;
+	int working_count = 0;
+
+	setup_swarm(1, swarm_test::upload
+		// add session
+		, [](lt::settings_pack& pack)
+		{
+			pack.set_int(settings_pack::tick_interval, 1000);
+			pack.set_int(settings_pack::alert_mask, alert::all_categories);
+		}
+		// add torrent
+		, [](lt::add_torrent_params& params) {}
+		// on alert
+		, [&s_tick, &working_count](lt::alert const* a, lt::session& ses)
+		{
+			std::string const msg = a->message();
+			if (msg.find("received error on_ip_change:") != std::string::npos)
+			{
+				TEST_CHECK(s_tick == 0 || s_tick == 2);
+				working_count++;
+			}
+		}
+		// terminate
+		, [&s_tick](int ticks, lt::session& ses) -> bool {
+
+			if (ticks == 1)
+			{
+				settings_pack sp;
+				sp.set_bool(settings_pack::enable_ip_notifier, false);
+				ses.apply_settings(sp);
+			}
+			else if (ticks == 2)
+			{
+				settings_pack sp;
+				sp.set_bool(settings_pack::enable_ip_notifier, true);
+				ses.apply_settings(sp);
+			}
+
+			s_tick = ticks;
+
+			// exit after 3 seconds
+			return ticks > 3;
+		});
+
+	TEST_EQUAL(working_count, 2);
+}
+#endif
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+struct test_plugin : lt::torrent_plugin
+{
+	bool m_new_connection = false;
+	bool m_files_checked = false;
+
+	std::shared_ptr<peer_plugin> new_connection(peer_connection_handle const&) override
+	{
+		m_new_connection = true;
+		return std::shared_ptr<peer_plugin>();
+	}
+
+	void on_files_checked() override
+	{
+		m_files_checked = true;
+	}
+};
+
+TORRENT_TEST(add_extension_while_transfer)
+{
+	bool done = false;
+	auto p = std::make_shared<test_plugin>();
+
+	setup_swarm(2, swarm_test::download
+		// add session
+		, [](lt::settings_pack& pack)
+		{
+			pack.set_int(settings_pack::tick_interval, 1000);
+			pack.set_int(settings_pack::alert_mask, alert::all_categories);
+		}
+		// add torrent
+		, [](lt::add_torrent_params& params) {}
+		// on alert
+		, [&done, p](lt::alert const* a, lt::session& ses)
+		{
+			if (a->type() == peer_connect_alert::alert_type)
+			{
+				auto create_test_plugin = [p](torrent_handle const& th, void*)
+				{ return p; };
+
+				lt::torrent_handle th = alert_cast<peer_connect_alert>(a)->handle;
+				th.add_extension(create_test_plugin);
+
+				done = true;
+			}
+		}
+		// terminate
+		, [&done](int ticks, lt::session& ses) -> bool
+		{
+			// exit after 10 seconds
+			return ticks > 10 || done;
+		});
+
+	TEST_CHECK(done);
+	TEST_CHECK(p->m_new_connection)
+	TEST_CHECK(p->m_files_checked);
+}
+#endif // TORRENT_DISABLE_EXTENSIONS

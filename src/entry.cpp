@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -31,12 +31,7 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "libtorrent/config.hpp"
-
-#if TORRENT_USE_IOSTREAM
-#include <iostream>
-#endif
-
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 #include "libtorrent/lazy_entry.hpp"
 #endif
 #include "libtorrent/bdecode.hpp"
@@ -97,9 +92,9 @@ namespace {
 
 	entry& entry::operator[](string_view key)
 	{
-		dictionary_type::iterator i = dict().find(key);
+		auto const i = dict().find(key);
 		if (i != dict().end()) return i->second;
-		dictionary_type::iterator ret = dict().emplace(
+		auto const ret = dict().emplace(
 			std::piecewise_construct,
 			std::forward_as_tuple(key),
 			std::forward_as_tuple()).first;
@@ -108,21 +103,21 @@ namespace {
 
 	const entry& entry::operator[](string_view key) const
 	{
-		dictionary_type::const_iterator i = dict().find(key);
+		auto const i = dict().find(key);
 		if (i == dict().end()) throw_error();
 		return i->second;
 	}
 
 	entry* entry::find_key(string_view key)
 	{
-		dictionary_type::iterator i = dict().find(key);
+		auto const i = dict().find(key);
 		if (i == dict().end()) return nullptr;
 		return &i->second;
 	}
 
 	entry const* entry::find_key(string_view key) const
 	{
-		dictionary_type::const_iterator i = dict().find(key);
+		auto const i = dict().find(key);
 		if (i == dict().end()) return nullptr;
 		return &i->second;
 	}
@@ -137,7 +132,7 @@ namespace {
 
 	entry::~entry() { destruct(); }
 
-	entry& entry::operator=(const entry& e)
+	entry& entry::operator=(const entry& e) &
 	{
 		if (&e == this) return *this;
 		destruct();
@@ -145,10 +140,35 @@ namespace {
 		return *this;
 	}
 
-	entry& entry::operator=(entry&& e) noexcept
+	entry& entry::operator=(entry&& e) & noexcept
 	{
 		if (&e == this) return *this;
-		swap(e);
+		destruct();
+		const auto t = e.type();
+		switch (t)
+		{
+		case int_t:
+			new (&data) integer_type(std::move(e.integer()));
+			break;
+		case string_t:
+			new (&data) string_type(std::move(e.string()));
+			break;
+		case list_t:
+			new (&data) list_type(std::move(e.list()));
+			break;
+		case dictionary_t:
+			new (&data) dictionary_type(std::move(e.dict()));
+			break;
+		case undefined_t:
+			break;
+		case preformatted_t:
+			new (&data) preformatted_type(std::move(e.preformatted()));
+			break;
+		}
+		m_type = t;
+#if TORRENT_USE_ASSERTS
+		m_type_queried = true;
+#endif
 		return *this;
 	}
 
@@ -286,13 +306,7 @@ namespace {
 	entry::entry(entry&& e) noexcept
 		: m_type(undefined_t)
 	{
-#if TORRENT_USE_ASSERTS
-		uint8_t type_queried = e.m_type_queried;
-#endif
-		swap(e);
-#if TORRENT_USE_ASSERTS
-		m_type_queried = type_queried;
-#endif
+		this->operator=(std::move(e));
 	}
 
 	entry::entry(dictionary_type v)
@@ -346,7 +360,7 @@ namespace {
 	}
 
 	// convert a bdecode_node into an old skool entry
-	entry& entry::operator=(bdecode_node const& e)
+	entry& entry::operator=(bdecode_node const& e) &
 	{
 		switch (e.type())
 		{
@@ -371,7 +385,7 @@ namespace {
 				list_type& l = this->list();
 				for (int i = 0; i < e.list_size(); ++i)
 				{
-					l.push_back(entry());
+					l.emplace_back();
 					l.back() = e.list_at(i);
 				}
 				break;
@@ -383,9 +397,9 @@ namespace {
 		return *this;
 	}
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	// convert a lazy_entry into an old skool entry
-	entry& entry::operator=(lazy_entry const& e)
+	entry& entry::operator=(lazy_entry const& e) &
 	{
 		switch (e.type())
 		{
@@ -410,7 +424,7 @@ namespace {
 				list_type& l = this->list();
 				for (int i = 0; i < e.list_size(); ++i)
 				{
-					l.push_back(entry());
+					l.emplace_back();
 					l.back() = *e.list_at(i);
 				}
 				break;
@@ -423,7 +437,7 @@ namespace {
 	}
 #endif
 
-	entry& entry::operator=(preformatted_type v)
+	entry& entry::operator=(preformatted_type v) &
 	{
 		destruct();
 		new(&data) preformatted_type(std::move(v));
@@ -434,7 +448,7 @@ namespace {
 		return *this;
 	}
 
-	entry& entry::operator=(dictionary_type v)
+	entry& entry::operator=(dictionary_type v) &
 	{
 		destruct();
 		new(&data) dictionary_type(std::move(v));
@@ -445,7 +459,7 @@ namespace {
 		return *this;
 	}
 
-	entry& entry::operator=(span<char const> v)
+	entry& entry::operator=(span<char const> v) &
 	{
 		destruct();
 		new(&data) string_type(v.data(), v.size());
@@ -456,7 +470,7 @@ namespace {
 		return *this;
 	}
 
-	entry& entry::operator=(list_type v)
+	entry& entry::operator=(list_type v) &
 	{
 		destruct();
 		new(&data) list_type(std::move(v));
@@ -467,7 +481,7 @@ namespace {
 		return *this;
 	}
 
-	entry& entry::operator=(integer_type v)
+	entry& entry::operator=(integer_type v) &
 	{
 		destruct();
 		new(&data) integer_type(std::move(v));
@@ -586,7 +600,7 @@ namespace {
 #endif
 	}
 
-	void entry::swap(entry& e) noexcept
+	void entry::swap(entry& e)
 	{
 		bool clear_this = false;
 		bool clear_that = false;
@@ -648,86 +662,81 @@ namespace {
 		}
 	}
 
-	std::string entry::to_string() const
+	std::string entry::to_string(bool const single_line) const
 	{
 		std::string ret;
-		if (type() == dictionary_t) ret.reserve(280);
-		to_string_impl(ret, 0);
+		to_string_impl(ret, 0, single_line);
 		return ret;
 	}
 
-	void entry::to_string_impl(std::string& out, int indent) const
+namespace {
+	bool is_binary(std::string const& str)
+	{
+		for (char const c : str)
+		{
+			if (!is_print(c)) return true;
+		}
+		return false;
+	}
+
+	void add_indent(std::string& out, int const indent)
+	{
+		out.resize(out.size() + size_t(indent), ' ');
+	}
+}
+
+	void entry::to_string_impl(std::string& out, int const indent
+		, bool const single_line) const
 	{
 		TORRENT_ASSERT(indent >= 0);
-		for (int i = 0; i < indent; ++i) out += ' ';
-		switch (type())
+		switch (m_type)
 		{
 		case int_t:
 			out += libtorrent::to_string(integer()).data();
-			out += '\n';
 			break;
 		case string_t:
 			{
-				bool binary_string = false;
-				for (std::string::const_iterator i = string().begin(); i != string().end(); ++i)
-				{
-					if (!is_print(*i))
-					{
-						binary_string = true;
-						break;
-					}
-				}
-				if (binary_string)
-				{
-					out += aux::to_hex(string());
-					out += '\n';
-				}
-				else
-				{
-					out += string();
-					out += '\n';
-				}
+				out += "'";
+				if (is_binary(string())) out += aux::to_hex(string());
+				else out += string();
+				out += "'";
 			} break;
 		case list_t:
 			{
-				out += "list\n";
+				out += single_line ? "[ " : "[\n";
+				bool first = true;
 				for (list_type::const_iterator i = list().begin(); i != list().end(); ++i)
 				{
-					i->to_string_impl(out, indent + 1);
+					if (!first) out += single_line ? ", " : ",\n";
+					first = false;
+					if (!single_line) add_indent(out, indent+1);
+					i->to_string_impl(out, indent+1, single_line);
 				}
+				out += " ]";
 			} break;
 		case dictionary_t:
 			{
-				out += "dictionary\n";
+				out += single_line ? "{ " : "{\n";
+				bool first = true;
 				for (dictionary_type::const_iterator i = dict().begin(); i != dict().end(); ++i)
 				{
-					bool binary_string = false;
-					for (std::string::const_iterator k = i->first.begin(); k != i->first.end(); ++k)
-					{
-						if (!is_print(*k))
-						{
-							binary_string = true;
-							break;
-						}
-					}
-					for (int j = 0; j < indent + 1; ++j) out += ' ';
-					out += '[';
-					if (binary_string) out += aux::to_hex(i->first);
+					if (!first) out += single_line ? ", " : ",\n";
+					first = false;
+					if (!single_line) add_indent(out, indent+1);
+					out += "'";
+					if (is_binary(i->first)) out += aux::to_hex(i->first);
 					else out += i->first;
-					out += ']';
+					out += "': ";
 
-					if (i->second.type() != entry::string_t
-						&& i->second.type() != entry::int_t)
-						out += '\n';
-					else out += ' ';
-					i->second.to_string_impl(out, indent + 2);
+					i->second.to_string_impl(out, indent+2, single_line);
 				}
+				out += " }";
 			} break;
 		case preformatted_t:
-			out += "<preformatted>\n";
+			out += "<preformatted>";
 			break;
 		case undefined_t:
-			out += "<uninitialized>\n";
+			out += "<uninitialized>";
 		}
 	}
 }

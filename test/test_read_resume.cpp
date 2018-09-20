@@ -31,6 +31,7 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "test.hpp"
+#include "test_utils.hpp"
 
 #include <vector>
 
@@ -41,6 +42,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/bencode.hpp"
 #include "libtorrent/add_torrent_params.hpp"
 #include "libtorrent/read_resume_data.hpp"
+#include "libtorrent/write_resume_data.hpp"
 
 using namespace lt;
 
@@ -106,12 +108,12 @@ TORRENT_TEST(read_resume)
 	TEST_EQUAL(atp.finished_time, 1352);
 
 	TEST_EQUAL(atp.piece_priorities.size(), 6);
-	TEST_EQUAL(atp.piece_priorities[0], 1);
-	TEST_EQUAL(atp.piece_priorities[1], 2);
-	TEST_EQUAL(atp.piece_priorities[2], 3);
-	TEST_EQUAL(atp.piece_priorities[3], 4);
-	TEST_EQUAL(atp.piece_priorities[4], 5);
-	TEST_EQUAL(atp.piece_priorities[5], 6);
+	TEST_EQUAL(atp.piece_priorities[0], 1_pri);
+	TEST_EQUAL(atp.piece_priorities[1], 2_pri);
+	TEST_EQUAL(atp.piece_priorities[2], 3_pri);
+	TEST_EQUAL(atp.piece_priorities[3], 4_pri);
+	TEST_EQUAL(atp.piece_priorities[4], 5_pri);
+	TEST_EQUAL(atp.piece_priorities[5], 6_pri);
 }
 
 TORRENT_TEST(read_resume_missing_info_hash)
@@ -169,6 +171,7 @@ TORRENT_TEST(read_resume_mismatching_torrent)
 	TEST_CHECK(!atp.ti);
 }
 
+namespace {
 std::shared_ptr<torrent_info> generate_torrent()
 {
 	file_storage fs;
@@ -182,10 +185,10 @@ std::shared_ptr<torrent_info> generate_torrent()
 
 	int num = t.num_pieces();
 	TEST_CHECK(num > 0);
-	for (piece_index_t i(0); i < fs.end_piece(); ++i)
+	for (auto const i : fs.piece_range())
 	{
 		sha1_hash ph;
-		for (int k = 0; k < 20; ++k) ph[k] = lt::random(0xff);
+		aux::random_bytes(ph);
 		t.set_hash(i, ph);
 	}
 
@@ -193,6 +196,7 @@ std::shared_ptr<torrent_info> generate_torrent()
 	bencode(std::back_inserter(buf), t.generate());
 	return std::make_shared<torrent_info>(buf, from_span);
 }
+} // anonymous namespace
 
 TORRENT_TEST(read_resume_torrent)
 {
@@ -217,3 +221,76 @@ TORRENT_TEST(read_resume_torrent)
 	TEST_EQUAL(atp.ti->info_hash(), ti->info_hash());
 	TEST_EQUAL(atp.ti->name(), ti->name());
 }
+
+namespace {
+
+void test_roundtrip(add_torrent_params const& input)
+{
+	auto b = write_resume_data_buf(input);
+	error_code ec;
+	auto output = read_resume_data(b, ec);
+	TEST_CHECK(write_resume_data_buf(output) == b);
+}
+
+template <typename T>
+lt::typed_bitfield<T> bits()
+{
+	lt::typed_bitfield<T> b;
+	b.resize(19);
+	b.set_bit(T(2));
+	b.set_bit(T(6));
+	b.set_bit(T(12));
+	return b;
+}
+
+lt::bitfield bits()
+{
+	lt::bitfield b;
+	b.resize(19);
+	b.set_bit(2);
+	b.set_bit(6);
+	b.set_bit(12);
+	return b;
+}
+
+template <typename T>
+std::vector<T> vec()
+{
+	std::vector<T> ret;
+	ret.resize(10);
+	ret[0] = T(1);
+	ret[1] = T(2);
+	ret[5] = T(3);
+	ret[7] = T(4);
+	return ret;
+}
+}
+
+TORRENT_TEST(round_trip_have_pieces)
+{
+	add_torrent_params atp;
+	atp.have_pieces = bits<piece_index_t>();
+	test_roundtrip(atp);
+}
+
+TORRENT_TEST(round_trip_verified_pieces)
+{
+	add_torrent_params atp;
+	atp.verified_pieces = bits<piece_index_t>();
+	test_roundtrip(atp);
+}
+
+TORRENT_TEST(round_trip_prios)
+{
+	add_torrent_params atp;
+	atp.piece_priorities = vec<download_priority_t>();
+	test_roundtrip(atp);
+}
+
+TORRENT_TEST(round_trip_unfinished)
+{
+	add_torrent_params atp;
+	atp.unfinished_pieces = std::map<piece_index_t, bitfield>{{piece_index_t{42}, bits()}};
+	test_roundtrip(atp);
+}
+

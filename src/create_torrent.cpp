@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2008-2016, Arvid Norberg
+Copyright (c) 2008-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -52,7 +52,7 @@ using namespace std::placeholders;
 namespace libtorrent {
 
 	constexpr create_flags_t create_torrent::optimize_alignment;
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	constexpr create_flags_t create_torrent::optimize;
 #endif
 	constexpr create_flags_t create_torrent::merkle;
@@ -114,10 +114,10 @@ namespace {
 	}
 
 	void add_files_impl(file_storage& fs, std::string const& p
-		, std::string const& l, std::function<bool(std::string)> pred
+		, std::string const& l, std::function<bool(std::string)> const& pred
 		, create_flags_t const flags)
 	{
-		std::string f = combine_path(p, l);
+		std::string const f = combine_path(p, l);
 		if (!pred(f)) return;
 		error_code ec;
 		file_status s;
@@ -138,7 +138,7 @@ namespace {
 		{
 			for (directory i(f, ec); !i.done(); i.next(ec))
 			{
-				std::string leaf = i.file();
+				std::string const leaf = i.file();
 				if (ignore_subdir(leaf)) continue;
 				add_files_impl(fs, p, combine_path(l, leaf), pred, flags);
 			}
@@ -202,7 +202,7 @@ namespace {
 
 } // anonymous namespace
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 
 	void add_files(file_storage& fs, std::wstring const& wfile
 		, std::function<bool(std::string)> p, create_flags_t const flags)
@@ -233,7 +233,7 @@ namespace {
 		std::string utf8 = wchar_utf8(p);
 		set_piece_hashes(t, utf8, f, ec);
 	}
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
 
 	void add_files(file_storage& fs, std::string const& file
 		, std::function<bool(std::string)> p, create_flags_t const flags)
@@ -251,10 +251,16 @@ namespace {
 		, std::function<void(piece_index_t)> const& f, error_code& ec)
 	{
 		// optimized path
+#ifdef TORRENT_BUILD_SIMULATOR
+		sim::default_config conf;
+		sim::simulation sim{conf};
+		io_service ios{sim};
+#else
 		io_service ios;
+#endif
 
 #if TORRENT_USE_UNC_PATHS
-		std::string path = canonicalize_path(p);
+		std::string const path = canonicalize_path(p);
 #else
 		std::string const& path = p;
 #endif
@@ -274,7 +280,7 @@ namespace {
 		counters cnt;
 		disk_io_thread disk_thread(ios, cnt);
 
-		aux::vector<std::uint8_t, file_index_t> priorities;
+		aux::vector<download_priority_t, file_index_t> priorities;
 		sha1_hash info_hash;
 		storage_params params{
 			t.files(),
@@ -285,15 +291,19 @@ namespace {
 			info_hash
 		};
 
-		storage_holder storage = disk_thread.new_torrent(default_storage_constructor, std::move(params), std::shared_ptr<void>());
+		storage_holder storage = disk_thread.new_torrent(default_storage_constructor
+			, params, std::shared_ptr<void>());
 
 		settings_pack sett;
 		sett.set_int(settings_pack::cache_size, 0);
-		sett.set_int(settings_pack::aio_threads, 1);
+		int const num_threads = disk_io_thread::hasher_thread_divisor - 1;
+		int const jobs_per_thread = 4;
+		sett.set_int(settings_pack::aio_threads, num_threads);
 
 		disk_thread.set_settings(&sett);
 
-		int const piece_read_ahead = std::max(1, 15 * 1024 * 1024 / t.piece_length());
+		int const piece_read_ahead = std::max(num_threads * jobs_per_thread
+			, default_block_size / t.piece_length());
 
 		hash_state st = { t, std::move(storage), disk_thread, piece_index_t(0), piece_index_t(0), f, ec };
 		for (piece_index_t i(0); i < piece_index_t(piece_read_ahead); ++i)
@@ -304,7 +314,13 @@ namespace {
 			if (st.piece_counter >= t.files().end_piece()) break;
 		}
 		disk_thread.submit_jobs();
+
+#ifdef TORRENT_BUILD_SIMULATOR
+		sim.run();
+#else
 		ios.run(ec);
+#endif
+		disk_thread.abort(true);
 	}
 
 	create_torrent::~create_torrent() = default;
@@ -328,16 +344,30 @@ namespace {
 		// a piece_size of 0 means automatic
 		if (piece_size == 0 && !m_merkle_torrent)
 		{
-			const int target_size = 40 * 1024;
-			piece_size = int(fs.total_size() / (target_size / 20));
+			// size_table is computed from the following:
+			//   target_list_size = sqrt(total_size) * 2;
+			//   target_piece_size = total_size / (target_list_size / hash_size);
+			// Given hash_size = 20 bytes, target_piece_size = (16*1024 * pow(2, i))
+			// we can determine size_table = (total_size = pow(2 * target_piece_size / hash_size, 2))
+			std::array<std::int64_t, 10> const size_table{{
+				       2684355LL // ->  16kiB
+				,     10737418LL // ->  32 kiB
+				,     42949673LL // ->  64 kiB
+				,    171798692LL // -> 128 kiB
+				,    687194767LL // -> 256 kiB
+				,   2748779069LL // -> 512 kiB
+				,  10995116278LL // -> 1 MiB
+				,  43980465111LL // -> 2 MiB
+				, 175921860444LL // -> 4 MiB
+				, 703687441777LL}}; // -> 8 MiB
 
-			int i = 16*1024;
-			for (; i < 2*1024*1024; i *= 2)
+			int i = 0;
+			for (auto const s : size_table)
 			{
-				if (piece_size > i) continue;
-				break;
+				if (s >= fs.total_size()) break;
+				++i;
 			}
-			piece_size = i;
+			piece_size = default_block_size << i;
 		}
 		else if (piece_size == 0 && m_merkle_torrent)
 		{
@@ -372,7 +402,7 @@ namespace {
 
 	create_torrent::create_torrent(torrent_info const& ti)
 		: m_files(const_cast<file_storage&>(ti.files()))
-		, m_creation_date(::time(0))
+		, m_creation_date(::time(nullptr))
 		, m_multifile(ti.num_files() > 1)
 		, m_private(ti.priv())
 		, m_merkle_torrent(ti.is_merkle_torrent())
@@ -405,13 +435,12 @@ namespace {
 		}
 
 		m_piece_hash.resize(m_files.num_pieces());
-		for (piece_index_t i(0); i != m_files.end_piece(); ++i)
+		for (auto const i : m_files.piece_range())
 			set_hash(i, ti.hash_for_piece(i));
 
 		boost::shared_array<char> const info = ti.metadata();
 		int const size = ti.metadata_size();
 		m_info_dict.preformatted().assign(&info[0], &info[0] + size);
-		m_info_hash = ti.info_hash();
 	}
 
 	entry create_torrent::generate() const
@@ -432,9 +461,9 @@ namespace {
 			for (auto const& n : m_nodes)
 			{
 				entry::list_type node;
-				node.push_back(entry(n.first));
-				node.push_back(entry(n.second));
-				nodes_list.push_back(entry(node));
+				node.emplace_back(n.first);
+				node.emplace_back(n.second);
+				nodes_list.emplace_back(node);
 			}
 		}
 
@@ -451,7 +480,7 @@ namespace {
 					trackers.list().push_back(tier);
 					tier.list().clear();
 				}
-				tier.list().push_back(entry(url.first));
+				tier.list().emplace_back(url.first);
 			}
 			trackers.list().push_back(tier);
 			dict["announce-list"] = trackers;
@@ -476,7 +505,7 @@ namespace {
 				entry& list = dict["url-list"];
 				for (auto const& url : m_url_seeds)
 				{
-					list.list().push_back(entry(url));
+					list.list().emplace_back(url);
 				}
 			}
 		}
@@ -492,7 +521,7 @@ namespace {
 				entry& list = dict["httpseeds"];
 				for (auto const& url : m_http_seeds)
 				{
-					list.list().push_back(entry(url));
+					list.list().emplace_back(url);
 				}
 			}
 		}
@@ -510,7 +539,7 @@ namespace {
 			entry& list = info["collections"];
 			for (auto const& c : m_collections)
 			{
-				list.list().push_back(entry(c));
+				list.list().emplace_back(c);
 			}
 		}
 
@@ -519,7 +548,7 @@ namespace {
 			entry& list = info["similar"];
 			for (auto const& ih : m_similar)
 			{
-				list.list().push_back(entry(ih.to_string()));
+				list.list().emplace_back(ih.to_string());
 			}
 		}
 
@@ -554,7 +583,7 @@ namespace {
 
 				std::string split = split_path(m_files.symlink(first));
 				for (char const* e = split.c_str(); e != nullptr; e = next_path_element(e))
-					sympath_e.list().push_back(e);
+					sympath_e.list().emplace_back(e);
 			}
 			if (!m_filehashes.empty())
 			{
@@ -567,9 +596,9 @@ namespace {
 			{
 				entry& files = info["files"];
 
-				for (file_index_t i(0); i != m_files.end_file(); ++i)
+				for (auto const i : m_files.file_range())
 				{
-					files.list().push_back(entry());
+					files.list().emplace_back();
 					entry& file_e = files.list().back();
 					if (m_include_mtime && m_files.mtime(i)) file_e["mtime"] = m_files.mtime(i);
 					file_e["length"] = m_files.file_size(i);
@@ -583,7 +612,7 @@ namespace {
 
 						for (char const* e = next_path_element(split.c_str());
 							e != nullptr; e = next_path_element(e))
-							path_e.list().push_back(entry(e));
+							path_e.list().emplace_back(e);
 					}
 
 					file_flags_t const flags = m_files.file_flags(i);
@@ -603,7 +632,7 @@ namespace {
 
 						std::string split = split_path(m_files.symlink(i));
 						for (char const* e = split.c_str(); e != nullptr; e = next_path_element(e))
-							sympath_e.list().push_back(entry(e));
+							sympath_e.list().emplace_back(e);
 					}
 					if (!m_filehashes.empty() && m_filehashes[i] != sha1_hash())
 					{
@@ -620,7 +649,7 @@ namespace {
 			int const num_nodes = merkle_num_nodes(num_leafs);
 			int const first_leaf = num_nodes - num_leafs;
 			m_merkle_tree.resize(num_nodes);
-			int const num_pieces = int(m_piece_hash.size());
+			auto const num_pieces = int(m_piece_hash.size());
 			for (int i = 0; i < num_pieces; ++i)
 				m_merkle_tree[first_leaf + i] = m_piece_hash[piece_index_t(i)];
 			for (int i = num_pieces; i < num_leafs; ++i)
@@ -656,7 +685,6 @@ namespace {
 
 		std::vector<char> buf;
 		bencode(std::back_inserter(buf), info);
-		m_info_hash = hasher(buf).final();
 
 		return dict;
 	}
@@ -664,7 +692,7 @@ namespace {
 	void create_torrent::add_tracker(string_view url, int const tier)
 	{
 		using announce_entry = std::pair<std::string, int>;
-		auto i = std::find_if(m_urls.begin(), m_urls.end()
+		auto const i = std::find_if(m_urls.begin(), m_urls.end()
 			, [&url](announce_entry const& ae) { return ae.first == url; });
 		if (i != m_urls.end()) return;
 		m_urls.emplace_back(url.to_string(), tier);
@@ -681,7 +709,7 @@ namespace {
 
 	void create_torrent::add_similar_torrent(sha1_hash ih)
 	{
-		m_similar.push_back(ih);
+		m_similar.emplace_back(ih);
 	}
 
 	void create_torrent::add_collection(string_view c)

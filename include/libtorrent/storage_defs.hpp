@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,21 +34,19 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_STORAGE_DEFS_HPP_INCLUDE
 
 #include "libtorrent/config.hpp"
+#include "libtorrent/fwd.hpp"
 #include "libtorrent/units.hpp"
 #include "libtorrent/aux_/vector.hpp"
 #include "libtorrent/sha1_hash.hpp"
+#include "libtorrent/download_priority.hpp"
 #include <functional>
 #include <string>
 
 namespace libtorrent {
 
 	struct TORRENT_EXPORT storage_interface;
-	class file_storage;
-	struct file_pool;
-	class torrent_info;
 
-	struct storage_index_tag_t {};
-	using storage_index_t = aux::strong_typedef<std::uint32_t, storage_index_tag_t>;
+	using storage_index_t = aux::strong_typedef<std::uint32_t, struct storage_index_tag_t>;
 
 	// types of storage allocation used for add_torrent_params::storage_mode.
 	enum storage_mode_t
@@ -93,7 +91,7 @@ namespace libtorrent {
 		dont_replace
 	};
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	// deprecated in 1.2
 	enum deprecated_move_flags_t
 	{
@@ -107,7 +105,7 @@ namespace libtorrent {
 	{
 		storage_params(file_storage const& f, file_storage const* mf
 			, std::string const& sp, storage_mode_t const sm
-			, aux::vector<std::uint8_t, file_index_t> const& prio
+			, aux::vector<download_priority_t, file_index_t> const& prio
 			, sha1_hash const& ih)
 			: files(f)
 			, mapped_files(mf)
@@ -120,7 +118,7 @@ namespace libtorrent {
 		file_storage const* mapped_files = nullptr; // optional
 		std::string const& path;
 		storage_mode_t mode{storage_mode_sparse};
-		aux::vector<std::uint8_t, file_index_t> const& priorities;
+		aux::vector<download_priority_t, file_index_t> const& priorities;
 		sha1_hash const& info_hash;
 	};
 

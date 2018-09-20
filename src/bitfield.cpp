@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2008-2016, Arvid Norberg
+Copyright (c) 2008-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -40,7 +40,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	bool bitfield::all_set() const
+	bool bitfield::all_set() const noexcept
 	{
 		if(size() == 0) return false;
 
@@ -58,7 +58,7 @@ namespace libtorrent {
 		return true;
 	}
 
-	int bitfield::count() const
+	int bitfield::count() const noexcept
 	{
 		int ret = 0;
 		int const words = num_words();
@@ -129,7 +129,7 @@ namespace libtorrent {
 		return ret;
 	}
 
-	void bitfield::resize(int bits, bool val)
+	void bitfield::resize(int const bits, bool const val)
 	{
 		if (bits == size()) return;
 
@@ -170,7 +170,7 @@ namespace libtorrent {
 		int const cur_size_words = num_words();
 		if (cur_size_words != new_size_words)
 		{
-			aux::unique_ptr<std::uint32_t[]> b(new std::uint32_t[new_size_words + 1]);
+			aux::unique_ptr<std::uint32_t[]> b(new std::uint32_t[std::size_t(new_size_words + 1)]);
 #ifdef BOOST_NO_EXCEPTIONS
 			if (b == nullptr) std::terminate();
 #endif
@@ -193,7 +193,7 @@ namespace libtorrent {
 		TORRENT_ASSERT(size() == bits);
 	}
 
-	int bitfield::find_first_set() const
+	int bitfield::find_first_set() const noexcept
 	{
 		int const num = num_words();
 		if (num == 0) return -1;
@@ -201,7 +201,7 @@ namespace libtorrent {
 		return count != num * 32 ? count : -1;
 	}
 
-	int bitfield::find_last_clear() const
+	int bitfield::find_last_clear() const noexcept
 	{
 		int const num = num_words();
 		if (num == 0) return - 1;

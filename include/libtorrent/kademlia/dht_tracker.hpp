@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2006-2016, Arvid Norberg
+Copyright (c) 2006-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -50,7 +50,7 @@ POSSIBILITY OF SUCH DAMAGE.
 namespace libtorrent {
 
 	struct counters;
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	struct session_status;
 #endif
 }
@@ -96,10 +96,9 @@ namespace libtorrent { namespace dht {
 
 		dht_state state() const;
 
-		enum flags_t { flag_seed = 1, flag_implied_port = 2 };
 		void get_peers(sha1_hash const& ih
 			, std::function<void(std::vector<tcp::endpoint> const&)> f);
-		void announce(sha1_hash const& ih, int listen_port, int flags
+		void announce(sha1_hash const& ih, int listen_port, announce_flags_t flags
 			, std::function<void(std::vector<tcp::endpoint> const&)> f);
 
 		void sample_infohashes(udp::endpoint const& ep, sha1_hash const& target
@@ -133,7 +132,7 @@ namespace libtorrent { namespace dht {
 		void direct_request(udp::endpoint const& ep, entry& e
 			, std::function<void(msg const&)> f);
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		void dht_status(session_status& s);
 #endif
 		void dht_status(std::vector<dht_routing_bucket>& table
@@ -141,7 +140,8 @@ namespace libtorrent { namespace dht {
 		void update_stats_counters(counters& c) const;
 
 		void incoming_error(error_code const& ec, udp::endpoint const& ep);
-		bool incoming_packet(udp::endpoint const& ep, span<char const> buf);
+		bool incoming_packet(aux::listen_socket_handle const& s
+			, udp::endpoint const& ep, span<char const> buf);
 
 		std::vector<std::pair<node_id, udp::endpoint>> live_nodes(node_id const& nid);
 
@@ -155,6 +155,8 @@ namespace libtorrent { namespace dht {
 				, dht_observer* observer, counters& cnt
 				, get_foreign_node_t get_foreign_node
 				, dht_storage_interface& storage);
+			tracker_node(tracker_node const&) = delete;
+			tracker_node(tracker_node&&) = default;
 
 			node dht;
 			deadline_timer connection_timer;

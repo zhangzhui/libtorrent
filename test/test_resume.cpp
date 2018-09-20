@@ -43,6 +43,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "setup_transfer.hpp"
 
 #include "test.hpp"
+#include "test_utils.hpp"
 #include "settings.hpp"
 #include "setup_transfer.hpp"
 #include "settings.hpp"
@@ -50,6 +51,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <fstream>
 
 using namespace lt;
+
+namespace {
 
 torrent_flags_t const flags_mask
 	= torrent_flags::sequential_download
@@ -61,30 +64,6 @@ torrent_flags_t const flags_mask
 	| torrent_flags::upload_mode
 	| torrent_flags::apply_ip_filter;
 
-std::shared_ptr<torrent_info> generate_torrent()
-{
-	file_storage fs;
-	fs.add_file("test_resume/tmp1", 128 * 1024 * 8);
-	fs.add_file("test_resume/tmp2", 128 * 1024);
-	fs.add_file("test_resume/tmp3", 128 * 1024);
-	lt::create_torrent t(fs, 128 * 1024, 6);
-
-	t.add_tracker("http://torrent_file_tracker.com/announce");
-	t.add_url_seed("http://torrent_file_url_seed.com/");
-
-	TEST_CHECK(t.num_pieces() > 0);
-	for (piece_index_t i(0); i < fs.end_piece(); ++i)
-	{
-		sha1_hash ph;
-		for (int k = 0; k < 20; ++k) ph[k] = lt::random(0xff);
-		t.set_hash(i, ph);
-	}
-
-	std::vector<char> buf;
-	bencode(std::back_inserter(buf), t.generate());
-	return std::make_shared<torrent_info>(buf, from_span);
-}
-
 std::vector<char> generate_resume_data(torrent_info* ti
 	, char const* file_priorities = "")
 {
@@ -93,8 +72,8 @@ std::vector<char> generate_resume_data(torrent_info* ti
 	rd["file-format"] = "libtorrent resume file";
 	rd["file-version"] = 1;
 	rd["info-hash"] = ti->info_hash().to_string();
-	rd["blocks per piece"] = (std::max)(1, ti->piece_length() / 0x4000);
-	rd["pieces"] = std::string(ti->num_pieces(), '\x01');
+	rd["blocks per piece"] = std::max(1, ti->piece_length() / 0x4000);
+	rd["pieces"] = std::string(std::size_t(ti->num_pieces()), '\x01');
 
 	rd["total_uploaded"] = 1337;
 	rd["total_downloaded"] = 1338;
@@ -108,6 +87,8 @@ std::vector<char> generate_resume_data(torrent_info* ti
 	rd["super_seeding"] = 0;
 	rd["added_time"] = 1347;
 	rd["completed_time"] = 1348;
+	rd["last_download"] = 2;
+	rd["last_upload"] = 3;
 	rd["finished_time"] = 1352;
 	if (file_priorities && file_priorities[0])
 	{
@@ -116,7 +97,7 @@ std::vector<char> generate_resume_data(torrent_info* ti
 			file_prio.push_back(entry(file_priorities[i] - '0'));
 	}
 
-	rd["piece_priority"] = std::string(ti->num_pieces(), '\x01');
+	rd["piece_priority"] = std::string(std::size_t(ti->num_pieces()), '\x01');
 	rd["auto_managed"] = 0;
 	rd["sequential_download"] = 0;
 	rd["paused"] = 0;
@@ -152,8 +133,8 @@ torrent_handle test_resume_flags(lt::session& ses
 
 	add_torrent_params p;
 	std::vector<char> rd = generate_resume_data(ti.get(), resume_file_prio);
-
-#ifndef TORRENT_NO_DEPRECATE
+	TORRENT_UNUSED(test_deprecated);
+#if TORRENT_ABI_VERSION == 1
 	if (test_deprecated)
 	{
 		p.resume_data.swap(rd);
@@ -184,9 +165,9 @@ torrent_handle test_resume_flags(lt::session& ses
 
 	if (file_priorities[0])
 	{
-		aux::vector<std::uint8_t, file_index_t> priorities_vector;
+		aux::vector<download_priority_t, file_index_t> priorities_vector;
 		for (int i = 0; file_priorities[i]; ++i)
-			priorities_vector.push_back(file_priorities[i] - '0');
+			priorities_vector.push_back(download_priority_t(aux::numeric_cast<std::uint8_t>(file_priorities[i] - '0')));
 
 		p.file_priorities = priorities_vector;
 	}
@@ -202,9 +183,16 @@ void default_tests(torrent_status const& s)
 	// allow some slack in the time stamps since they are reported as
 	// relative times. If the computer is busy while running the unit test
 	// or running under valgrind it may take several seconds
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	TEST_CHECK(s.active_time >= 1339);
 	TEST_CHECK(s.active_time < 1339 + 10);
+
+	auto const now = duration_cast<seconds>(clock_type::now().time_since_epoch()).count();
+	TEST_CHECK(s.time_since_download >= now - 2);
+	TEST_CHECK(s.time_since_upload >= now - 3);
+
+	TEST_CHECK(s.time_since_download < now - 2 + 10);
+	TEST_CHECK(s.time_since_upload < now - 3 + 10);
 #endif
 
 	using lt::seconds;
@@ -214,7 +202,9 @@ void default_tests(torrent_status const& s)
 	TEST_CHECK(s.active_duration < seconds(1339 + 10));
 
 	TEST_CHECK(s.added_time < 1347 + 2);
+	TEST_CHECK(s.added_time >= 1347);
 	TEST_CHECK(s.completed_time < 1348 + 2);
+	TEST_CHECK(s.completed_time >= 1348);
 }
 
 void test_piece_priorities(bool test_deprecated = false)
@@ -226,8 +216,8 @@ void test_piece_priorities(bool test_deprecated = false)
 	p.save_path = ".";
 	torrent_handle h = ses.add_torrent(p);
 
-	h.piece_priority(piece_index_t(0), 0);
-	h.piece_priority(piece_index_t(ti->num_pieces()-1), 0);
+	h.piece_priority(piece_index_t(0), 0_pri);
+	h.piece_priority(piece_index_t(ti->num_pieces()-1), 0_pri);
 
 	h.save_resume_data();
 	alert const* a = wait_for_alert(ses, save_resume_data_alert::alert_type);
@@ -239,13 +229,13 @@ void test_piece_priorities(bool test_deprecated = false)
 	{
 		auto const prios = ra->params.piece_priorities;
 		TEST_EQUAL(int(prios.size()), ti->num_pieces());
-		TEST_EQUAL(prios[0], '\0');
-		TEST_EQUAL(prios[1], '\x04');
-		TEST_EQUAL(prios[ti->num_pieces()-1], '\0');
+		TEST_EQUAL(prios[0], 0_pri);
+		TEST_EQUAL(prios[1], 4_pri);
+		TEST_EQUAL(prios[std::size_t(ti->num_pieces() - 1)], 0_pri);
 
 		std::vector<char> resume_data = write_resume_data_buf(ra->params);
-
-#ifndef TORRENT_NO_DEPRECATE
+		TORRENT_UNUSED(test_deprecated);
+#if TORRENT_ABI_VERSION == 1
 		if (test_deprecated)
 		{
 			p.resume_data = resume_data;
@@ -266,12 +256,14 @@ void test_piece_priorities(bool test_deprecated = false)
 	// now, make sure the piece priorities are loaded correctly
 	h = ses.add_torrent(p);
 
-	TEST_EQUAL(h.piece_priority(piece_index_t(0)), 0);
-	TEST_EQUAL(h.piece_priority(piece_index_t(1)), 4);
-	TEST_EQUAL(h.piece_priority(piece_index_t(ti->num_pieces()-1)), 0);
+	TEST_EQUAL(h.piece_priority(piece_index_t(0)), 0_pri);
+	TEST_EQUAL(h.piece_priority(piece_index_t(1)), 4_pri);
+	TEST_EQUAL(h.piece_priority(piece_index_t(ti->num_pieces()-1)), 0_pri);
 }
 
-#ifndef TORRENT_NO_DEPRECATE
+} // anonymous namespace
+
+#if TORRENT_ABI_VERSION == 1
 TORRENT_TEST(piece_priorities_deprecated)
 {
 	test_piece_priorities(true);
@@ -293,9 +285,9 @@ TORRENT_TEST(piece_slots)
 	{
 		std::vector<char> a(128 * 1024 * 8);
 		std::vector<char> b(128 * 1024);
-		std::ofstream("add_torrent_params_test/test_resume/tmp1").write(a.data(), a.size());
-		std::ofstream("add_torrent_params_test/test_resume/tmp2").write(b.data(), b.size());
-		std::ofstream("add_torrent_params_test/test_resume/tmp3").write(b.data(), b.size());
+		std::ofstream("add_torrent_params_test/test_resume/tmp1").write(a.data(), std::streamsize(a.size()));
+		std::ofstream("add_torrent_params_test/test_resume/tmp2").write(b.data(), std::streamsize(b.size()));
+		std::ofstream("add_torrent_params_test/test_resume/tmp3").write(b.data(), std::streamsize(b.size()));
 	}
 
 	add_torrent_params p;
@@ -340,6 +332,8 @@ TORRENT_TEST(piece_slots)
 	}
 }
 
+namespace {
+
 void test_piece_slots_seed(settings_pack const& sett)
 {
 	// make sure the "pieces" field is correctly accepted from resume data
@@ -350,9 +344,9 @@ void test_piece_slots_seed(settings_pack const& sett)
 	{
 		std::vector<char> a(128 * 1024 * 8);
 		std::vector<char> b(128 * 1024);
-		std::ofstream("add_torrent_params_test/test_resume/tmp1").write(a.data(), a.size());
-		std::ofstream("add_torrent_params_test/test_resume/tmp2").write(b.data(), b.size());
-		std::ofstream("add_torrent_params_test/test_resume/tmp3").write(b.data(), b.size());
+		std::ofstream("add_torrent_params_test/test_resume/tmp1").write(a.data(), std::streamsize(a.size()));
+		std::ofstream("add_torrent_params_test/test_resume/tmp2").write(b.data(), std::streamsize(b.size()));
+		std::ofstream("add_torrent_params_test/test_resume/tmp3").write(b.data(), std::streamsize(b.size()));
 	}
 
 	add_torrent_params p;
@@ -370,8 +364,10 @@ void test_piece_slots_seed(settings_pack const& sett)
 	print_alerts(ses, "ses");
 	TEST_EQUAL(s.info_hash, ti->info_hash());
 	TEST_EQUAL(s.pieces.size(), ti->num_pieces());
-	for (piece_index_t i{0}; i != ti->end_piece(); ++i)
+	for (auto const i : ti->piece_range())
+	{
 		TEST_EQUAL(s.pieces[i], true);
+	}
 
 	TEST_EQUAL(s.is_seeding, true);
 
@@ -387,10 +383,14 @@ void test_piece_slots_seed(settings_pack const& sett)
 		auto const& pieces = ra->params.have_pieces;
 		TEST_EQUAL(int(pieces.size()), ti->num_pieces());
 
-		for (piece_index_t i{0}; i != ti->end_piece(); ++i)
+		for (auto const i : ti->piece_range())
+		{
 			TEST_EQUAL(pieces[i], true);
+		}
 	}
 }
+
+} // anonymous namespace
 
 TORRENT_TEST(piece_slots_seed)
 {
@@ -412,12 +412,12 @@ TORRENT_TEST(piece_slots_seed_suggest_cache)
 
 // TODO: generally save
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 TORRENT_TEST(file_priorities_default_deprecated)
 {
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses
-		, {}, "", "", true).file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses
+		, {}, "", "", true).get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
 	TEST_EQUAL(file_priorities[0], 4);
@@ -430,7 +430,7 @@ TORRENT_TEST(file_priorities_default_deprecated)
 TORRENT_TEST(file_priorities_in_resume_deprecated)
 {
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses, {}, "", "123").file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses, {}, "", "123").get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
 	TEST_EQUAL(file_priorities[0], 1);
@@ -443,7 +443,7 @@ TORRENT_TEST(file_priorities_in_resume_deprecated)
 TORRENT_TEST(file_priorities_in_resume_and_params_deprecated)
 {
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses, {}, "456", "123").file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses, {}, "456", "123").get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
 	TEST_EQUAL(file_priorities[0], 4);
@@ -455,8 +455,8 @@ TORRENT_TEST(file_priorities_in_resume_and_params_deprecated)
 TORRENT_TEST(file_priorities_override_resume_deprecated)
 {
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses
-		, add_torrent_params::flag_override_resume_data, "", "123").file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses
+		, add_torrent_params::flag_override_resume_data, "", "123").get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
 	TEST_EQUAL(file_priorities[0], 1);
@@ -468,8 +468,8 @@ TORRENT_TEST(file_priorities_resume_seed_mode_deprecated)
 {
 	// in share mode file priorities should always be 0
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses,
-		torrent_flags::share_mode, "", "123", true).file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses,
+		torrent_flags::share_mode, "", "123", true).get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
 	TEST_EQUAL(file_priorities[0], 0);
@@ -481,8 +481,8 @@ TORRENT_TEST(file_priorities_seed_mode_deprecated)
 {
 	// in share mode file priorities should always be 0
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses,
-		torrent_flags::share_mode, "123", "", true).file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses,
+		torrent_flags::share_mode, "123", "", true).get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
 	TEST_EQUAL(file_priorities[0], 0);
@@ -540,8 +540,8 @@ TORRENT_TEST(file_priorities_resume_override_deprecated)
 	// override the resume data file priorities, even when override resume data
 	// flag is set.
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses,
-		torrent_flags::override_resume_data, "", "123", true).file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses,
+		torrent_flags::override_resume_data, "", "123", true).get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
 	TEST_EQUAL(file_priorities[0], 1);
@@ -552,7 +552,7 @@ TORRENT_TEST(file_priorities_resume_override_deprecated)
 TORRENT_TEST(file_priorities_resume_deprecated)
 {
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses, {}, "", "123", true).file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses, {}, "", "123", true).get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
 	TEST_EQUAL(file_priorities[0], 1);
@@ -563,7 +563,7 @@ TORRENT_TEST(file_priorities_resume_deprecated)
 TORRENT_TEST(file_priorities1_deprecated)
 {
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses, {}, "010", "", true).file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses, {}, "010", "", true).get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
 	TEST_EQUAL(file_priorities[0], 0);
@@ -576,7 +576,7 @@ TORRENT_TEST(file_priorities1_deprecated)
 TORRENT_TEST(file_priorities2_deprecated)
 {
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses, {}, "123", "", true).file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses, {}, "123", "", true).get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
 	TEST_EQUAL(file_priorities[0], 1);
@@ -587,7 +587,7 @@ TORRENT_TEST(file_priorities2_deprecated)
 TORRENT_TEST(file_priorities3_deprecated)
 {
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses, {}, "4321", "", true).file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses, {}, "4321", "", true).get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
 	TEST_EQUAL(file_priorities[0], 4);
@@ -777,41 +777,44 @@ TORRENT_TEST(resume_override_torrent_deprecated)
 TORRENT_TEST(file_priorities_default)
 {
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses, {}, "", "").file_priorities();
+	std::vector<download_priority_t> file_priorities
+		= test_resume_flags(ses, {}, "", "").get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
-	TEST_EQUAL(file_priorities[0], 4);
-	TEST_EQUAL(file_priorities[1], 4);
-	TEST_EQUAL(file_priorities[2], 4);
+	TEST_EQUAL(file_priorities[0], 4_pri);
+	TEST_EQUAL(file_priorities[1], 4_pri);
+	TEST_EQUAL(file_priorities[2], 4_pri);
 }
 
 TORRENT_TEST(file_priorities_resume_seed_mode)
 {
 	// in share mode file priorities should always be 0
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses
-		, torrent_flags::share_mode, "", "123").file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses
+		, torrent_flags::share_mode, "", "123").get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
-	TEST_EQUAL(file_priorities[0], 0);
-	TEST_EQUAL(file_priorities[1], 0);
-	TEST_EQUAL(file_priorities[2], 0);
+	TEST_EQUAL(file_priorities[0], 0_pri);
+	TEST_EQUAL(file_priorities[1], 0_pri);
+	TEST_EQUAL(file_priorities[2], 0_pri);
 }
 
 TORRENT_TEST(file_priorities_seed_mode)
 {
 	// in share mode file priorities should always be 0
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses
-		, torrent_flags::share_mode, "123", "").file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses
+		, torrent_flags::share_mode, "123", "").get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
-	TEST_EQUAL(file_priorities[0], 0);
-	TEST_EQUAL(file_priorities[1], 0);
-	TEST_EQUAL(file_priorities[2], 0);
+	TEST_EQUAL(file_priorities[0], 0_pri);
+	TEST_EQUAL(file_priorities[1], 0_pri);
+	TEST_EQUAL(file_priorities[2], 0_pri);
 }
 
-void test_zero_file_prio(bool test_deprecated = false)
+namespace {
+
+void test_zero_file_prio(bool test_deprecated = false, bool mix_prios = false)
 {
 	std::printf("test_file_prio\n");
 
@@ -826,24 +829,21 @@ void test_zero_file_prio(bool test_deprecated = false)
 	rd["file-format"] = "libtorrent resume file";
 	rd["file-version"] = 1;
 	rd["info-hash"] = ti->info_hash().to_string();
-	rd["blocks per piece"] = (std::max)(1, ti->piece_length() / 0x4000);
+	rd["blocks per piece"] = std::max(1, ti->piece_length() / 0x4000);
 
-	entry::list_type& file_prio = rd["file_priority"].list();
-	for (int i = 0; i < 100; ++i)
-	{
-		file_prio.push_back(entry(0));
-	}
+	// set file priorities to 0
+	rd["file_priority"] = entry::list_type(100, entry(0));
 
-	std::string pieces(ti->num_pieces(), '\x01');
-	rd["pieces"] = pieces;
+	rd["pieces"] = std::string(std::size_t(ti->num_pieces()), '\x01');
 
-	std::string pieces_prio(ti->num_pieces(), '\x01');
-	rd["piece_priority"] = pieces_prio;
+	// but set the piece priorities to 1. these take precedence
+	if (mix_prios)
+		rd["piece_priority"] = std::string(std::size_t(ti->num_pieces()), '\x01');
 
 	std::vector<char> resume_data;
 	bencode(back_inserter(resume_data), rd);
-
-#ifndef TORRENT_NO_DEPRECATE
+	TORRENT_UNUSED(test_deprecated);
+#if TORRENT_ABI_VERSION == 1
 	if (test_deprecated)
 	{
 		p.resume_data = resume_data;
@@ -861,14 +861,29 @@ void test_zero_file_prio(bool test_deprecated = false)
 	torrent_handle h = ses.add_torrent(p);
 
 	torrent_status s = h.status();
-	TEST_EQUAL(s.total_wanted, 0);
+	if (mix_prios)
+	{
+		TEST_EQUAL(s.total_wanted, ti->total_size());
+	}
+	else
+	{
+		TEST_EQUAL(s.total_wanted, 0);
+	}
 }
 
-#ifndef TORRENT_NO_DEPRECATE
+} // anonymous namespace
+
+#if TORRENT_ABI_VERSION == 1
 TORRENT_TEST(zero_file_prio_deprecated)
 {
 	test_zero_file_prio(true);
 }
+
+TORRENT_TEST(mixing_file_and_piece_prio_deprecated)
+{
+	test_zero_file_prio(true, true);
+}
+
 
 TORRENT_TEST(backwards_compatible_resume_info_dict)
 {
@@ -922,18 +937,24 @@ TORRENT_TEST(zero_file_prio)
 	test_zero_file_prio();
 }
 
-struct test_mode_tag;
-using test_mode_t = flags::bitfield_flag<std::uint8_t, test_mode_tag>;
+TORRENT_TEST(mixing_file_and_piece_prio)
+{
+	test_zero_file_prio(false, true);
+}
+
+using test_mode_t = flags::bitfield_flag<std::uint8_t, struct test_mode_tag>;
 
 namespace test_mode {
 	constexpr test_mode_t file_prio = 0_bit;
 	constexpr test_mode_t pieces_have = 1_bit;
 	constexpr test_mode_t piece_prio = 2_bit;
 	constexpr test_mode_t all_files_zero = 3_bit;
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	constexpr test_mode_t deprecated = 4_bit;
 #endif
 }
+
+namespace {
 
 void test_seed_mode(test_mode_t const flags)
 {
@@ -948,7 +969,7 @@ void test_seed_mode(test_mode_t const flags)
 	rd["file-format"] = "libtorrent resume file";
 	rd["file-version"] = 1;
 	rd["info-hash"] = ti->info_hash().to_string();
-	rd["blocks per piece"] = (std::max)(1, ti->piece_length() / 0x4000);
+	rd["blocks per piece"] = std::max(1, ti->piece_length() / 0x4000);
 
 	if (flags & test_mode::file_prio)
 	{
@@ -964,14 +985,14 @@ void test_seed_mode(test_mode_t const flags)
 		}
 	}
 
-	std::string pieces(ti->num_pieces(), '\x01');
+	std::string pieces(std::size_t(ti->num_pieces()), '\x01');
 	if (flags & test_mode::pieces_have)
 	{
 		pieces[0] = '\0';
 	}
 	rd["pieces"] = pieces;
 
-	std::string pieces_prio(ti->num_pieces(), '\x01');
+	std::string pieces_prio(std::size_t(ti->num_pieces()), '\x01');
 	if (flags & test_mode::piece_prio)
 	{
 		pieces_prio[0] = '\0';
@@ -983,7 +1004,7 @@ void test_seed_mode(test_mode_t const flags)
 	std::vector<char> resume_data;
 	bencode(back_inserter(resume_data), rd);
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	if (flags & test_mode::deprecated)
 	{
 		p.resume_data = resume_data;
@@ -1012,7 +1033,10 @@ void test_seed_mode(test_mode_t const flags)
 		TEST_CHECK(s.flags & torrent_flags::seed_mode);
 	}
 }
-#ifndef TORRENT_NO_DEPRECATE
+
+} // anonymous namespace
+
+#if TORRENT_ABI_VERSION == 1
 TORRENT_TEST(seed_mode_file_prio_deprecated)
 {
 	test_seed_mode(test_mode::file_prio | test_mode::deprecated);
@@ -1054,6 +1078,34 @@ TORRENT_TEST(seed_mode_preserve)
 	test_seed_mode(test_mode_t{});
 }
 
+TORRENT_TEST(seed_mode_load_peers)
+{
+	lt::session ses(settings());
+	std::shared_ptr<torrent_info> ti = generate_torrent();
+	add_torrent_params p;
+	p.ti = ti;
+	p.save_path = ".";
+	p.flags |= torrent_flags::seed_mode;
+	p.peers.push_back(tcp::endpoint(address::from_string("1.2.3.4"), 12345));
+
+	torrent_handle h = ses.add_torrent(p);
+
+	wait_for_alert(ses, torrent_checked_alert::alert_type, "seed_mode_load_peers");
+
+	h.save_resume_data();
+
+	save_resume_data_alert const* a = alert_cast<save_resume_data_alert>(
+		wait_for_alert(ses, save_resume_data_alert::alert_type
+		, "seed_mode_load_peers"));
+
+	TEST_CHECK(a);
+	if (a == nullptr) return;
+
+	auto const& peers = a->params.peers;
+	TEST_EQUAL(peers.size(), 1);
+	TEST_CHECK(peers[0] == tcp::endpoint(address::from_string("1.2.3.4"), 12345));
+}
+
 TORRENT_TEST(resume_save_load)
 {
 	lt::session ses(settings());
@@ -1071,9 +1123,9 @@ TORRENT_TEST(resume_save_load)
 	auto const l = a->params.file_priorities;
 
 	TEST_EQUAL(l.size(), 3);
-	TEST_EQUAL(l[0], 1);
-	TEST_EQUAL(l[1], 2);
-	TEST_EQUAL(l[2], 3);
+	TEST_EQUAL(l[0], 1_pri);
+	TEST_EQUAL(l[1], 2_pri);
+	TEST_EQUAL(l[2], 3_pri);
 }
 
 TORRENT_TEST(resume_save_load_resume)
@@ -1093,31 +1145,31 @@ TORRENT_TEST(resume_save_load_resume)
 	auto const l = a->params.file_priorities;
 
 	TEST_EQUAL(l.size(), 3);
-	TEST_EQUAL(l[0], 1);
-	TEST_EQUAL(l[1], 2);
-	TEST_EQUAL(l[2], 3);
+	TEST_EQUAL(l[0], 1_pri);
+	TEST_EQUAL(l[1], 2_pri);
+	TEST_EQUAL(l[2], 3_pri);
 }
 
 TORRENT_TEST(file_priorities_resume)
 {
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses, {}, "", "123").file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses, {}, "", "123").get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
-	TEST_EQUAL(file_priorities[0], 1);
-	TEST_EQUAL(file_priorities[1], 2);
-	TEST_EQUAL(file_priorities[2], 3);
+	TEST_EQUAL(file_priorities[0], 1_pri);
+	TEST_EQUAL(file_priorities[1], 2_pri);
+	TEST_EQUAL(file_priorities[2], 3_pri);
 }
 
 TORRENT_TEST(file_priorities1)
 {
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses, {}, "010").file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses, {}, "010").get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
-	TEST_EQUAL(file_priorities[0], 0);
-	TEST_EQUAL(file_priorities[1], 1);
-	TEST_EQUAL(file_priorities[2], 0);
+	TEST_EQUAL(file_priorities[0], 0_pri);
+	TEST_EQUAL(file_priorities[1], 1_pri);
+	TEST_EQUAL(file_priorities[2], 0_pri);
 
 //#error save resume data and assert the file priorities are preserved
 }
@@ -1125,23 +1177,23 @@ TORRENT_TEST(file_priorities1)
 TORRENT_TEST(file_priorities2)
 {
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses, {}, "123").file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses, {}, "123").get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
-	TEST_EQUAL(file_priorities[0], 1);
-	TEST_EQUAL(file_priorities[1], 2);
-	TEST_EQUAL(file_priorities[2], 3);
+	TEST_EQUAL(file_priorities[0], 1_pri);
+	TEST_EQUAL(file_priorities[1], 2_pri);
+	TEST_EQUAL(file_priorities[2], 3_pri);
 }
 
 TORRENT_TEST(file_priorities3)
 {
 	lt::session ses(settings());
-	std::vector<int> file_priorities = test_resume_flags(ses, {}, "4321").file_priorities();
+	std::vector<download_priority_t> file_priorities = test_resume_flags(ses, {}, "4321").get_file_priorities();
 
 	TEST_EQUAL(file_priorities.size(), 3);
-	TEST_EQUAL(file_priorities[0], 4);
-	TEST_EQUAL(file_priorities[1], 3);
-	TEST_EQUAL(file_priorities[2], 2);
+	TEST_EQUAL(file_priorities[0], 4_pri);
+	TEST_EQUAL(file_priorities[1], 3_pri);
+	TEST_EQUAL(file_priorities[2], 2_pri);
 }
 
 TORRENT_TEST(plain)
@@ -1242,4 +1294,3 @@ TORRENT_TEST(paused)
 	// more than just the torrent_status from test_resume_flags. Also http seeds
 	// and trackers for instance
 }
-

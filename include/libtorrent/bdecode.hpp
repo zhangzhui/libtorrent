@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2015-2016, Arvid Norberg
+Copyright (c) 2015-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -45,6 +45,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/assert.hpp"
 #include "libtorrent/span.hpp"
 #include "libtorrent/string_view.hpp"
+#include "libtorrent/aux_/noexcept_movable.hpp"
 
 /*
 
@@ -102,7 +103,7 @@ namespace libtorrent {
 
 TORRENT_EXPORT boost::system::error_category& bdecode_category();
 
-#ifndef TORRENT_NO_DEPRECATED
+#if TORRENT_ABI_VERSION == 1
 TORRENT_DEPRECATED
 inline boost::system::error_category& get_bdecode_category()
 { return bdecode_category(); }
@@ -150,7 +151,7 @@ namespace boost { namespace system {
 
 namespace libtorrent {
 
-	typedef boost::system::error_code error_code;
+	using error_code = boost::system::error_code;
 
 TORRENT_EXTRA_EXPORT char const* parse_int(char const* start
 	, char const* end, char delimiter, std::int64_t& val
@@ -163,7 +164,7 @@ struct bdecode_token
 {
 	// the node with type 'end' is a logical node, pointing to the end
 	// of the bencoded buffer.
-	enum type_t
+	enum type_t : std::uint8_t
 	{ none, dict, list, string, integer, end };
 
 	enum limits_t
@@ -181,7 +182,9 @@ struct bdecode_token
 	{
 		TORRENT_ASSERT(off >= 0);
 		TORRENT_ASSERT(off <= max_offset);
-		TORRENT_ASSERT(t >= 0 && t <= end);
+		TORRENT_ASSERT(t <= end);
+		static_assert(std::is_unsigned<std::underlying_type<bdecode_token::type_t>::type>::value
+			, "we need to assert t >= 0 here");
 	}
 
 	bdecode_token(std::ptrdiff_t off, std::uint32_t next
@@ -197,7 +200,9 @@ struct bdecode_token
 		TORRENT_ASSERT(next <= max_next_item);
 		// the string has 2 implied header bytes, to allow for longer prefixes
 		TORRENT_ASSERT(header_size < 8 || (type == string && header_size < 10));
-		TORRENT_ASSERT(t >= 0 && t <= end);
+		TORRENT_ASSERT(t <= end);
+		static_assert(std::is_unsigned<std::underlying_type<bdecode_token::type_t>::type>::value
+			, "we need to assert t >= 0 here");
 	}
 
 	int start_offset() const { TORRENT_ASSERT(type == string); return int(header) + 2; }
@@ -247,7 +252,7 @@ struct bdecode_token
 // There are 5 different types of nodes, see type_t.
 struct TORRENT_EXPORT bdecode_node
 {
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	TORRENT_DEPRECATED_EXPORT friend int bdecode(char const* start, char const* end, bdecode_node& ret
 		, error_code& ec, int* error_pos, int depth_limit
 		, int token_limit);
@@ -257,14 +262,14 @@ struct TORRENT_EXPORT bdecode_node
 		, error_code& ec, int* error_pos, int depth_limit, int token_limit);
 
 	// creates a default constructed node, it will have the type ``none_t``.
-	bdecode_node();
+	bdecode_node() = default;
 
 	// For owning nodes, the copy will create a copy of the tree, but the
 	// underlying buffer remains the same.
 	bdecode_node(bdecode_node const&);
 	bdecode_node& operator=(bdecode_node const&);
 	bdecode_node(bdecode_node&&) noexcept;
-	bdecode_node& operator=(bdecode_node&&) noexcept;
+	bdecode_node& operator=(bdecode_node&&) = default;
 
 	// the types of bdecoded nodes
 	enum type_t
@@ -283,10 +288,10 @@ struct TORRENT_EXPORT bdecode_node
 	};
 
 	// the type of this node. See type_t.
-	type_t type() const;
+	type_t type() const noexcept;
 
 	// returns true if type() != none_t.
-	explicit operator bool() const;
+	explicit operator bool() const noexcept;
 
 	// return a non-owning reference to this node. This is useful to refer to
 	// the root node without copying it in assignments.
@@ -296,7 +301,7 @@ struct TORRENT_EXPORT bdecode_node
 	// buffer where this node is defined. For a dictionary for instance, this
 	// starts with ``d`` and ends with ``e``, and has all the content of the
 	// dictionary in between.
-	span<char const> data_section() const;
+	span<char const> data_section() const noexcept;
 
 	// functions with the ``list_`` prefix operate on lists. These functions are
 	// only valid if ``type()`` == ``list_t``. ``list_at()`` returns the item
@@ -359,7 +364,7 @@ struct TORRENT_EXPORT bdecode_node
 	// this buffer *MUST* be identical to the one originally parsed. This
 	// operation is only defined on owning root nodes, i.e. the one passed in to
 	// decode().
-	void switch_underlying_buffer(char const* buf);
+	void switch_underlying_buffer(char const* buf) noexcept;
 
 	// returns true if there is a non-fatal error in the bencoding of this node
 	// or its children
@@ -372,29 +377,29 @@ private:
 	// if this is the root node, that owns all the tokens, they live in this
 	// vector. If this is a sub-node, this field is not used, instead the
 	// m_root_tokens pointer points to the root node's token.
-	std::vector<detail::bdecode_token> m_tokens;
+	aux::noexcept_movable<std::vector<detail::bdecode_token>> m_tokens;
 
 	// this points to the root nodes token vector
 	// for the root node, this points to its own m_tokens member
-	detail::bdecode_token const* m_root_tokens;
+	detail::bdecode_token const* m_root_tokens = nullptr;
 
 	// this points to the original buffer that was parsed
-	char const* m_buffer;
-	int m_buffer_size;
+	char const* m_buffer = nullptr;
+	int m_buffer_size = 0;
 
 	// this is the index into m_root_tokens that this node refers to
 	// for the root node, it's 0. -1 means uninitialized.
-	int m_token_idx;
+	int m_token_idx = -1;
 
 	// this is a cache of the last element index looked up. This only applies
 	// to lists and dictionaries. If the next lookup is at m_last_index or
 	// greater, we can start iterating the tokens at m_last_token.
-	mutable int m_last_index;
-	mutable int m_last_token;
+	mutable int m_last_index = -1;
+	mutable int m_last_token = -1;
 
 	// the number of elements in this list or dict (computed on the first
 	// call to dict_size() or list_size())
-	mutable int m_size;
+	mutable int m_size = -1;
 };
 
 // print the bencoded structure in a human-readable format to a string
@@ -429,10 +434,10 @@ TORRENT_EXPORT std::string print_entry(bdecode_node const& e
 // simply produces references back into it.
 TORRENT_EXPORT int bdecode(char const* start, char const* end, bdecode_node& ret
 	, error_code& ec, int* error_pos = nullptr, int depth_limit = 100
-	, int token_limit = 1000000);
+	, int token_limit = 2000000);
 TORRENT_EXPORT bdecode_node bdecode(span<char const> buffer
 	, error_code& ec, int* error_pos = nullptr, int depth_limit = 100
-	, int token_limit = 1000000);
+	, int token_limit = 2000000);
 
 }
 

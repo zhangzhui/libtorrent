@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -79,7 +79,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	using invalid_encoding = system_error;
 #endif
 
@@ -173,22 +173,21 @@ namespace detail {
 				break;
 			case entry::list_t:
 				write_char(out, 'l');
-				for (entry::list_type::const_iterator i = e.list().begin(); i != e.list().end(); ++i)
-					ret += bencode_recursive(out, *i);
+				for (auto const& i : e.list())
+					ret += bencode_recursive(out, i);
 				write_char(out, 'e');
 				ret += 2;
 				break;
 			case entry::dictionary_t:
 				write_char(out, 'd');
-				for (entry::dictionary_type::const_iterator i = e.dict().begin();
-					i != e.dict().end(); ++i)
+				for (auto const& i : e.dict())
 				{
 					// write key
-					ret += write_integer(out, i->first.length());
+					ret += write_integer(out, i.first.length());
 					write_char(out, ':');
-					ret += write_string(i->first, out);
+					ret += write_string(i.first, out);
 					// write value
-					ret += bencode_recursive(out, i->second);
+					ret += bencode_recursive(out, i.second);
 					ret += 1;
 				}
 				write_char(out, 'e');
@@ -196,7 +195,7 @@ namespace detail {
 				break;
 			case entry::preformatted_t:
 				std::copy(e.preformatted().begin(), e.preformatted().end(), out);
-				ret += int(e.preformatted().size());
+				ret += static_cast<int>(e.preformatted().size());
 				break;
 			case entry::undefined_t:
 
@@ -235,7 +234,7 @@ namespace detail {
 			case 'i':
 				{
 				++in; // 'i'
-				std::string val = read_until(in, end, 'e', err);
+				std::string const val = read_until(in, end, 'e', err);
 				if (err) return;
 				TORRENT_ASSERT(*in == 'e');
 				++in; // 'e'
@@ -250,17 +249,17 @@ namespace detail {
 					err = true;
 					return;
 				}
-				} break;
+				}
+				break;
 
 			// ----------------------------------------------
 			// list
 			case 'l':
-				{
 				ret = entry(entry::list_t);
 				++in; // 'l'
 				while (*in != 'e')
 				{
-					ret.list().push_back(entry());
+					ret.list().emplace_back();
 					entry& e = ret.list().back();
 					bdecode_recursive(in, end, e, err, depth + 1);
 					if (err)
@@ -284,12 +283,11 @@ namespace detail {
 #endif
 				TORRENT_ASSERT(*in == 'e');
 				++in; // 'e'
-				} break;
+				break;
 
 			// ----------------------------------------------
 			// dictionary
 			case 'd':
-				{
 				ret = entry(entry::dictionary_t);
 				++in; // 'd'
 				while (*in != 'e')
@@ -326,7 +324,7 @@ namespace detail {
 #endif
 				TORRENT_ASSERT(*in == 'e');
 				++in; // 'e'
-				} break;
+				break;
 
 			// ----------------------------------------------
 			// string

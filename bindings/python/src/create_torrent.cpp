@@ -57,7 +57,7 @@ namespace
         ct.add_node(std::make_pair(addr, port));
     }
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
     void add_file_deprecated(file_storage& ct, file_entry const& fe)
     {
        ct.add_file(fe);
@@ -65,11 +65,11 @@ namespace
 
     struct FileIter
     {
-        typedef lt::file_entry value_type;
-        typedef lt::file_entry reference;
-        typedef lt::file_entry* pointer;
-        typedef int difference_type;
-        typedef std::forward_iterator_tag iterator_category;
+        using value_type = lt::file_entry;
+        using reference = lt::file_entry;
+        using pointer = lt::file_entry*;
+        using difference_type = int;
+        using iterator_category = std::forward_iterator_tag;
 
         FileIter(file_storage const& fs, file_index_t i) : m_fs(&fs), m_i(i) {}
         FileIter(FileIter const&) = default;
@@ -106,7 +106,7 @@ namespace
     {
        fs.add_file(file, size, flags, md, link);
     }
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
 
     void add_files_callback(file_storage& fs, std::string const& file
        , boost::python::object cb, create_flags_t const flags)
@@ -133,7 +133,7 @@ void bind_create_torrent()
 {
     void (file_storage::*set_name0)(std::string const&) = &file_storage::set_name;
     void (file_storage::*rename_file0)(file_index_t, std::string const&) = &file_storage::rename_file;
-#if !defined TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
     void (file_storage::*set_name1)(std::wstring const&) = &file_storage::set_name;
     void (file_storage::*rename_file1)(file_index_t, std::wstring const&) = &file_storage::rename_file;
 #endif
@@ -146,11 +146,12 @@ void bind_create_torrent()
     std::string const& (file_storage::*file_storage_symlink)(file_index_t) const = &file_storage::symlink;
     sha1_hash (file_storage::*file_storage_hash)(file_index_t) const = &file_storage::hash;
     std::string (file_storage::*file_storage_file_path)(file_index_t, std::string const&) const = &file_storage::file_path;
+    string_view (file_storage::*file_storage_file_name)(file_index_t) const = &file_storage::file_name;
     std::int64_t (file_storage::*file_storage_file_size)(file_index_t) const = &file_storage::file_size;
     std::int64_t (file_storage::*file_storage_file_offset)(file_index_t) const = &file_storage::file_offset;
     file_flags_t (file_storage::*file_storage_file_flags)(file_index_t) const = &file_storage::file_flags;
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
     file_entry (file_storage::*at)(int) const = &file_storage::at;
 #endif
 
@@ -160,16 +161,17 @@ void bind_create_torrent()
         .def("is_valid", &file_storage::is_valid)
         .def("add_file", add_file, (arg("path"), arg("size"), arg("flags") = 0, arg("mtime") = 0, arg("linkpath") = ""))
         .def("num_files", &file_storage::num_files)
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
         .def("at", at)
         .def("add_file", add_file_deprecated, arg("entry"))
         .def("__iter__", boost::python::range(&begin_files, &end_files))
         .def("__len__", &file_storage::num_files)
         .def("add_file", add_file_wstring, (arg("path"), arg("size"), arg("flags") = 0, arg("mtime") = 0, arg("linkpath") = ""))
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
         .def("hash", file_storage_hash)
         .def("symlink", file_storage_symlink, return_value_policy<copy_const_reference>())
         .def("file_path", file_storage_file_path, (arg("idx"), arg("save_path") = ""))
+        .def("file_name", file_storage_file_name)
         .def("file_size", file_storage_file_size)
         .def("file_offset", file_storage_file_offset)
         .def("file_flags", file_storage_file_flags)
@@ -182,7 +184,7 @@ void bind_create_torrent()
         .def("piece_size", &file_storage::piece_size)
         .def("set_name", set_name0)
         .def("rename_file", rename_file0)
-#if !defined TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
         .def("set_name", set_name1)
         .def("rename_file", rename_file1)
 #endif
@@ -237,7 +239,7 @@ void bind_create_torrent()
 
     {
         scope s = class_<dummy14>("create_torrent_flags_t");
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
         s.attr("optimize") = create_torrent::optimize;
 #endif
         s.attr("optimize_alignment") = create_torrent::optimize_alignment;

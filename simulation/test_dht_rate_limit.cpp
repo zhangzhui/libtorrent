@@ -60,6 +60,8 @@ struct obs : dht::dht_observer
 	void set_external_address(lt::aux::listen_socket_handle const&, address const& /* addr */
 		, address const& /* source */) override
 	{}
+	int get_listen_port(lt::aux::transport, lt::aux::listen_socket_handle const& s) override
+	{ return s.get()->udp_external_port; }
 	void get_peers(sha1_hash const&) override {}
 	void outgoing_get_peers(sha1_hash const& /* target */
 		, sha1_hash const& /* sent_target */, udp::endpoint const& /* ep */) override {}
@@ -105,7 +107,8 @@ TORRENT_TEST(dht_rate_limit)
 	lt::udp_socket sock(dht_ios);
 	obs o;
 	auto ls = std::make_shared<lt::aux::listen_socket_t>();
-	ls->external_address.cast_vote(address_v4::from_string("40.30.20.10"), 1, lt::address());
+	ls->external_address.cast_vote(address_v4::from_string("40.30.20.10")
+		, lt::aux::session_interface::source_dht, lt::address());
 	ls->local_endpoint = tcp::endpoint(address_v4::from_string("40.30.20.10"), 8888);
 	error_code ec;
 	sock.bind(udp::endpoint(address_v4::from_string("40.30.20.10"), 8888), ec);
@@ -132,7 +135,7 @@ TORRENT_TEST(dht_rate_limit)
 		udp_socket::packet p;
 		error_code err;
 		int const num = int(sock.read(lt::span<udp_socket::packet>(&p, 1), err));
-		if (num) dht->incoming_packet(p.from, p.data);
+		if (num) dht->incoming_packet(ls, p.from, p.data);
 		if (stop || err) return;
 		sock.async_read(on_read);
 	};
@@ -144,7 +147,7 @@ TORRENT_TEST(dht_rate_limit)
 	udp::socket sender_sock(sender_ios);
 	sender_sock.open(udp::v4());
 	sender_sock.bind(udp::endpoint(address_v4(), 4444));
-	sender_sock.io_control(udp::socket::non_blocking_io(true));
+	sender_sock.non_blocking(true);
 	asio::high_resolution_timer timer(sender_ios);
 	std::function<void(error_code const&)> sender_tick = [&](error_code const&)
 	{
@@ -215,7 +218,7 @@ TORRENT_TEST(dht_rate_limit)
 	TEST_EQUAL(cnt[counters::dht_messages_in_dropped]
 		+ cnt[counters::dht_ping_in], num_packets);
 
-#endif // #if !defined TORRENT_DISABLE_EXTENSIONS && !defined TORRENT_DISABLE_DHT
+#endif // #if !defined TORRENT_DISABLE_DHT
 }
 
 // TODO: put test here to take advantage of existing code, refactor
@@ -233,7 +236,8 @@ TORRENT_TEST(dht_delete_socket)
 
 	obs o;
 	auto ls = std::make_shared<lt::aux::listen_socket_t>();
-	ls->external_address.cast_vote(address_v4::from_string("40.30.20.10"), 1, lt::address());
+	ls->external_address.cast_vote(address_v4::from_string("40.30.20.10")
+		, lt::aux::session_interface::source_dht, lt::address());
 	ls->local_endpoint = tcp::endpoint(address_v4::from_string("40.30.20.10"), 8888);
 	dht::dht_settings dhtsett;
 	counters cnt;

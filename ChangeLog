@@ -1,3 +1,14 @@
+	* when updating listen sockets, only post alerts for new ones
+	* deprecate anonymous_mode_alert
+	* deprecated force_proxy setting (when set, the proxy is always used)
+	* add support for Port Control Protocol (PCP)
+	* deliver notification of alerts being dropped via alerts_dropped_alert
+	* deprecated alert::progress_notification alert category, split into
+	  finer grained categories
+	* update plugin interface functions for improved type-safety
+	* implemented support magnet URI extension, select specific file indices
+	  for download, BEP53
+	* make tracker keys multi-homed. remove set_key() function on session.
 	* add flags()/set_flags()/unset_flags() to torrent_handle, deprecate individual functions
 	* added alert for block being sent to the send buffer
 	* drop support for windows compilers without std::wstring
@@ -77,8 +88,83 @@
 	* resume data no longer has timestamps of files
 	* require C++11 to build libtorrent
 
+	* add option to ignore min-interval from trackers on force-reannounce
+	* raise default setting for active_limit
+	* fall back to copy+remove if rename_file fails
+	* improve handling of filesystems not supporting fallocate()
+	* force-proxy no longer disables DHT
+	* improve connect-boost feature, to make new torrents quickly connect peers
+
+1.1.9 release
+
+	* save both file and piece priorities in resume file
+	* added missing stats_metric python binding
+	* uTP connections are no longer exempt from rate limits by default
+	* fix exporting files from partfile while seeding
+	* fix potential deadlock on Windows, caused by performing restricted
+	  tasks from within DllMain
+	* fix issue when subsequent file priority updates cause torrent to stop
+
+1.1.8 release
+
+	* coalesce reads and writes by default on windows
+	* fixed disk I/O performance of checking hashes and creating torrents
+	* fix race condition in part_file
+	* fix part_file open mode compatibility test
+	* fixed race condition in random number generator
+	* fix race condition in stat_cache (disk storage)
+	* improve error handling of failing to change file priority
+	  The API for custom storage implementations was altered
+	* set the hidden attribute when creating the part file
+	* fix tracker announces reporting more data downloaded than the size of the torrent
+	* fix recent regression with force_proxy setting
+
+1.1.7 release
+
+	* don't perform DNS lookups for the DHT bootstrap unless DHT is enabled
+	* fix issue where setting file/piece priority would stop checking
+	* expose post_dht_stats() to python binding
+	* fix backwards compatibility to downloads without partfiles
+	* improve part-file related error messages
+	* fix reporting &redundant= in tracker announces
+	* fix tie-break in duplicate peer connection disconnect logic
+	* fix issue with SSL tracker connections left in CLOSE_WAIT state
+	* defer truncating existing files until the first time we write to them
+	* fix issue when receiving a torrent with 0-sized padfiles as magnet link
+	* fix issue resuming 1.0.x downloads with a file priority 0
+	* fix torrent_status::next_announce
+	* fix pad-file scalability issue
+	* made coalesce_reads/coalesce_writes settings take effect on linux and windows
+	* use unique peer_ids per connection
+	* fix iOS build on recent SDK
+	* fix tracker connection bind issue for IPv6 trackers
+	* fix error handling of some merkle torrents
+	* fix error handling of unsupported hard-links
+
+1.1.6 release
+
+	* deprecate save_encryption_settings (they are part of the normal settings)
+	* add getters for peer_class_filter and peer_class_type_filter
+	* make torrent_handler::set_priority() to use peer_classes
+	* fix support for boost-1.66 (requires C++11)
+	* fix i2p support
+	* fix loading resume data when in seed mode
+	* fix part-file creation race condition
+	* fix issue with initializing settings on session construction
+	* fix issue with receiving interested before metadata
+	* fix IPv6 tracker announce issue
+	* restore path sanitization behavior of ":"
+	* fix listen socket issue when disabling "force_proxy" mode
+	* fix full allocation failure on APFS
+
 1.1.5 release
 
+	* fix infinite loop when parsing certain invalid magnet links
+	* fix parsing of torrents with certain invalid filenames
+	* fix leak of torrent_peer objecs (entries in peer_list)
+	* fix leak of peer_class objects (when setting per-torrent rate limits)
+	* expose peer_class API to python binding
+	* fix integer overflow in whole_pieces_threshold logic
 	* fix uTP path MTU discovery issue on windows (DF bit was not set correctly)
 	* fix python binding for torrent_handle, to be hashable
 	* fix IPv6 tracker support by performing the second announce in more cases
@@ -89,6 +175,8 @@
 	* don't attempt to create empty files on startup, if they already exist
 	* fix force-recheck issue (new files would not be picked up)
 	* fix inconsistency in file_priorities and override_resume_data behavior
+	* fix paused torrents not generating a state update when their ul/dl rate
+	  transitions to zero
 
 1.1.4 release
 

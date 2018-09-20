@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2015-2016, Arvid Norberg
+Copyright (c) 2015-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -31,12 +31,19 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "libtorrent/aux_/session_settings.hpp"
+#include "libtorrent/settings_pack.hpp"
 
 namespace libtorrent { namespace aux {
 
 	session_settings::session_settings()
 	{
 		initialize_default_settings(*this);
+	}
+
+	session_settings::session_settings(settings_pack const& p)
+	{
+		initialize_default_settings(*this);
+		apply_pack(&p, *this);
 	}
 } }
 

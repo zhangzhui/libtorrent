@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2015-2016, Arvid Norberg, Steven Siloti
+Copyright (c) 2015-2018, Arvid Norberg, Steven Siloti
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,6 +34,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_PEER_CONNECTION_HANDLE_HPP_INCLUDED
 
 #include "libtorrent/config.hpp"
+#include "libtorrent/fwd.hpp"
 #include "libtorrent/peer_id.hpp"
 #include "libtorrent/operations.hpp"
 #include "libtorrent/alert_types.hpp"
@@ -43,15 +44,11 @@ POSSIBILITY OF SUCH DAMAGE.
 namespace libtorrent {
 
 class bt_peer_connection;
-struct torrent_handle;
-struct peer_plugin;
-struct peer_info;
-struct crypto_plugin;
 
 struct TORRENT_EXPORT peer_connection_handle
 {
 	explicit peer_connection_handle(std::weak_ptr<peer_connection> impl)
-		: m_connection(impl)
+		: m_connection(std::move(impl))
 	{}
 
 	connection_type type() const;
@@ -82,7 +79,8 @@ struct TORRENT_EXPORT peer_connection_handle
 	tcp::endpoint const& remote() const;
 	tcp::endpoint local_endpoint() const;
 
-	void disconnect(error_code const& ec, operation_t op, int error = 0);
+	void disconnect(error_code const& ec, operation_t op
+		, disconnect_severity_t = peer_connection_interface::normal);
 	bool is_disconnecting() const;
 	bool is_connecting() const;
 	bool is_outgoing() const;
@@ -133,7 +131,7 @@ private:
 struct TORRENT_EXPORT bt_peer_connection_handle : peer_connection_handle
 {
 	explicit bt_peer_connection_handle(peer_connection_handle pc)
-		: peer_connection_handle(pc)
+		: peer_connection_handle(std::move(pc))
 	{}
 
 	bool packet_finished() const;

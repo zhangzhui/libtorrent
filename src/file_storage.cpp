@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -33,6 +33,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/file_storage.hpp"
 #include "libtorrent/string_util.hpp" // for allocate_string_copy
 #include "libtorrent/utf8.hpp"
+#include "libtorrent/index_range.hpp"
 #include "libtorrent/aux_/path.hpp"
 #include "libtorrent/aux_/numeric_cast.hpp"
 
@@ -59,7 +60,7 @@ namespace libtorrent {
 	constexpr file_flags_t file_storage::flag_executable;
 	constexpr file_flags_t file_storage::flag_symlink;
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	constexpr file_flags_t file_storage::pad_file;
 	constexpr file_flags_t file_storage::attribute_hidden;
 	constexpr file_flags_t file_storage::attribute_executable;
@@ -81,7 +82,6 @@ namespace libtorrent {
 	file_storage::file_storage(file_storage const&) = default;
 	file_storage& file_storage::operator=(file_storage const&) = default;
 	file_storage::file_storage(file_storage&&) noexcept = default;
-	file_storage& file_storage::operator=(file_storage&&) noexcept = default;
 
 	void file_storage::reserve(int num_files)
 	{
@@ -131,34 +131,37 @@ namespace {
 		// sorry about this messy string handling, but I did
 		// profile it, and it was expensive
 		char const* leaf = filename_cstr(path.c_str());
-		char const* branch_path = "";
-		int branch_len = 0;
+		string_view branch_path;
 		if (leaf > path.c_str())
 		{
 			// split the string into the leaf filename
 			// and the branch path
-			branch_path = path.c_str();
-			branch_len = int(leaf - path.c_str());
+			branch_path = path;
+			branch_path = branch_path.substr(0
+				, static_cast<std::size_t>(leaf - path.c_str()));
 
 			// trim trailing slashes
-			if (branch_len > 0 && branch_path[branch_len - 1] == TORRENT_SEPARATOR)
-				--branch_len;
+			while (!branch_path.empty() && branch_path.back() == TORRENT_SEPARATOR)
+			{
+				branch_path.remove_suffix(1);
+			}
 		}
-		if (branch_len <= 0)
+		if (branch_path.empty())
 		{
 			if (set_name) e.set_name(leaf);
 			e.path_index = -1;
 			return;
 		}
 
-		if (branch_len >= int(m_name.size())
-			&& std::memcmp(branch_path, m_name.c_str(), m_name.size()) == 0
+		if (branch_path.size() >= m_name.size()
+			&& branch_path.substr(0, m_name.size()) == m_name
 			&& branch_path[m_name.size()] == TORRENT_SEPARATOR)
 		{
-			int const offset = int(m_name.size())
-				+ (int(m_name.size()) == branch_len ? 0 : 1);
-			branch_path += offset;
-			branch_len -= offset;
+			branch_path.remove_prefix(m_name.size());
+			while (!branch_path.empty() && branch_path.front() == TORRENT_SEPARATOR)
+			{
+				branch_path.remove_prefix(1);
+			}
 			e.no_root_dir = false;
 		}
 		else
@@ -166,7 +169,7 @@ namespace {
 			e.no_root_dir = true;
 		}
 
-		e.path_index = get_or_add_path({branch_path, aux::numeric_cast<std::size_t>(branch_len)});
+		e.path_index = get_or_add_path(branch_path);
 		if (set_name) e.set_name(leaf);
 	}
 
@@ -190,7 +193,7 @@ namespace {
 		}
 	}
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	file_entry::file_entry(): offset(0), size(0)
 		, mtime(0), pad_file(false), hidden_attribute(false)
 		, executable_attribute(false)
@@ -198,7 +201,7 @@ namespace {
 	{}
 
 	file_entry::~file_entry() = default;
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
 
 	internal_file_entry::internal_file_entry()
 		: offset(0)
@@ -238,7 +241,7 @@ namespace {
 			name = fe.name;
 	}
 
-	internal_file_entry& internal_file_entry::operator=(internal_file_entry const& fe)
+	internal_file_entry& internal_file_entry::operator=(internal_file_entry const& fe) &
 	{
 		if (&fe == this) return *this;
 		offset = fe.offset;
@@ -271,7 +274,7 @@ namespace {
 		fe.name = nullptr;
 	}
 
-	internal_file_entry& internal_file_entry::operator=(internal_file_entry&& fe) noexcept
+	internal_file_entry& internal_file_entry::operator=(internal_file_entry&& fe) & noexcept
 	{
 		if (&fe == this) return *this;
 		offset = fe.offset;
@@ -344,7 +347,7 @@ namespace {
 		}
 	}
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 
 	void file_storage::add_file_borrow(char const* filename, int filename_len
 		, std::string const& path, std::int64_t file_size, file_flags_t file_flags
@@ -388,7 +391,7 @@ namespace {
 	{
 		rename_file_deprecated(index, new_filename);
 	}
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
 
 	void file_storage::rename_file(file_index_t const index
 		, std::string const& new_filename)
@@ -397,7 +400,7 @@ namespace {
 		update_path_index(m_files[index], new_filename);
 	}
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	file_storage::iterator file_storage::file_at_offset_deprecated(std::int64_t offset) const
 	{
 		// find the file iterator and file offset
@@ -480,7 +483,7 @@ namespace {
 			TORRENT_ASSERT(file_iter != m_files.end());
 			if (file_offset < std::int64_t(file_iter->size))
 			{
-				file_slice f;
+				file_slice f{};
 				f.file_index = file_index_t(int(file_iter - m_files.begin()));
 				f.offset = file_offset;
 				f.size = std::min(std::int64_t(file_iter->size) - file_offset, std::int64_t(size));
@@ -495,10 +498,17 @@ namespace {
 		return ret;
 	}
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	file_entry file_storage::at(int index) const
 	{
 		return at_deprecated(index);
+	}
+
+	internal_file_entry const& file_storage::internal_at(int const index) const
+	{
+		TORRENT_ASSERT(index >= 0);
+		TORRENT_ASSERT(index < int(m_files.size()));
+		return m_files[file_index_t(index)];
 	}
 
 	file_entry file_storage::at_deprecated(int index) const
@@ -519,18 +529,34 @@ namespace {
 		ret.filehash = hash(index);
 		return ret;
 	}
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
+
+	int file_storage::num_files() const noexcept
+	{ return int(m_files.size()); }
+
+	// returns the index of the one-past-end file in the file storage
+	file_index_t file_storage::end_file() const noexcept
+	{ return m_files.end_index(); }
+
+	file_index_t file_storage::last_file() const noexcept
+	{ return --m_files.end_index(); }
+
+	index_range<file_index_t> file_storage::file_range() const noexcept
+	{ return m_files.range(); }
+
+	index_range<piece_index_t> file_storage::piece_range() const noexcept
+	{ return {piece_index_t{0}, end_piece()}; }
 
 	peer_request file_storage::map_file(file_index_t const file_index
-		, std::int64_t const file_offset, int size) const
+		, std::int64_t const file_offset, int const size) const
 	{
 		TORRENT_ASSERT_PRECOND(file_index < end_file());
 		TORRENT_ASSERT(m_num_pieces >= 0);
 
-		peer_request ret;
+		peer_request ret{};
 		if (file_index >= end_file())
 		{
-			ret.piece = piece_index_t{m_num_pieces};
+			ret.piece = end_piece();
 			ret.start = 0;
 			ret.length = 0;
 			return ret;
@@ -540,7 +566,7 @@ namespace {
 
 		if (offset >= total_size())
 		{
-			ret.piece = piece_index_t{m_num_pieces};
+			ret.piece = end_piece();
 			ret.start = 0;
 			ret.length = 0;
 		}
@@ -568,6 +594,7 @@ namespace {
 		, std::int64_t const mtime, string_view symlink_path)
 	{
 		TORRENT_ASSERT_PRECOND(file_size >= 0);
+		TORRENT_ASSERT_PRECOND(!is_complete(filename));
 		if (!has_parent_path(path))
 		{
 			// you have already added at least one file with a
@@ -846,7 +873,7 @@ namespace {
 		return fe.path_index == -2;
 	}
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	sha1_hash file_storage::hash(internal_file_entry const& fe) const
 	{
 		int index = int(&fe - &m_files[0]);
@@ -903,7 +930,7 @@ namespace {
 
 	file_entry file_storage::at(file_storage::iterator i) const
 	{ return at_deprecated(int(i - m_files.begin())); }
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
 
 	void file_storage::reorder_file(int const index, int const dst)
 	{
@@ -924,6 +951,20 @@ namespace {
 			if (int(m_file_hashes.size()) < index) m_file_hashes.resize(index + 1, nullptr);
 			std::iter_swap(m_file_hashes.begin() + dst, m_file_hashes.begin() + index);
 		}
+	}
+
+	void file_storage::swap(file_storage& ti) noexcept
+	{
+		using std::swap;
+		swap(ti.m_files, m_files);
+		swap(ti.m_file_hashes, m_file_hashes);
+		swap(ti.m_symlinks, m_symlinks);
+		swap(ti.m_mtime, m_mtime);
+		swap(ti.m_paths, m_paths);
+		swap(ti.m_name, m_name);
+		swap(ti.m_total_size, m_total_size);
+		swap(ti.m_num_pieces, m_num_pieces);
+		swap(ti.m_piece_length, m_piece_length);
 	}
 
 	void file_storage::optimize(int const pad_file_limit, int alignment

@@ -21,7 +21,6 @@ nobase_include_HEADERS = \
   broadcast_socket.hpp         \
   bt_peer_connection.hpp       \
   buffer.hpp                   \
-  build_config.hpp             \
   chained_buffer.hpp           \
   choker.hpp                   \
   close_reason.hpp             \
@@ -45,7 +44,6 @@ nobase_include_HEADERS = \
   enum_net.hpp                 \
   error.hpp                    \
   error_code.hpp               \
-  export.hpp                   \
   extensions.hpp               \
   file.hpp                     \
   file_pool.hpp                \
@@ -65,7 +63,6 @@ nobase_include_HEADERS = \
   http_tracker_connection.hpp  \
   i2p_stream.hpp               \
   identify_client.hpp          \
-  instantiate_connection.hpp   \
   invariant_check.hpp          \
   io.hpp                       \
   io_service.hpp               \
@@ -80,6 +77,7 @@ nobase_include_HEADERS = \
   natpmp.hpp                   \
   netlink.hpp                  \
   operations.hpp               \
+  optional.hpp                 \
   packet_buffer.hpp            \
   packet_pool.hpp              \
   parse_url.hpp                \
@@ -96,6 +94,7 @@ nobase_include_HEADERS = \
   peer_id.hpp                  \
   peer_info.hpp                \
   peer_request.hpp             \
+  pex_flags.hpp                \
   piece_block.hpp              \
   piece_block_progress.hpp     \
   piece_picker.hpp             \
@@ -125,8 +124,6 @@ nobase_include_HEADERS = \
   sliding_average.hpp          \
   socket.hpp                   \
   socket_io.hpp                \
-  socket_type.hpp              \
-  socket_type_fwd.hpp          \
   socks5_stream.hpp            \
   ssl_stream.hpp               \
   stack_allocator.hpp          \
@@ -161,12 +158,15 @@ nobase_include_HEADERS = \
   web_peer_connection.hpp      \
   xml_parse.hpp                \
   span.hpp                     \
+  download_priority.hpp        \
+  index_range.hpp              \
   \
   aux_/allocating_handler.hpp       \
   aux_/aligned_storage.hpp          \
   aux_/aligned_union.hpp            \
   aux_/bind_to_device.hpp           \
   aux_/block_cache_reference.hpp    \
+  aux_/container_wrapper.hpp        \
   aux_/cpuid.hpp                    \
   aux_/disable_warnings_push.hpp    \
   aux_/disable_warnings_pop.hpp     \
@@ -175,6 +175,8 @@ nobase_include_HEADERS = \
   aux_/dev_random.hpp               \
   aux_/deque.hpp                    \
   aux_/escape_string.hpp            \
+  aux_/export.hpp                   \
+  aux_/generate_peer_id.hpp         \
   aux_/io.hpp                       \
   aux_/listen_socket_handle.hpp     \
   aux_/max_path.hpp                 \
@@ -184,15 +186,18 @@ nobase_include_HEADERS = \
   aux_/session_impl.hpp             \
   aux_/session_settings.hpp         \
   aux_/session_udp_sockets.hpp      \
+  aux_/set_socket_buffer.hpp        \
   aux_/proxy_settings.hpp           \
   aux_/session_interface.hpp        \
   aux_/suggest_piece.hpp            \
+  aux_/socket_type.hpp              \
   aux_/storage_piece_set.hpp        \
   aux_/string_ptr.hpp               \
   aux_/time.hpp                     \
   aux_/file_progress.hpp            \
   aux_/openssl.hpp                  \
   aux_/byteswap.hpp                 \
+  aux_/route.h                      \
   aux_/cppint_import_export.hpp     \
   aux_/ffs.hpp                      \
   aux_/portmap.hpp                  \
@@ -211,11 +216,16 @@ nobase_include_HEADERS = \
   aux_/array.hpp                    \
   aux_/ip_notifier.hpp              \
   aux_/noexcept_movable.hpp         \
+  aux_/torrent_impl.hpp             \
+  aux_/instantiate_connection.hpp   \
+  aux_/range.hpp                    \
   \
   extensions/smart_ban.hpp          \
   extensions/ut_metadata.hpp        \
   extensions/ut_pex.hpp             \
   \
+  kademlia/announce_flags.hpp       \
+  kademlia/dht_settings.hpp         \
   kademlia/dht_state.hpp            \
   kademlia/dht_storage.hpp          \
   kademlia/dht_tracker.hpp          \

@@ -127,7 +127,7 @@ observer_ptr get_item::new_observer(udp::endpoint const& ep
 #if TORRENT_USE_ASSERTS
 	if (o) o->m_in_constructor = false;
 #endif
-	return o;
+	return std::move(o);
 }
 
 bool get_item::invoke(observer_ptr o)
@@ -171,8 +171,8 @@ void get_item::done()
 
 void get_item_observer::reply(msg const& m)
 {
-	public_key pk;
-	signature sig;
+	public_key pk{};
+	signature sig{};
 	sequence_number seq{0};
 
 	bdecode_node const r = m.message.dict_find_dict("r");

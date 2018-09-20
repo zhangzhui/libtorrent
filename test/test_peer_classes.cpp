@@ -35,9 +35,12 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/peer_class_set.hpp"
 #include "libtorrent/peer_class_type_filter.hpp"
 #include "libtorrent/aux_/path.hpp"
+#include "libtorrent/ip_filter.hpp"
+#include "libtorrent/session.hpp"
 
 using namespace lt;
 
+namespace {
 std::string class_name(peer_class_t id, peer_class_pool const& p)
 {
 	peer_class const* c = p.at(id);
@@ -47,6 +50,7 @@ std::string class_name(peer_class_t id, peer_class_pool const& p)
 	c->get_info(&i);
 	return i.label;
 }
+} // anonymous namespace
 
 TORRENT_TEST(peer_class)
 {
@@ -80,34 +84,34 @@ TORRENT_TEST(peer_class)
 	pool.at(id2)->set_upload_limit(1000);
 	pool.at(id2)->set_download_limit(2000);
 
-	peer_class_info i;
-	pool.at(id2)->get_info(&i);
-	TEST_EQUAL(i.upload_limit, 1000);
-	TEST_EQUAL(i.download_limit, 2000);
+	peer_class_info cls;
+	pool.at(id2)->get_info(&cls);
+	TEST_EQUAL(cls.upload_limit, 1000);
+	TEST_EQUAL(cls.download_limit, 2000);
 
 	// test peer_class_type_filter
 	peer_class_type_filter filter;
 
 	for (int i = 0; i < 5; ++i)
 	{
-		TEST_CHECK(filter.apply((lt::peer_class_type_filter::socket_type_t)i
+		TEST_CHECK(filter.apply(static_cast<lt::peer_class_type_filter::socket_type_t>(i)
 			, 0xffffffff) == 0xffffffff);
 	}
 
-	filter.disallow((lt::peer_class_type_filter::socket_type_t)0, peer_class_t{0});
-	TEST_CHECK(filter.apply((lt::peer_class_type_filter::socket_type_t)0
+	filter.disallow(static_cast<lt::peer_class_type_filter::socket_type_t>(0), peer_class_t{0});
+	TEST_CHECK(filter.apply(static_cast<lt::peer_class_type_filter::socket_type_t>(0)
 		, 0xffffffff) == 0xfffffffe);
-	TEST_CHECK(filter.apply((lt::peer_class_type_filter::socket_type_t)1
+	TEST_CHECK(filter.apply(static_cast<lt::peer_class_type_filter::socket_type_t>(1)
 		, 0xffffffff) == 0xffffffff);
-	filter.allow((lt::peer_class_type_filter::socket_type_t)0, peer_class_t{0});
-	TEST_CHECK(filter.apply((lt::peer_class_type_filter::socket_type_t)0
+	filter.allow(static_cast<lt::peer_class_type_filter::socket_type_t>(0), peer_class_t{0});
+	TEST_CHECK(filter.apply(static_cast<lt::peer_class_type_filter::socket_type_t>(0)
 		, 0xffffffff) == 0xffffffff);
 
-	TEST_CHECK(filter.apply((lt::peer_class_type_filter::socket_type_t)0, 0) == 0);
-	filter.add((lt::peer_class_type_filter::socket_type_t)0, peer_class_t{0});
-	TEST_CHECK(filter.apply((lt::peer_class_type_filter::socket_type_t)0, 0) == 1);
-	filter.remove((lt::peer_class_type_filter::socket_type_t)0, peer_class_t{0});
-	TEST_CHECK(filter.apply((lt::peer_class_type_filter::socket_type_t)0, 0) == 0);
+	TEST_CHECK(filter.apply(static_cast<lt::peer_class_type_filter::socket_type_t>(0), 0) == 0);
+	filter.add(static_cast<lt::peer_class_type_filter::socket_type_t>(0), peer_class_t{0});
+	TEST_CHECK(filter.apply(static_cast<lt::peer_class_type_filter::socket_type_t>(0), 0) == 1);
+	filter.remove(static_cast<lt::peer_class_type_filter::socket_type_t>(0), peer_class_t{0});
+	TEST_CHECK(filter.apply(static_cast<lt::peer_class_type_filter::socket_type_t>(0), 0) == 0);
 
 	pool.decref(id2);
 	pool.decref(id1);
@@ -115,3 +119,32 @@ TORRENT_TEST(peer_class)
 	TEST_CHECK(pool.at(id1) == nullptr);
 }
 
+TORRENT_TEST(session_peer_class_filter)
+{
+	using namespace libtorrent;
+	session ses;
+	peer_class_t my_class = ses.create_peer_class("200.1.x.x IP range");
+
+	ip_filter f;
+	f.add_rule(address_v4::from_string("200.1.1.0")
+		, address_v4::from_string("200.1.255.255")
+		, 1 << static_cast<std::uint32_t>(my_class));
+	ses.set_peer_class_filter(f);
+
+	TEST_CHECK(std::get<0>(ses.get_peer_class_filter().export_filter())
+		== std::get<0>(f.export_filter()));
+}
+
+TORRENT_TEST(session_peer_class_type_filter)
+{
+	using namespace libtorrent;
+	session ses;
+	peer_class_t my_class = ses.create_peer_class("all utp sockets");
+
+	peer_class_type_filter f;
+	f.add(peer_class_type_filter::utp_socket, my_class);
+	f.disallow(peer_class_type_filter::utp_socket, session::global_peer_class_id);
+	ses.set_peer_class_type_filter(f);
+
+	TEST_CHECK(ses.get_peer_class_type_filter() == f);
+}

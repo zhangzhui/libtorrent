@@ -52,6 +52,8 @@ struct peer_connection;
 using namespace lt;
 using namespace std::placeholders;
 
+namespace {
+
 const float sample_time = 20.f; // seconds
 
 //#define VERBOSE_LOGGING
@@ -71,7 +73,6 @@ struct peer_connection: bandwidth_socket, std::enable_shared_from_this<peer_conn
 	{}
 
 	bool is_disconnecting() const override { return false; }
-	bool ignore_bandwidth_limits() { return m_ignore_limits; }
 	void assign_bandwidth(int channel, int amount) override;
 
 	void throttle(int limit) { m_bandwidth_channel.throttle(limit); }
@@ -89,7 +90,7 @@ struct peer_connection: bandwidth_socket, std::enable_shared_from_this<peer_conn
 	std::int64_t m_quota;
 };
 
-void peer_connection::assign_bandwidth(int channel, int amount)
+void peer_connection::assign_bandwidth(int /*channel*/, int amount)
 {
 	m_quota += amount;
 #ifdef VERBOSE_LOGGING
@@ -112,7 +113,7 @@ void peer_connection::start()
 }
 
 
-typedef std::vector<std::shared_ptr<peer_connection>> connections_t;
+using connections_t = std::vector<std::shared_ptr<peer_connection>>;
 
 void do_change_rate(bandwidth_channel& t1, bandwidth_channel& t2, int limit)
 {
@@ -166,9 +167,9 @@ void run_test(connections_t& v
 	}
 }
 
-bool close_to(float val, float comp, float err)
+bool close_to(float const val, float const comp, float const err)
 {
-	return fabs(val - comp) <= err;
+	return std::abs(val - comp) <= err;
 }
 
 void spawn_connections(connections_t& v, bandwidth_manager& bwm
@@ -195,7 +196,7 @@ void test_equal_connections(int num, int limit)
 	run_test(v, manager);
 
 	float sum = 0.f;
-	float err = (std::max)(limit / num * 0.3f, 1000.f);
+	float const err = std::max(limit / num * 0.3f, 1000.f);
 	for (connections_t::iterator i = v.begin()
 		, end(v.end()); i != end; ++i)
 	{
@@ -306,7 +307,7 @@ void test_torrents(int num, int limit1, int limit2, int global_limit)
 
 	if (global_limit > 0 && global_limit < limit1 + limit2)
 	{
-		limit1 = (std::min)(limit1, global_limit / 2);
+		limit1 = std::min(limit1, global_limit / 2);
 		limit2 = global_limit - limit1;
 	}
 	float sum = 0.f;
@@ -454,6 +455,8 @@ void test_no_starvation(int limit)
 		<< " target: " << (limit / 200 / num_peers) << std::endl;
 	TEST_CHECK(close_to(p->m_quota / sample_time, float(limit) / 200 / num_peers, 5));
 }
+
+} // anonymous namespace
 
 TORRENT_TEST(equal_connection)
 {

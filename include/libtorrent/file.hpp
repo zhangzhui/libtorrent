@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -128,8 +128,7 @@ namespace libtorrent {
 	using file_handle = std::shared_ptr<file>;
 
 	// hidden
-	struct open_mode_tag;
-	using open_mode_t = flags::bitfield_flag<std::uint32_t, open_mode_tag>;
+	using open_mode_t = flags::bitfield_flag<std::uint32_t, struct open_mode_tag>;
 
 	// the open mode for files. Used for the file constructor or
 	// file::open().
@@ -211,9 +210,6 @@ namespace libtorrent {
 		handle_type m_file_handle;
 
 		open_mode_t m_open_mode{};
-#if defined TORRENT_WINDOWS
-		static bool has_manage_volume_privs;
-#endif
 	};
 }
 

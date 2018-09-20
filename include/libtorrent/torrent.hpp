@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -41,6 +41,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <limits> // for numeric_limits
 #include <memory> // for unique_ptr
 
+#include "libtorrent/fwd.hpp"
+#include "libtorrent/optional.hpp"
 #include "libtorrent/torrent_handle.hpp"
 #include "libtorrent/entry.hpp"
 #include "libtorrent/torrent_info.hpp"
@@ -72,6 +74,20 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/units.hpp"
 #include "libtorrent/aux_/vector.hpp"
 #include "libtorrent/aux_/deferred_handler.hpp"
+#include "libtorrent/aux_/allocating_handler.hpp"
+#include "libtorrent/extensions.hpp" // for add_peer_flags_t
+
+#ifdef TORRENT_USE_OPENSSL
+// there is no forward declaration header for asio
+namespace boost {
+namespace asio {
+namespace ssl {
+	class context;
+	class verify_context;
+}
+}
+}
+#endif
 
 #if TORRENT_COMPLETE_TYPES_REQUIRED
 #include "libtorrent/peer_connection.hpp"
@@ -85,18 +101,10 @@ POSSIBILITY OF SUCH DAMAGE.
 namespace libtorrent {
 
 	class http_parser;
-
-	struct storage_interface;
-	struct torrent_plugin;
-	template <typename Index> struct typed_bitfield;
-	struct announce_entry;
 	struct tracker_request;
-	struct add_torrent_params;
-	struct storage_interface;
 	class bt_peer_connection;
-	struct listen_socket_t;
 
-	constexpr int default_piece_priority = 4;
+	using web_seed_flag_t = flags::bitfield_flag<std::uint8_t, struct web_seed_flag_tag>;
 
 	enum class waste_reason
 	{
@@ -104,6 +112,8 @@ namespace libtorrent {
 		, piece_end_game, piece_closing
 		, max
 	};
+
+	TORRENT_EXTRA_EXPORT std::int64_t calc_bytes(file_storage const& fs, piece_count const& pc);
 
 	struct time_critical_piece
 	{
@@ -213,7 +223,7 @@ namespace libtorrent {
 	struct TORRENT_EXTRA_EXPORT torrent_hot_members
 	{
 		torrent_hot_members(aux::session_interface& ses
-			, add_torrent_params const& p, int block_size, bool session_paused);
+			, add_torrent_params const& p, bool session_paused);
 
 	protected:
 		// the piece picker. This is allocated lazily. When we don't
@@ -284,19 +294,13 @@ namespace libtorrent {
 		// m_paused is also true.
 		bool m_graceful_pause_mode:1;
 
-		// state subscription. If set, a pointer to this torrent
-		// will be added to the m_state_updates set in session_impl
+		// state subscription. If set, a pointer to this torrent will be added
+		// to the session_impl::m_torrent_lists[torrent_state_updates]
 		// whenever this torrent's state changes (any state).
 		bool m_state_subscription:1;
 
 		// the maximum number of connections for this torrent
 		std::uint32_t m_max_connections:24;
-
-		// the size of a request block
-		// each piece is divided into these
-		// blocks when requested. The block size is
-		// 1 << m_block_size_shift
-		std::uint32_t m_block_size_shift:5;
 
 		// the state of this torrent (queued, checking, downloading, etc.)
 		std::uint32_t m_state:3;
@@ -312,13 +316,13 @@ namespace libtorrent {
 		, private torrent_hot_members
 		, public request_callback
 		, public peer_class_set
+		, public aux::error_handler_interface
 		, public std::enable_shared_from_this<torrent>
 	{
 	public:
 
-		torrent(aux::session_interface& ses, int block_size
-			, bool session_paused, add_torrent_params const& p
-			, sha1_hash const& info_hash);
+		torrent(aux::session_interface& ses
+			, bool session_paused, add_torrent_params const& p);
 		~torrent() override;
 
 		// This may be called from multiple threads
@@ -340,12 +344,15 @@ namespace libtorrent {
 		{
 			TORRENT_ASSERT(m_added == true);
 			m_added = false;
-			set_queue_position(-1);
+			set_queue_position(no_pos);
 			// make sure we decrement the gauge counter for this torrent
 			update_gauge();
 		}
 
+#if TORRENT_ABI_VERSION == 1
+		// deprecated in 1.2
 		void start_download_url();
+#endif
 
 		// returns which stats gauge this torrent currently
 		// has incremented.
@@ -357,7 +364,7 @@ namespace libtorrent {
 		void add_extension_fun(std::function<std::shared_ptr<torrent_plugin>(torrent_handle const&, void*)> const& ext
 			, void* userdata);
 		void notify_extension_add_peer(tcp::endpoint const& ip
-			, peer_source_flags_t src, int flags);
+			, peer_source_flags_t src, add_peer_flags_t flags);
 #endif
 
 		peer_connection* find_lowest_ranking_peer() const;
@@ -380,7 +387,11 @@ namespace libtorrent {
 		// if we're connected to a peer at ep, return its peer connection
 		// only count BitTorrent peers
 		bt_peer_connection* find_peer(tcp::endpoint const& ep) const;
-		peer_connection* find_peer(sha1_hash const& pid);
+		peer_connection* find_peer(peer_id const& pid);
+
+		// checks to see if this peer id is used in one of our own outgoing
+		// connections.
+		bool is_self_connection(peer_id const& pid) const;
 
 		void on_resume_data_checked(status_t status, storage_error const& error);
 		void on_force_recheck(status_t status, storage_error const& error);
@@ -435,6 +446,7 @@ namespace libtorrent {
 		// the necessary actions then.
 		void abort();
 		bool is_aborted() const { return m_abort; }
+		void panic();
 
 		void new_external_ip();
 
@@ -451,10 +463,10 @@ namespace libtorrent {
 
 		void queue_up();
 		void queue_down();
-		void set_queue_position(int p);
-		int queue_position() const { return m_sequence_number; }
+		void set_queue_position(queue_position_t p);
+		queue_position_t queue_position() const { return m_sequence_number; }
 		// used internally
-		void set_queue_position_impl(int const p)
+		void set_queue_position_impl(queue_position_t const p)
 		{
 			if (m_sequence_number == p) return;
 			m_sequence_number = p;
@@ -470,10 +482,9 @@ namespace libtorrent {
 		std::string name() const;
 
 		stat statistics() const { return m_stat; }
-		std::int64_t bytes_left() const;
-		int block_bytes_wanted(piece_block const& p) const;
-		void bytes_done(torrent_status& st, bool accurate) const;
-		std::int64_t quantized_bytes_done() const;
+		boost::optional<std::int64_t> bytes_left() const;
+
+		void bytes_done(torrent_status& st, status_flags_t) const;
 
 		void sent_bytes(int bytes_payload, int bytes_protocol);
 		void received_bytes(int bytes_payload, int bytes_protocol);
@@ -499,16 +510,11 @@ namespace libtorrent {
 		error_code error() const { return m_error; }
 
 		void flush_cache();
-		void pause(bool graceful = false);
+		void pause(pause_flags_t flags = {});
 		void resume();
 
-		enum pause_flags_t
-		{
-			flag_graceful_pause = 1,
-			flag_clear_disk_cache = 2
-		};
 		void set_session_paused(bool b);
-		void set_paused(bool b, int flags = flag_clear_disk_cache);
+		void set_paused(bool b, pause_flags_t flags = torrent_handle::clear_disk_cache);
 		void set_announce_to_dht(bool b) { m_announce_to_dht = b; }
 		void set_announce_to_trackers(bool b) { m_announce_to_trackers = b; }
 		void set_announce_to_lsd(bool b) { m_announce_to_lsd = b; }
@@ -517,7 +523,7 @@ namespace libtorrent {
 
 		time_point32 started() const { return m_started; }
 		void step_session_time(int seconds);
-		void do_pause(bool clear_disk_cache = true);
+		void do_pause(pause_flags_t flags = torrent_handle::clear_disk_cache);
 		void do_resume();
 
 		seconds32 finished_time() const;
@@ -545,33 +551,34 @@ namespace libtorrent {
 		bool delete_files(remove_flags_t options);
 		void peers_erased(std::vector<torrent_peer*> const& peers);
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 #if !TORRENT_NO_FPU
 		void file_progress_float(aux::vector<float, file_index_t>& fp);
 #endif
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
 
 		void piece_availability(aux::vector<int, piece_index_t>& avail) const;
 
-		void set_piece_priority(piece_index_t index, int priority);
-		int piece_priority(piece_index_t index) const;
+		void set_piece_priority(piece_index_t index, download_priority_t priority);
+		download_priority_t piece_priority(piece_index_t index) const;
 
-		void prioritize_pieces(aux::vector<int, piece_index_t> const& pieces);
-		void prioritize_piece_list(std::vector<std::pair<piece_index_t, int>> const& pieces);
-		void piece_priorities(aux::vector<int, piece_index_t>*) const;
+		void prioritize_pieces(aux::vector<download_priority_t, piece_index_t> const& pieces);
+		void prioritize_piece_list(std::vector<std::pair<piece_index_t, download_priority_t>> const& pieces);
+		void piece_priorities(aux::vector<download_priority_t, piece_index_t>*) const;
 
-		void set_file_priority(file_index_t index, int priority);
-		int file_priority(file_index_t index) const;
+		void set_file_priority(file_index_t index, download_priority_t priority);
+		download_priority_t file_priority(file_index_t index) const;
 
-		void on_file_priority(storage_error const&);
-		void prioritize_files(aux::vector<int, file_index_t> const& files);
-		void file_priorities(aux::vector<int, file_index_t>*) const;
+		void on_file_priority(storage_error const& err, aux::vector<download_priority_t, file_index_t> prios);
+		void prioritize_files(aux::vector<download_priority_t, file_index_t> const& files);
+		void file_priorities(aux::vector<download_priority_t, file_index_t>*) const;
 
 		void cancel_non_critical();
 		void set_piece_deadline(piece_index_t piece, int t, deadline_flags_t flags);
 		void reset_piece_deadline(piece_index_t piece);
 		void clear_time_critical();
-		void update_piece_priorities();
+		void update_piece_priorities(
+			aux::vector<download_priority_t, file_index_t> const& file_prios);
 
 		void status(torrent_status* st, status_flags_t flags);
 
@@ -581,12 +588,17 @@ namespace libtorrent {
 
 		void file_progress(aux::vector<std::int64_t, file_index_t>& fp, int flags = 0);
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		void use_interface(std::string net_interface);
 #endif
 
 		void connect_to_url_seed(std::list<web_seed_t>::iterator url);
 		bool connect_to_peer(torrent_peer* peerinfo, bool ignore_limit = false);
+
+		int priority() const;
+#if TORRENT_ABI_VERSION == 1
+		void set_priority(int prio);
+#endif // TORRENT_ABI_VERSION
 
 // --------------------------------------------
 		// BANDWIDTH MANAGEMENT
@@ -606,21 +618,23 @@ namespace libtorrent {
 // --------------------------------------------
 		// PEER MANAGEMENT
 
+		constexpr static web_seed_flag_t ephemeral = 0_bit;
+
 		// add_web_seed won't add duplicates. If we have already added an entry
 		// with this URL, we'll get back the existing entry
 		web_seed_t* add_web_seed(std::string const& url
 			, web_seed_t::type_t type
 			, std::string const& auth = std::string()
 			, web_seed_t::headers_t const& extra_headers = web_seed_entry::headers_t()
-			, bool ephemeral = false);
+			, web_seed_flag_t flags = {});
 
 		void remove_web_seed(std::string const& url, web_seed_t::type_t type);
 		void disconnect_web_seed(peer_connection* p);
 
-		void retry_web_seed(peer_connection* p, int retry = 0);
+		void retry_web_seed(peer_connection* p, boost::optional<seconds32> retry = boost::none);
 
 		void remove_web_seed_conn(peer_connection* p, error_code const& ec
-			, operation_t op, int error = 0);
+			, operation_t op, disconnect_severity_t error = peer_connection_interface::normal);
 
 		std::set<std::string> web_seeds(web_seed_entry::type_t type) const;
 
@@ -630,8 +644,8 @@ namespace libtorrent {
 		bool choke_peer(peer_connection& c);
 		bool unchoke_peer(peer_connection& c, bool optimistic = false);
 
-		void trigger_unchoke();
-		void trigger_optimistic_unchoke();
+		void trigger_unchoke() noexcept;
+		void trigger_optimistic_unchoke() noexcept;
 
 		// used by peer_connection to attach itself to a torrent
 		// since incoming connections don't know what torrent
@@ -642,7 +656,7 @@ namespace libtorrent {
 		// this will remove the peer and make sure all
 		// the pieces it had have their reference counter
 		// decreased in the piece_picker
-		void remove_peer(peer_connection* p);
+		void remove_peer(std::shared_ptr<peer_connection> p) noexcept;
 
 		// cancel requests to this block from any peer we're
 		// connected to on this torrent
@@ -662,7 +676,7 @@ namespace libtorrent {
 
 		bool try_connect_peer();
 		torrent_peer* add_peer(tcp::endpoint const& adr
-			, peer_source_flags_t source, int flags = 0);
+			, peer_source_flags_t source, pex_flags_t flags = {});
 		bool ban_peer(torrent_peer* tp);
 		void update_peer_port(int port, torrent_peer* p, peer_source_flags_t src);
 		void set_seed(torrent_peer* p, bool s);
@@ -683,7 +697,7 @@ namespace libtorrent {
 		peer_iterator begin() { return m_connections.begin(); }
 		peer_iterator end() { return m_connections.end(); }
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		void get_full_peer_list(std::vector<peer_list_entry>* v) const;
 #endif
 		void get_peer_info(std::vector<peer_info>* v);
@@ -706,7 +720,7 @@ namespace libtorrent {
 			, std::list<address> const& ip_list
 			, struct tracker_response const& resp) override;
 		void tracker_request_error(tracker_request const& r
-			, int response_code, error_code const& ec, const std::string& msg
+			, error_code const& ec, const std::string& msg
 			, seconds32 retry_interval) override;
 		void tracker_warning(tracker_request const& req
 			, std::string const& msg) override;
@@ -715,7 +729,7 @@ namespace libtorrent {
 
 		void update_scrape_state();
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		// if no password and username is set
 		// this will return an empty string, otherwise
 		// it will concatenate the login and password
@@ -732,12 +746,8 @@ namespace libtorrent {
 		// immediately
 		void do_connect_boost();
 
-		// returns the absolute time when the next tracker
-		// announce will take place.
-		time_point next_announce() const;
-
 		// forcefully sets next_announce to the current time
-		void force_tracker_request(time_point, int tracker_idx);
+		void force_tracker_request(time_point, int tracker_idx, reannounce_flags_t flags);
 		void scrape_tracker(int idx, bool user_triggered);
 		void announce_with_tracker(std::uint8_t e
 			= tracker_request::none);
@@ -746,7 +756,7 @@ namespace libtorrent {
 		void dht_announce();
 #endif
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		// sets the username and password that will be sent to
 		// the tracker
 		void set_tracker_login(std::string const& name, std::string const& pw);
@@ -771,6 +781,15 @@ namespace libtorrent {
 		bool have_piece(piece_index_t index) const
 		{
 			if (!valid_metadata()) return false;
+			if (!has_picker()) return m_have_all;
+			return m_picker->have_piece(index);
+		}
+
+		// returns true if we have downloaded the given piece
+		bool user_have_piece(piece_index_t index) const
+		{
+			if (!valid_metadata()) return false;
+			if (index < piece_index_t{0} || index >= m_torrent_file->end_piece()) return false;
 			if (!has_picker()) return m_have_all;
 			return m_picker->have_piece(index);
 		}
@@ -803,13 +822,10 @@ namespace libtorrent {
 		int num_have() const
 		{
 			// pretend we have every piece when in seed mode
-			if (m_seed_mode) {
-				return m_torrent_file->num_pieces();
-			}
-
-			return has_picker()
-				? m_picker->num_have()
-				: m_have_all ? m_torrent_file->num_pieces() : 0;
+			if (m_seed_mode) return m_torrent_file->num_pieces();
+			if (has_picker()) return m_picker->have().num_pieces;
+			if (m_have_all) return m_torrent_file->num_pieces();
+			return 0;
 		}
 
 		// the number of pieces that have passed
@@ -817,9 +833,9 @@ namespace libtorrent {
 		// flushed to disk yet
 		int num_passed() const
 		{
-			return has_picker()
-				? m_picker->num_passed()
-				: m_have_all ? m_torrent_file->num_pieces() : 0;
+			if (has_picker()) return m_picker->num_passed();
+			if (m_have_all) return m_torrent_file->num_pieces();
+			return 0;
 		}
 
 		// when we get a have message, this is called for that piece
@@ -834,7 +850,12 @@ namespace libtorrent {
 		void peer_lost(typed_bitfield<piece_index_t> const& bits
 			, peer_connection const* peer);
 
-		int block_size() const { TORRENT_ASSERT(m_block_size_shift > 0); return 1 << m_block_size_shift; }
+		int block_size() const
+		{
+			return valid_metadata()
+				? (std::min)(m_torrent_file->piece_length(), default_block_size)
+				: default_block_size;
+		}
 		peer_request to_req(piece_block const& p) const;
 
 		void disconnect_all(error_code const& ec, operation_t op);
@@ -845,7 +866,7 @@ namespace libtorrent {
 		// we can delete the piece picker
 		void maybe_done_flushing();
 
-		// this is called wheh the torrent has completed
+		// this is called when the torrent has completed
 		// the download. It will post an event, disconnect
 		// all seeds and let the tracker know we're finished.
 		void completed();
@@ -950,7 +971,7 @@ namespace libtorrent {
 		void need_picker();
 		bool has_picker() const
 		{
-			return m_picker.get() != 0;
+			return m_picker.get() != nullptr;
 		}
 
 		void update_max_failcount()
@@ -971,7 +992,7 @@ namespace libtorrent {
 
 		std::shared_ptr<const torrent_info> get_torrent_copy();
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		// deprecated in 1.2
 		std::string const& uuid() const { return m_uuid; }
 		void set_uuid(std::string const& s) { m_uuid = s; }
@@ -995,8 +1016,8 @@ namespace libtorrent {
 
 		void write_resume_data(add_torrent_params& atp) const;
 
-		void seen_complete() { m_last_seen_complete = ::time(0); }
-		int time_since_complete() const { return int(::time(0) - m_last_seen_complete); }
+		void seen_complete() { m_last_seen_complete = ::time(nullptr); }
+		int time_since_complete() const { return int(::time(nullptr) - m_last_seen_complete); }
 		time_t last_seen_complete() const { return m_last_seen_complete; }
 
 		template <typename Fun, typename... Args>
@@ -1005,7 +1026,7 @@ namespace libtorrent {
 		// LOGGING
 #ifndef TORRENT_DISABLE_LOGGING
 		bool should_log() const override;
-		void debug_log(const char* fmt, ...) const override TORRENT_FORMAT(2,3);
+		void debug_log(const char* fmt, ...) const noexcept override TORRENT_FORMAT(2,3);
 
 		void log_to_all_peers(char const* message);
 		time_point m_dht_start_time;
@@ -1043,15 +1064,18 @@ namespace libtorrent {
 		// a return value of false indicates an error
 		bool set_metadata(span<char const> metadata);
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		void on_torrent_download(error_code const& ec, http_parser const& parser
 			, span<char const> data);
 #endif
 
-		int sequence_number() const { return m_sequence_number; }
+		queue_position_t sequence_number() const { return m_sequence_number; }
 
 		bool seed_mode() const { return m_seed_mode; }
-		void leave_seed_mode(bool skip_checking);
+
+		enum class seed_mode_t { check_files, skip_checking };
+
+		void leave_seed_mode(seed_mode_t checking);
 
 		bool all_verified() const
 		{ return int(m_num_verified) == m_torrent_file->num_pieces(); }
@@ -1093,12 +1117,7 @@ namespace libtorrent {
 		void inc_num_connecting(torrent_peer* pp)
 		{
 			++m_num_connecting;
-			TORRENT_ASSERT(m_num_connecting <= int(m_connections.size()));
-			if (pp->seed)
-			{
-				++m_num_connecting_seeds;
-				TORRENT_ASSERT(m_num_connecting_seeds <= int(m_connections.size()));
-			}
+			if (pp->seed) ++m_num_connecting_seeds;
 		}
 		void dec_num_connecting(torrent_peer* pp)
 		{
@@ -1139,8 +1158,11 @@ namespace libtorrent {
 
 	private:
 
+		void on_exception(std::exception const& e) override;
+		void on_error(error_code const& ec) override;
+
 		// trigger deferred disconnection of peers
-		void on_remove_peers();
+		void on_remove_peers() noexcept;
 
 		void ip_filter_updated();
 
@@ -1152,16 +1174,16 @@ namespace libtorrent {
 		torrent_state get_peer_list_state();
 
 		void construct_storage();
-		void update_list(int list, bool in);
+		void update_list(torrent_list_index_t list, bool in);
 
 		void on_files_deleted(storage_error const& error);
 		void on_torrent_paused();
 		void on_storage_moved(status_t status, std::string const& path
 			, storage_error const& error);
 		void on_file_renamed(std::string const& filename
-			, file_index_t const file_idx
+			, file_index_t file_idx
 			, storage_error const& error);
-		void on_cache_flushed();
+		void on_cache_flushed(bool manually_triggered);
 
 		// this is used when a torrent is being removed.It synchronizes with the
 		// disk thread
@@ -1173,8 +1195,6 @@ namespace libtorrent {
 
 		int prioritize_tracker(int tracker_index);
 		int deprioritize_tracker(int tracker_index);
-
-		bool request_bandwidth_from_session(int channel) const;
 
 		void update_peer_interest(bool was_finished);
 		void prioritize_udp_trackers();
@@ -1191,7 +1211,7 @@ namespace libtorrent {
 #endif
 
 		void remove_time_critical_piece(piece_index_t piece, bool finished = false);
-		void remove_time_critical_pieces(aux::vector<int, piece_index_t> const& priority);
+		void remove_time_critical_pieces(aux::vector<download_priority_t, piece_index_t> const& priority);
 		void request_time_critical_pieces();
 
 		void need_peer_list();
@@ -1246,7 +1266,7 @@ namespace libtorrent {
 		// ever changed, this remains empty. Any unallocated slot
 		// implicitly means the file has priority 4.
 		// TODO: this wastes 5 bits per file
-		aux::vector<std::uint8_t, file_index_t> m_file_priority;
+		aux::vector<download_priority_t, file_index_t> m_file_priority;
 
 		// this object is used to track download progress of individual files
 		aux::file_progress m_file_progress;
@@ -1262,7 +1282,7 @@ namespace libtorrent {
 		std::vector<time_critical_piece> m_time_critical_pieces;
 
 		std::string m_trackerid;
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		// deprecated in 1.1
 		std::string m_username;
 		std::string m_password;
@@ -1270,7 +1290,7 @@ namespace libtorrent {
 
 		std::string m_save_path;
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		// deprecated in 1.2
 
 		// if we don't have the metadata, this is a url to
@@ -1354,7 +1374,8 @@ namespace libtorrent {
 
 		// TODO: 3 factor out the links (as well as update_list() to a separate
 		// class that torrent can inherit)
-		link m_links[aux::session_interface::num_torrent_lists];
+		aux::array<link, aux::session_interface::num_torrent_lists, torrent_list_index_t>
+			m_links;
 
 	private:
 
@@ -1404,11 +1425,21 @@ namespace libtorrent {
 
 		// the sequence number for this torrent, this is a
 		// monotonically increasing number for each added torrent
-		int m_sequence_number;
+		queue_position_t m_sequence_number;
 
 		// used to post a message to defer disconnecting peers
-		std::vector<peer_connection*> m_peers_to_disconnect;
+		std::vector<std::shared_ptr<peer_connection>> m_peers_to_disconnect;
 		aux::deferred_handler m_deferred_disconnect;
+#ifdef _M_AMD64
+		aux::handler_storage<96> m_deferred_handler_storage;
+#else
+		aux::handler_storage<64> m_deferred_handler_storage;
+#endif
+
+		// these are the peer IDs we've used for our outgoing peer connections for
+		// this torrent. If we get an incoming peer claiming to have one of these,
+		// it's a connection to ourself, and we should reject it.
+		std::set<peer_id> m_outgoing_pids;
 
 		// for torrents who have a bandwidth limit, this is != 0
 		// and refers to a peer_class in the session.
@@ -1420,6 +1451,12 @@ namespace libtorrent {
 		// kick out these connections when we get incoming
 		// connections (if we've reached the connection limit)
 		std::uint16_t m_num_connecting = 0;
+
+		// this is the peer id we generate when we add the torrent. Peers won't
+		// use this (they generate their own peer ids) but this is used in case
+		// the tracker returns peer IDs, to identify ourself in the peer list to
+		// avoid connecting back to it.
+		peer_id m_peer_id;
 
 		// ==============================
 		// The following members are specifically
@@ -1539,13 +1576,6 @@ namespace libtorrent {
 
 		// 1 bit here
 
-		// this is set to true when the torrent starts up
-		// The first tracker response, when this is true,
-		// will attempt to connect to a bunch of peers immediately
-		// and set this to false. We only do this once to get
-		// the torrent kick-started
-		bool m_need_connect_boost:1;
-
 		// rotating sequence number for LSD announces sent out.
 		// used to only use IP broadcast for every 8th lsd announce
 		std::uint8_t m_lsd_seq:3;
@@ -1569,8 +1599,18 @@ namespace libtorrent {
 
 // ----
 
-		// the number of bytes of padding files
-		std::uint32_t m_padding:24;
+		// the number of (16kiB) blocks that fall entirely in pad files
+		// i.e. blocks that we consider we have on start-up
+		std::uint16_t m_padding_blocks = 0;
+
+		// this is set to the connect boost quota for this torrent.
+		// After having received this many priority peer connection attempts, it
+		// falls back onto the steady state peer connection logic, driven by the
+		// session tick. Each tracker response, as long as this is non-zero, will
+		// attempt to connect to peers immediately and decrement the counter.
+		// We give torrents a connect boost when they are first added and then
+		// every time they resume from being paused.
+		std::uint8_t m_connect_boost_counter;
 
 // ----
 
@@ -1578,21 +1618,9 @@ namespace libtorrent {
 		// is optional and may be 0xffffff
 		std::uint32_t m_incomplete:24;
 
-
 		// true when the torrent should announce to
 		// the DHT
 		bool m_announce_to_dht:1;
-
-		// in state_updates list. When adding a torrent to the
-		// session_impl's m_state_update list, this bit is set
-		// to never add the same torrent twice
-		bool m_in_state_updates:1;
-
-		// these represent whether or not this torrent is counted
-		// in the total counters of active seeds and downloads
-		// in the session.
-		bool m_is_active_download:1;
-		bool m_is_active_finished:1;
 
 		// even if we're not built to support SSL torrents,
 		// remember that this is an SSL torrent, so that we don't
@@ -1607,9 +1635,8 @@ namespace libtorrent {
 // ----
 
 		// the timestamp of the last piece passed for this torrent specified in
-		// session_time. This is signed because it must be able to represent time
-		// before the session started
-		time_point32 m_last_download = aux::time_now32();
+		// seconds since epoch.
+		time_point32 m_last_download{seconds32(0)};
 
 		// the number of peer connections to seeds. This should be the same as
 		// counting the peer connections that say true for is_seed()
@@ -1620,9 +1647,8 @@ namespace libtorrent {
 		std::uint16_t m_num_connecting_seeds = 0;
 
 		// the timestamp of the last byte uploaded from this torrent specified in
-		// session_time. This is signed because it must be able to represent time
-		// before the session started.
-		time_point32 m_last_upload = aux::time_now32();
+		// seconds since epoch.
+		time_point32 m_last_upload{seconds32(0)};
 
 // ----
 
@@ -1650,11 +1676,11 @@ namespace libtorrent {
 		// is optional and may be 0xffffff
 		std::uint32_t m_downloaded:24;
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		// the timestamp of the last scrape request to one of the trackers in
 		// this torrent specified in session_time. This is signed because it must
 		// be able to represent time before the session started
-		std::int16_t m_last_scrape = (std::numeric_limits<std::int16_t>::min)();
+		time_point32 m_last_scrape{seconds32(0)};
 #endif
 
 // ----

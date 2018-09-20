@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2009-2016, Arvid Norberg
+Copyright (c) 2009-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,6 +34,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_IO_SERVICE_FWD_HPP_INCLUDED
 
 #include "libtorrent/config.hpp"
+#include <boost/version.hpp>
 
 #if defined TORRENT_BUILD_SIMULATOR
 namespace sim { namespace asio {
@@ -42,8 +43,12 @@ namespace sim { namespace asio {
 }}
 #else
 namespace boost { namespace asio {
-
+#if BOOST_VERSION < 106600
 	class io_service;
+#else
+	class io_context;
+	typedef io_context io_service;
+#endif
 }}
 #endif
 

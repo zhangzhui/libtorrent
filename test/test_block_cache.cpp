@@ -45,34 +45,36 @@ POSSIBILITY OF SUCH DAMAGE.
 
 using namespace lt;
 
+namespace {
+
 struct test_storage_impl : storage_interface
 {
 	explicit test_storage_impl(file_storage const& fs) : storage_interface(fs) {}
-	void initialize(storage_error& ec) override {}
+	void initialize(storage_error&) override {}
 
 	int readv(span<iovec_t const> bufs
-		, piece_index_t piece, int offset, open_mode_t flags, storage_error& ec) override
+		, piece_index_t, int /*offset*/, open_mode_t, storage_error&) override
 	{
 		return bufs_size(bufs);
 	}
 	int writev(span<iovec_t const> bufs
-		, piece_index_t piece, int offset, open_mode_t flags, storage_error& ec) override
+		, piece_index_t, int /*offset*/, open_mode_t, storage_error&) override
 	{
 		return bufs_size(bufs);
 	}
 
-	bool has_any_file(storage_error& ec) override { return false; }
-	void set_file_priority(aux::vector<std::uint8_t, file_index_t> const& prio
-		, storage_error& ec) override {}
-	status_t move_storage(std::string const& save_path, move_flags_t flags
-		, storage_error& ec) override { return status_t::no_error; }
-	bool verify_resume_data(add_torrent_params const& rd
-		, aux::vector<std::string, file_index_t> const& links
-		, storage_error& ec) override { return true; }
-	void release_files(storage_error& ec) override {}
-	void rename_file(file_index_t index, std::string const& new_filename
-		, storage_error& ec) override {}
-	void delete_files(remove_flags_t, storage_error& ec) override {}
+	bool has_any_file(storage_error&) override { return false; }
+	void set_file_priority(aux::vector<download_priority_t, file_index_t>&
+		, storage_error&) override {}
+	status_t move_storage(std::string const&, move_flags_t
+		, storage_error&) override { return status_t::no_error; }
+	bool verify_resume_data(add_torrent_params const&
+		, aux::vector<std::string, file_index_t> const&
+		, storage_error&) override { return true; }
+	void release_files(storage_error&) override {}
+	void rename_file(file_index_t, std::string const&
+		, storage_error&) override {}
+	void delete_files(remove_flags_t, storage_error&) override {}
 };
 
 struct allocator : buffer_allocator_interface
@@ -88,6 +90,8 @@ struct allocator : buffer_allocator_interface
 		for (auto ref : refs)
 			m_cache.reclaim_block(m_storage, ref);
 	}
+
+	virtual ~allocator() = default;
 private:
 	block_cache& m_cache;
 	storage_interface* m_storage;
@@ -103,7 +107,7 @@ static void nop() {}
 
 #define TEST_SETUP \
 	io_service ios; \
-	block_cache bc(0x4000, ios, std::bind(&nop)); \
+	block_cache bc(ios, std::bind(&nop)); \
 	aux::session_settings sett; \
 	file_storage fs; \
 	fs.add_file("a/test0", 0x4000); \
@@ -140,7 +144,7 @@ static void nop() {}
 	wj.d.io.offset = (b) * 0x4000; \
 	wj.d.io.buffer_size = 0x4000; \
 	wj.piece = piece_index_t(p); \
-	wj.argument = disk_buffer_holder(alloc, bc.allocate_buffer("write-test")); \
+	wj.argument = disk_buffer_holder(alloc, bc.allocate_buffer("write-test"), 0x4000); \
 	pe = bc.add_dirty_block(&wj)
 
 #define READ_BLOCK(p, b, r) \
@@ -149,7 +153,7 @@ static void nop() {}
 	rj.d.io.buffer_size = 0x4000; \
 	rj.piece = piece_index_t(p); \
 	rj.storage = pm; \
-	rj.argument = disk_buffer_holder(alloc, nullptr); \
+	rj.argument = disk_buffer_holder(alloc, nullptr, 0); \
 	ret = bc.try_read(&rj, alloc)
 
 #define FLUSH(flushing) \
@@ -429,6 +433,7 @@ void test_iovec()
 	TEST_SETUP;
 
 	ret = bc.allocate_iovec(iov);
+	TEST_EQUAL(ret, 0);
 	bc.free_iovec(iov);
 }
 
@@ -444,7 +449,7 @@ void test_unaligned_read()
 	rj.d.io.buffer_size = 0x4000;
 	rj.piece = piece_index_t(0);
 	rj.storage = pm;
-	rj.argument = disk_buffer_holder(alloc, nullptr);
+	rj.argument = disk_buffer_holder(alloc, nullptr, 0);
 	ret = bc.try_read(&rj, alloc);
 
 	// unaligned reads copies the data into a new buffer
@@ -462,6 +467,8 @@ void test_unaligned_read()
 	tailqueue<disk_io_job> jobs;
 	bc.clear(jobs);
 }
+
+} // anonymous namespace
 
 TORRENT_TEST(block_cache)
 {
@@ -499,10 +506,10 @@ TORRENT_TEST(delete_piece)
 	rj.storage = pm;
 	rj.argument = remove_flags_t{};
 	ret = bc.try_read(&rj, alloc);
+	TEST_EQUAL(ret, -1);
 
 	cached_piece_entry* pe_ = bc.find_piece(pm.get(), piece_index_t(0));
 	bc.mark_for_eviction(pe_, block_cache::disallow_ghost);
 
 	TEST_CHECK(bc.num_pieces() == 0);
 }
-

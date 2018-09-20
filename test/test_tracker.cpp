@@ -252,7 +252,6 @@ TORRENT_TEST(parse_external_ip)
 	TEST_EQUAL(resp.external_ip, addr4("1.2.3.4"));
 }
 
-#if TORRENT_USE_IPV6
 TORRENT_TEST(parse_external_ip6)
 {
 	char const response[] = "d5:peers0:11:external ip"
@@ -265,8 +264,8 @@ TORRENT_TEST(parse_external_ip6)
 	TEST_EQUAL(resp.peers.size(), 0);
 	TEST_EQUAL(resp.external_ip, addr6("f102:0304::ffff"));
 }
-#endif
 
+namespace {
 peer_entry extract_peer(char const* peer_field, error_code expected_ec, bool expected_ret)
 {
 	error_code ec;
@@ -280,6 +279,7 @@ peer_entry extract_peer(char const* peer_field, error_code expected_ec, bool exp
 	TEST_EQUAL(expected_ec, ec);
 	return result;
 }
+} // anonymous namespace
 
 TORRENT_TEST(extract_peer)
 {
@@ -295,7 +295,7 @@ TORRENT_TEST(extract_peer_hostname)
 	peer_entry result = extract_peer("d2:ip11:example.com4:porti1ee"
 		, error_code(), true);
 	TEST_EQUAL(result.hostname, "example.com");
-	TEST_EQUAL(result.pid, (peer_id::min)());
+	TEST_EQUAL(result.pid, peer_id::min());
 	TEST_EQUAL(result.port, 1);
 }
 
@@ -320,11 +320,16 @@ TORRENT_TEST(extract_peer_missing_port)
 		, errors::invalid_tracker_response, false);
 }
 
+namespace {
+
 bool connect_alert(lt::alert const* a, tcp::endpoint& ep)
 {
 	if (peer_connect_alert const* pc = alert_cast<peer_connect_alert>(a))
+	{
 		ep = pc->endpoint;
-	return true;
+		return true;
+	}
+	return false;
 }
 
 void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint const& expected_peer)
@@ -370,8 +375,6 @@ void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint c
 			break;
 
 		std::this_thread::sleep_for(lt::milliseconds(100));
-		std::printf("UDP: %d / %d\n", int(num_udp_announces())
-			, int(prev_udp_announces) + 1);
 	}
 
 	// we should have announced to the tracker by now
@@ -390,8 +393,6 @@ void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint c
 			break;
 
 		std::this_thread::sleep_for(lt::milliseconds(100));
-		std::printf("UDP: %d / %d\n", int(num_udp_announces())
-			, int(prev_udp_announces) + 1);
 	}
 
 	TEST_CHECK(peer_ep == expected_peer);
@@ -406,12 +407,13 @@ void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint c
 	stop_udp_tracker();
 }
 
+} // anonymous namespace
+
 TORRENT_TEST(udp_tracker_v4)
 {
 	test_udp_tracker("127.0.0.1", address_v4::any(), ep("1.3.3.7", 1337));
 }
 
-#if TORRENT_USE_IPV6
 TORRENT_TEST(udp_tracker_v6)
 {
 	if (supports_ipv6())
@@ -419,7 +421,6 @@ TORRENT_TEST(udp_tracker_v6)
 		test_udp_tracker("[::1]", address_v6::any(), ep("::1.3.3.7", 1337));
 	}
 }
-#endif
 
 TORRENT_TEST(http_peers)
 {
@@ -478,9 +479,7 @@ TORRENT_TEST(http_peers)
 		std::set<tcp::endpoint> expected_peers;
 		expected_peers.insert(ep("65.65.65.65", 16962));
 		expected_peers.insert(ep("67.67.67.67", 17476));
-#if TORRENT_USE_IPV6
 		expected_peers.insert(ep("4545:4545:4545:4545:4545:4545:4545:4545", 17990));
-#endif
 		for (auto const& ip : ra->params.peers)
 		{
 			TEST_EQUAL(expected_peers.count(ip), 1);
@@ -551,6 +550,8 @@ TORRENT_TEST(current_tracker)
 	std::printf("done\n");
 }
 
+namespace {
+
 void test_proxy(bool proxy_trackers)
 {
 	int http_port = start_web_server();
@@ -561,7 +562,6 @@ void test_proxy(bool proxy_trackers)
 	pack.set_int(settings_pack::tracker_completion_timeout, 2);
 	pack.set_int(settings_pack::tracker_receive_timeout, 1);
 	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:39775");
-	pack.set_bool(settings_pack::force_proxy, true);
 
 	pack.set_str(settings_pack::proxy_hostname, "non-existing.com");
 	pack.set_int(settings_pack::proxy_type, settings_pack::socks5);
@@ -611,6 +611,8 @@ void test_proxy(bool proxy_trackers)
 	std::printf("done\n");
 }
 
+} // anonymous namespace
+
 TORRENT_TEST(tracker_proxy)
 {
 	std::printf("\n\nnot proxying tracker connections (expect to reach the tracker)\n\n");
@@ -621,13 +623,15 @@ TORRENT_TEST(tracker_proxy)
 	test_proxy(true);
 }
 
-void test_stop_tracker_timeout(bool nostop)
+#ifndef TORRENT_DISABLE_LOGGING
+namespace {
+void test_stop_tracker_timeout(int const timeout)
 {
 	// trick the min interval so that the stopped anounce is permitted immediately
 	// after the initial announce
 	int port = start_web_server(false, false, true, -1);
 
-	auto count_stopped_events = [](session& ses)
+	auto count_stopped_events = [](session& ses, int expected)
 	{
 		int count = 0;
 		int num = 70; // this number is adjusted per version, an estimate
@@ -647,13 +651,15 @@ void test_stop_tracker_timeout(bool nostop)
 				{
 					std::string const msg = a->message();
 					if (msg.find("&event=stopped") != std::string::npos)
+					{
 						count++;
+						--expected;
+					}
 				}
 				num--;
 			}
-			if (num <= 0) return count;
+			if (num <= 0 && expected <= 0) return count;
 		}
-		return count;
 	};
 
 	settings_pack p = settings();
@@ -661,8 +667,7 @@ void test_stop_tracker_timeout(bool nostop)
 	p.set_bool(settings_pack::announce_to_all_tiers, true);
 	p.set_int(settings_pack::alert_mask, alert::all_categories);
 	p.set_str(settings_pack::listen_interfaces, "0.0.0.0:6881");
-	if (nostop)
-		p.set_int(settings_pack::stop_tracker_timeout, 0);
+	p.set_int(settings_pack::stop_tracker_timeout, timeout);
 
 	lt::session s(p);
 
@@ -686,26 +691,25 @@ void test_stop_tracker_timeout(bool nostop)
 	announce_entry ae{tracker_url};
 	h.add_tracker(ae);
 
-	while (true)
-	{
-		std::vector<alert*> alerts;
-		s.pop_alerts(&alerts);
-		if (std::any_of(alerts.begin(), alerts.end()
-			, [](alert* a) { return a->type() == tracker_reply_alert::alert_type; }))
-			break;
-	}
+	// make sure it announced a event=started properly
+	wait_for_alert(s, tracker_reply_alert::alert_type, "s");
 
 	s.remove_torrent(h);
 
-	int const count = count_stopped_events(s);
-	TEST_EQUAL(count, nostop ? 0 : 1);
+	int const count = count_stopped_events(s, (timeout == 0) ? 0 : 1);
+	TEST_EQUAL(count, (timeout == 0) ? 0 : 1);
 }
+} // anonymous namespace
 
 TORRENT_TEST(stop_tracker_timeout)
 {
 	std::printf("\n\nexpect to get ONE request with &event=stopped\n\n");
-	test_stop_tracker_timeout(false);
-
-	std::printf("\n\nexpect to NOT get a request with &event=stopped\n\n");
-	test_stop_tracker_timeout(true);
+	test_stop_tracker_timeout(1);
 }
+
+TORRENT_TEST(stop_tracker_timeout_zero_timeout)
+{
+	std::printf("\n\nexpect to NOT get a request with &event=stopped\n\n");
+	test_stop_tracker_timeout(0);
+}
+#endif

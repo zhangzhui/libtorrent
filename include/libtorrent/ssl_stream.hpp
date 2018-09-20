@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2008-2016, Arvid Norberg
+Copyright (c) 2008-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -74,11 +74,15 @@ public:
 	{
 	}
 
-	typedef typename boost::asio::ssl::stream<Stream> sock_type;
-	typedef typename sock_type::next_layer_type next_layer_type;
-	typedef typename Stream::lowest_layer_type lowest_layer_type;
-	typedef typename Stream::endpoint_type endpoint_type;
-	typedef typename Stream::protocol_type protocol_type;
+	using sock_type = typename boost::asio::ssl::stream<Stream>;
+	using next_layer_type = typename sock_type::next_layer_type;
+	using lowest_layer_type = typename Stream::lowest_layer_type;
+	using endpoint_type = typename Stream::endpoint_type;
+	using protocol_type = typename Stream::protocol_type;
+#if BOOST_VERSION >= 106600
+	using executor_type = typename sock_type::executor_type;
+	executor_type get_executor() { return m_sock.get_executor(); }
+#endif
 
 	void set_host_name(std::string name)
 	{
@@ -197,6 +201,13 @@ public:
 	{
 		m_sock.next_layer().io_control(ioc, ec);
 	}
+
+#ifndef BOOST_NO_EXCEPTIONS
+	void non_blocking(bool b) { m_sock.next_layer().non_blocking(b); }
+#endif
+
+	error_code non_blocking(bool b, error_code& ec)
+	{ return m_sock.next_layer().non_blocking(b, ec); }
 
 	template <class Const_Buffers, class Handler>
 	void async_write_some(Const_Buffers const& buffers, Handler const& handler)

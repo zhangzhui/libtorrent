@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2016, Arvid Norberg
+Copyright (c) 2007-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -36,11 +36,11 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/socket.hpp"
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/broadcast_socket.hpp"
-#include "libtorrent/http_connection.hpp"
 #include "libtorrent/deadline_timer.hpp"
 #include "libtorrent/enum_net.hpp"
 #include "libtorrent/resolver.hpp"
 #include "libtorrent/debug.hpp"
+#include "libtorrent/string_util.hpp"
 #include "libtorrent/aux_/portmap.hpp"
 #include "libtorrent/aux_/vector.hpp"
 
@@ -49,6 +49,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <set>
 
 namespace libtorrent {
+	struct http_connection;
+	class http_parser;
 
 	namespace upnp_errors
 	{
@@ -93,7 +95,7 @@ namespace libtorrent {
 	// the boost.system error category for UPnP errors
 	TORRENT_EXPORT boost::system::error_category& upnp_category();
 
-#ifndef TORRENT_NO_DEPRECATED
+#if TORRENT_ABI_VERSION == 1
 	TORRENT_DEPRECATED
 	inline boost::system::error_category& get_upnp_category()
 	{ return upnp_category(); }
@@ -199,12 +201,9 @@ private:
 	void map_timer(error_code const& ec);
 	void try_map_upnp(bool timer = false);
 	void discover_device_impl();
-	static address_v4 upnp_multicast_address;
-	static udp::endpoint upnp_multicast_endpoint;
 
 	void resend_request(error_code const& e);
-	void on_reply(udp::endpoint const& from, char* buffer
-		, std::size_t bytes_transferred);
+	void on_reply(udp::endpoint const& from, span<char const> buffer);
 
 	struct rootdevice;
 	void next(rootdevice& d, port_mapping_t i);
@@ -258,16 +257,12 @@ private:
 
 	struct rootdevice
 	{
-#if TORRENT_USE_ASSERTS
-		rootdevice() {}
-		~rootdevice()
-		{
-			TORRENT_ASSERT(magic == 1337);
-			magic = 0;
-		}
-		rootdevice(rootdevice const&) = default;
-		rootdevice& operator=(rootdevice const&) = default;
-#endif
+		rootdevice();
+		~rootdevice();
+		rootdevice(rootdevice const&);
+		rootdevice& operator=(rootdevice const&);
+		rootdevice(rootdevice&&);
+		rootdevice& operator=(rootdevice&&);
 
 		// the interface url, through which the list of
 		// supported interfaces are fetched
@@ -312,13 +307,6 @@ private:
 #if TORRENT_USE_ASSERTS
 		int magic = 1337;
 #endif
-		void close() const
-		{
-			TORRENT_ASSERT(magic == 1337);
-			if (!upnp_connection) return;
-			upnp_connection->close();
-			upnp_connection.reset();
-		}
 
 		bool operator<(rootdevice const& rhs) const
 		{ return url < rhs.url; }

@@ -54,7 +54,7 @@ TORRENT_TEST(mutable_torrents)
 
 	// calculate the hash for all pieces
 	sha1_hash ph;
-	for (piece_index_t i(0); i < fs.end_piece(); ++i)
+	for (auto const i : fs.piece_range())
 		t.set_hash(i, ph);
 
 	t.add_collection("collection1");
@@ -83,6 +83,8 @@ TORRENT_TEST(mutable_torrents)
 	TEST_CHECK(collections == ti.collections());
 }
 #endif
+
+namespace {
 
 struct test_torrent_t
 {
@@ -126,6 +128,10 @@ static test_torrent_t test_torrents[] =
 	{ "unordered.torrent" },
 	{ "symlink_zero_size.torrent" },
 	{ "pad_file_no_path.torrent" },
+	{ "large.torrent" },
+	{ "absolute_filename.torrent" },
+	{ "invalid_filename.torrent" },
+	{ "invalid_filename2.torrent" },
 };
 
 struct test_failing_torrent_t
@@ -140,6 +146,7 @@ test_failing_torrent_t test_error_torrents[] =
 	{ "invalid_piece_len.torrent", errors::torrent_missing_piece_length },
 	{ "negative_piece_len.torrent", errors::torrent_missing_piece_length },
 	{ "no_name.torrent", errors::torrent_missing_name },
+	{ "bad_name.torrent", errors::torrent_missing_name },
 	{ "invalid_name.torrent", errors::torrent_missing_name },
 	{ "invalid_info.torrent", errors::torrent_missing_info },
 	{ "string.torrent", errors::torrent_is_no_dict },
@@ -151,9 +158,14 @@ test_failing_torrent_t test_error_torrents[] =
 	{ "unaligned_pieces.torrent", errors::torrent_invalid_hashes },
 	{ "invalid_root_hash.torrent", errors::torrent_invalid_hashes },
 	{ "invalid_root_hash2.torrent", errors::torrent_missing_pieces },
+	{ "invalid_merkle.torrent", errors::no_files_in_torrent},
 	{ "invalid_file_size.torrent", errors::torrent_invalid_length },
 	{ "invalid_symlink.torrent", errors::torrent_invalid_name },
+	{ "many_pieces.torrent", errors::too_many_pieces_in_torrent },
+	{ "no_files.torrent", errors::no_files_in_torrent},
 };
+
+} // anonymous namespace
 
 // TODO: test remap_files
 // TODO: merkle torrents. specifically torrent_info::add_merkle_nodes and torrent with "root hash"
@@ -383,7 +395,7 @@ TORRENT_TEST(sanitize_path)
 	path.clear();
 	sanitize_append_path_element(path, "dev:");
 #ifdef TORRENT_WINDOWS
-	TEST_EQUAL(path, "dev");
+	TEST_EQUAL(path, "dev_");
 #else
 	TEST_EQUAL(path, "dev:");
 #endif
@@ -392,7 +404,7 @@ TORRENT_TEST(sanitize_path)
 	sanitize_append_path_element(path, "c:");
 	sanitize_append_path_element(path, "b");
 #ifdef TORRENT_WINDOWS
-	TEST_EQUAL(path, "c" SEPARATOR "b");
+	TEST_EQUAL(path, "c_" SEPARATOR "b");
 #else
 	TEST_EQUAL(path, "c:" SEPARATOR "b");
 #endif
@@ -402,7 +414,7 @@ TORRENT_TEST(sanitize_path)
 	sanitize_append_path_element(path, ".");
 	sanitize_append_path_element(path, "c");
 #ifdef TORRENT_WINDOWS
-	TEST_EQUAL(path, "c" SEPARATOR "c");
+	TEST_EQUAL(path, "c_" SEPARATOR "c");
 #else
 	TEST_EQUAL(path, "c:" SEPARATOR "c");
 #endif
@@ -545,6 +557,17 @@ TORRENT_TEST(sanitize_path_zeroes)
 	TEST_EQUAL(path, "_");
 }
 
+TORRENT_TEST(sanitize_path_colon)
+{
+	std::string path;
+	sanitize_append_path_element(path, "foo:bar");
+#ifdef TORRENT_WINDOWS
+	TEST_EQUAL(path, "foo_bar");
+#else
+	TEST_EQUAL(path, "foo:bar");
+#endif
+}
+
 TORRENT_TEST(verify_encoding)
 {
 	// verify_encoding
@@ -647,9 +670,9 @@ TORRENT_TEST(parse_torrents)
 
 	std::vector<char> buf;
 	bencode(std::back_inserter(buf), torrent);
-	torrent_info ti(buf, from_span);
-	std::cout << ti.name() << std::endl;
-	TEST_CHECK(ti.name() == "test1");
+	torrent_info ti1(buf, from_span);
+	std::cout << ti1.name() << std::endl;
+	TEST_CHECK(ti1.name() == "test1");
 
 #ifdef TORRENT_WINDOWS
 	info["name.utf-8"] = "c:/test1/test2/test3";
@@ -662,7 +685,7 @@ TORRENT_TEST(parse_torrents)
 	torrent_info ti2(buf, from_span);
 	std::cout << ti2.name() << std::endl;
 #ifdef TORRENT_WINDOWS
-	TEST_EQUAL(ti2.name(), "ctest1test2test3");
+	TEST_EQUAL(ti2.name(), "c_test1test2test3");
 #else
 	TEST_EQUAL(ti2.name(), "test1test2test3");
 #endif
@@ -723,7 +746,7 @@ TORRENT_TEST(parse_torrents)
 		{
 			TEST_EQUAL(ti->web_seeds().size(), 1);
 			TEST_EQUAL(ti->web_seeds()[0].url, "http://test.com/file");
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 			TEST_EQUAL(ti->http_seeds().size(), 0);
 			TEST_EQUAL(ti->url_seeds().size(), 1);
 			TEST_EQUAL(ti->url_seeds()[0], "http://test.com/file");
@@ -733,7 +756,7 @@ TORRENT_TEST(parse_torrents)
 		{
 			TEST_EQUAL(ti->web_seeds().size(), 1);
 			TEST_EQUAL(ti->web_seeds()[0].url, "http://test.com/file/");
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 			TEST_EQUAL(ti->http_seeds().size(), 0);
 			TEST_EQUAL(ti->url_seeds().size(), 1);
 			TEST_EQUAL(ti->url_seeds()[0], "http://test.com/file/");
@@ -744,7 +767,7 @@ TORRENT_TEST(parse_torrents)
 		{
 			TEST_EQUAL(ti->web_seeds().size(), 1);
 			TEST_EQUAL(ti->web_seeds()[0].url, "http://test.com/test%20file/foo%20bar/");
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 			TEST_EQUAL(ti->http_seeds().size(), 0);
 			TEST_EQUAL(ti->url_seeds().size(), 1);
 			TEST_EQUAL(ti->url_seeds()[0], "http://test.com/test%20file/foo%20bar/");
@@ -791,26 +814,40 @@ TORRENT_TEST(parse_torrents)
 			TEST_EQUAL(ti->num_files(), 2);
 			TEST_EQUAL(ti->files().file_path(file_index_t{1}), combine_path(".pad", "0"));
 		}
+		else if (std::string(test_torrents[i].file) == "absolute_filename.torrent")
+		{
+			TEST_EQUAL(ti->num_files(), 2);
+			TEST_EQUAL(ti->files().file_path(file_index_t{0}), combine_path("temp", "abcde"));
+			TEST_EQUAL(ti->files().file_path(file_index_t{1}), combine_path("temp", "foobar"));
+		}
+		else if (std::string(test_torrents[i].file) == "invalid_filename.torrent")
+		{
+			TEST_EQUAL(ti->num_files(), 2);
+		}
+		else if (std::string(test_torrents[i].file) == "invalid_filename2.torrent")
+		{
+			TEST_EQUAL(ti->num_files(), 3);
+		}
 
 		file_storage const& fs = ti->files();
-		for (file_index_t i{0}; i != file_index_t(fs.num_files()); ++i)
+		for (file_index_t idx{0}; idx != file_index_t(fs.num_files()); ++idx)
 		{
-			piece_index_t const first = ti->map_file(i, 0, 0).piece;
-			piece_index_t const last = ti->map_file(i, std::max(fs.file_size(i)-1, std::int64_t(0)), 0).piece;
-			file_flags_t const flags = fs.file_flags(i);
-			sha1_hash const ih = fs.hash(i);
+			piece_index_t const first = ti->map_file(idx, 0, 0).piece;
+			piece_index_t const last = ti->map_file(idx, std::max(fs.file_size(idx)-1, std::int64_t(0)), 0).piece;
+			file_flags_t const flags = fs.file_flags(idx);
+			sha1_hash const ih = fs.hash(idx);
 			std::printf("  %11" PRId64 " %c%c%c%c [ %4d, %4d ] %7u %s %s %s%s\n"
-				, fs.file_size(i)
+				, fs.file_size(idx)
 				, (flags & file_storage::flag_pad_file)?'p':'-'
 				, (flags & file_storage::flag_executable)?'x':'-'
 				, (flags & file_storage::flag_hidden)?'h':'-'
 				, (flags & file_storage::flag_symlink)?'l':'-'
 				, static_cast<int>(first), static_cast<int>(last)
-				, std::uint32_t(fs.mtime(i))
+				, std::uint32_t(fs.mtime(idx))
 				, ih != sha1_hash(nullptr) ? aux::to_hex(ih).c_str() : ""
-				, fs.file_path(i).c_str()
+				, fs.file_path(idx).c_str()
 				, flags & file_storage::flag_symlink ? "-> ": ""
-				, flags & file_storage::flag_symlink ? fs.symlink(i).c_str() : "");
+				, flags & file_storage::flag_symlink ? fs.symlink(idx).c_str() : "");
 		}
 	}
 
@@ -826,6 +863,8 @@ TORRENT_TEST(parse_torrents)
 		TEST_EQUAL(ti->is_valid(), false);
 	}
 }
+
+namespace {
 
 void test_resolve_duplicates(int test_case)
 {
@@ -863,7 +902,7 @@ void test_resolve_duplicates(int test_case)
 
 	// calculate the hash for all pieces
 	sha1_hash ph;
-	for (piece_index_t i(0); i < fs.end_piece(); ++i)
+	for (auto const i : fs.piece_range())
 		t.set_hash(i, ph);
 
 	std::vector<char> tmp;
@@ -874,7 +913,7 @@ void test_resolve_duplicates(int test_case)
 
 	torrent_info ti(tmp, from_span);
 
-	std::vector<aux::vector<char const*, file_index_t>> const filenames
+	aux::vector<aux::vector<char const*, file_index_t>> const filenames
 	{
 		{ // case 0
 			"test/temporary.txt",
@@ -905,7 +944,7 @@ void test_resolve_duplicates(int test_case)
 		}
 	};
 
-	for (file_index_t i(0); i < fs.end_file(); ++i)
+	for (auto const i : fs.file_range())
 	{
 		std::string p = ti.files().file_path(i);
 		convert_path_to_posix(p);
@@ -914,6 +953,8 @@ void test_resolve_duplicates(int test_case)
 		TEST_EQUAL(p, filenames[test_case][i]);
 	}
 }
+
+} // anonymous namespace
 
 TORRENT_TEST(resolve_duplicates)
 {
@@ -964,7 +1005,7 @@ TORRENT_TEST(copy)
 	};
 
 	file_storage const& fs = a->files();
-	for (file_index_t i(0); i < fs.end_file(); ++i)
+	for (auto const i : fs.file_range())
 	{
 		std::string p = fs.file_path(i);
 		convert_path_to_posix(p);
@@ -980,14 +1021,14 @@ TORRENT_TEST(copy)
 	// clear out the  buffer for a, just to make sure b doesn't have any
 	// references into it by mistake
 	int s = a->metadata_size();
-	std::memset(a->metadata().get(), 0, s);
+	std::memset(a->metadata().get(), 0, std::size_t(s));
 
 	a.reset();
 
 	TEST_EQUAL(b->num_files(), 3);
 
 	file_storage const& fs2 = b->files();
-	for (file_index_t i(0); i < fs2.end_file(); ++i)
+	for (auto const i : fs2.file_range())
 	{
 		std::string p = fs2.file_path(i);
 		convert_path_to_posix(p);
@@ -996,4 +1037,20 @@ TORRENT_TEST(copy)
 
 		TEST_EQUAL(fs2.hash(i), file_hashes[i]);
 	}
+}
+
+struct A
+{
+	int val;
+};
+
+TORRENT_TEST(copy_ptr)
+{
+	copy_ptr<A> a(new A{4});
+	copy_ptr<A> b(a);
+
+	TEST_EQUAL(a->val, b->val);
+	TEST_CHECK(&*a != &*b);
+	a->val = 5;
+	TEST_EQUAL(b->val, 4);
 }

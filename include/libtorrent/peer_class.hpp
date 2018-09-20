@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2011-2016, Arvid Norberg
+Copyright (c) 2011-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -46,14 +46,11 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	namespace aux {
+	using peer_class_t = aux::strong_typedef<std::uint32_t, struct peer_class_tag>;
 
-		struct peer_class_tag;
-	}
-
-	using peer_class_t = aux::strong_typedef<std::uint32_t, aux::peer_class_tag>;
-
-	struct peer_class_info
+	// holds settings for a peer class. Used in set_peer_class() and
+	// get_peer_class() calls.
+	struct TORRENT_EXPORT peer_class_info
 	{
 		// ``ignore_unchoke_slots`` determines whether peers should always
 		// unchoke a peer, regardless of the choking algorithm, or if it should

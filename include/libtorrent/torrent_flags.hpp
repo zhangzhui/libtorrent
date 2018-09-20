@@ -33,16 +33,16 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef TORRENT_TORRENT_FLAGS_HPP
 #define TORRENT_TORRENT_FLAGS_HPP
 
+#include "libtorrent/config.hpp"
 #include "libtorrent/flags.hpp"
 
 namespace libtorrent {
 
-struct torrent_flags_tag;
-using torrent_flags_t = flags::bitfield_flag<std::uint64_t, torrent_flags_tag>;
+using torrent_flags_t = flags::bitfield_flag<std::uint64_t, struct torrent_flags_tag>;
 
 namespace torrent_flags {
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 #include "libtorrent/aux_/disable_warnings_push.hpp"
 #endif
 
@@ -175,6 +175,11 @@ namespace torrent_flags {
 	// for the state_changed_alert and then call pause(). The download/seeding
 	// will most likely start in between posting the alert and receiving the
 	// call to pause.
+	//
+	// A downloading state is one where peers are being connected. Which means
+	// just downloading the metadata via the ``ut_metadata`` extension counts
+	// as a downloading state. In order to stop a torrent once the metadata
+	// has been downloaded, instead set all file priorities to dont_download
 	constexpr torrent_flags_t stop_when_ready = 10_bit;
 
 	// when this flag is set, the tracker list in the add_torrent_params
@@ -195,7 +200,7 @@ namespace torrent_flags {
 	// This flag is cleared by a successful call to save_resume_data()
 	constexpr torrent_flags_t need_save_resume = 13_bit;
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	// indicates that this torrent should never be unloaded from RAM, even
 	// if unloading torrents are allowed in general. Setting this makes
 	// the torrent exempt from loading/unloading management.
@@ -248,14 +253,14 @@ namespace torrent_flags {
 		| torrent_flags::paused
 		| torrent_flags::apply_ip_filter
 		| torrent_flags::need_save_resume
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		| torrent_flags::pinned
 		| torrent_flags::merge_resume_http_seeds
 		| torrent_flags::merge_resume_trackers
 #endif
 		;
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 #endif
 

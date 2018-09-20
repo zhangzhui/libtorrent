@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2006-2016, Arvid Norberg & Daniel Wallin
+Copyright (c) 2006-2018, Arvid Norberg & Daniel Wallin
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -77,7 +77,7 @@ observer_ptr traversal_algorithm::new_observer(udp::endpoint const& ep
 #if TORRENT_USE_ASSERTS
 	if (o) o->m_in_constructor = false;
 #endif
-	return o;
+	return std::move(o);
 }
 
 traversal_algorithm::traversal_algorithm(node& dht_node, node_id const& target)
@@ -182,18 +182,16 @@ void traversal_algorithm::add_entry(node_id const& id
 			if (m_node.settings().restrict_search_ips
 				&& !(flags & observer::flag_initial))
 			{
-#if TORRENT_USE_IPV6
 				if (o->target_addr().is_v6())
 				{
 					address_v6::bytes_type addr_bytes = o->target_addr().to_v6().to_bytes();
-					address_v6::bytes_type::const_iterator prefix_it = addr_bytes.begin();
+					auto prefix_it = addr_bytes.cbegin();
 					std::uint64_t const prefix6 = detail::read_uint64(prefix_it);
 
 					if (m_peer6_prefixes.insert(prefix6).second)
 						goto add_result;
 				}
 				else
-#endif
 				{
 					// mask the lower octet
 					std::uint32_t const prefix4
@@ -483,7 +481,7 @@ bool traversal_algorithm::add_requests()
 	// limits the number of outstanding requests, this limits the
 	// number of good outstanding requests. It will use more traffic,
 	// but is intended to speed up lookups
-	for (std::vector<observer_ptr>::iterator i = m_results.begin()
+	for (auto i = m_results.begin()
 		, end(m_results.end()); i != end
 		&& results_target > 0
 		&& (agg ? outstanding < m_branch_factor
@@ -524,7 +522,7 @@ bool traversal_algorithm::add_requests()
 		o->flags |= observer::flag_queried;
 		if (invoke(*i))
 		{
-			TORRENT_ASSERT(m_invoke_count < (std::numeric_limits<std::int8_t>::max)());
+			TORRENT_ASSERT(m_invoke_count < std::numeric_limits<std::int8_t>::max());
 			++m_invoke_count;
 			++outstanding;
 		}
@@ -580,13 +578,13 @@ void traversal_algorithm::status(dht_lookup& l)
 	l.target = m_target;
 
 	int last_sent = INT_MAX;
-	time_point now = aux::time_now();
+	time_point const now = aux::time_now();
 	for (auto const& r : m_results)
 	{
 		observer const& o = *r;
 		if (o.flags & observer::flag_queried)
 		{
-			last_sent = (std::min)(last_sent, int(total_seconds(now - o.sent())));
+			last_sent = std::min(last_sent, int(total_seconds(now - o.sent())));
 			if (o.has_short_timeout()) ++l.first_timeout;
 			continue;
 		}

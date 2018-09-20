@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # vim: tabstop=8 expandtab shiftwidth=4 softtabstop=4
 
-from __future__ import print_function
 
 import libtorrent as lt
 
@@ -13,8 +12,8 @@ import shutil
 import binascii
 import subprocess as sub
 import sys
-import inspect
 import pickle
+import threading
 
 # include terminal interface for travis parallel executions of scripts which use
 # terminal features: fix multiple stdin assignment at termios.tcgetattr
@@ -22,6 +21,12 @@ if os.name != 'nt':
     import pty
 
 HAVE_DEPRECATED_APIS = hasattr(lt, 'version')
+
+settings = {
+    'alert_mask': lt.alert.category_t.all_categories,
+    'enable_dht': False, 'enable_lsd': False, 'enable_natpmp': False,
+    'enable_upnp': False, 'listen_interfaces': '0.0.0.0:0', 'file_pool_size': 1}
+
 
 class test_create_torrent(unittest.TestCase):
 
@@ -40,11 +45,18 @@ class test_create_torrent(unittest.TestCase):
 
 class test_session_stats(unittest.TestCase):
 
+    def test_add_torrent_params(self):
+        atp = lt.add_torrent_params()
+
+        for field_name in dir(atp):
+            field = getattr(atp, field_name)
+            print(field_name, field)
+
     def test_unique(self):
-        l = lt.session_stats_metrics()
-        self.assertTrue(len(l) > 40)
+        metrics = lt.session_stats_metrics()
+        self.assertTrue(len(metrics) > 40)
         idx = set()
-        for m in l:
+        for m in metrics:
             self.assertTrue(m.value_index not in idx)
             idx.add(m.value_index)
 
@@ -55,27 +67,34 @@ class test_session_stats(unittest.TestCase):
 class test_torrent_handle(unittest.TestCase):
 
     def setup(self):
-        self.ses = lt.session({
-            'alert_mask': lt.alert.category_t.all_categories,
-            'enable_dht': False})
+        self.ses = lt.session(settings)
         self.ti = lt.torrent_info('url_seed_multi.torrent')
         self.h = self.ses.add_torrent({
             'ti': self.ti, 'save_path': os.getcwd()})
 
     def test_torrent_handle(self):
         self.setup()
-        self.assertEqual(self.h.file_priorities(), [4, 4])
-        self.assertEqual(self.h.piece_priorities(), [4])
+        self.assertEqual(self.h.get_file_priorities(), [4, 4])
+        self.assertEqual(self.h.get_piece_priorities(), [4])
 
         self.h.prioritize_files([0, 1])
-        self.assertEqual(self.h.file_priorities(), [0, 1])
+        # workaround for asynchronous priority update
+        time.sleep(1)
+        self.assertEqual(self.h.get_file_priorities(), [0, 1])
 
         self.h.prioritize_pieces([0])
-        self.assertEqual(self.h.piece_priorities(), [0])
+        self.assertEqual(self.h.get_piece_priorities(), [0])
 
         # also test the overload that takes a list of piece->priority mappings
         self.h.prioritize_pieces([(0, 1)])
-        self.assertEqual(self.h.piece_priorities(), [1])
+        self.assertEqual(self.h.get_piece_priorities(), [1])
+        self.h.connect_peer(('127.0.0.1', 6881))
+        self.h.connect_peer(('127.0.0.2', 6881), source=4)
+        self.h.connect_peer(('127.0.0.3', 6881), flags=2)
+        self.h.connect_peer(('127.0.0.4', 6881), flags=2, source=4)
+
+        print(self.h.queue_position())
+
     def test_torrent_handle_in_set(self):
         self.setup()
         torrents = set()
@@ -107,7 +126,6 @@ class test_torrent_handle(unittest.TestCase):
         self.assertEqual(len(torrents), 1)
         self.assertEqual(torrents[self.h], 'bar')
 
-
     def test_replace_trackers(self):
         self.setup()
         trackers = []
@@ -130,20 +148,18 @@ class test_torrent_handle(unittest.TestCase):
         tracker.fail_limit = 1
         trackers = [tracker]
         self.h.replace_trackers(trackers)
-        tracker_list = [tracker for tracker in self.h.trackers()]
         # wait a bit until the endpoints list gets populated
-        while len(tracker_list[0]['endpoints']) == 0:
+        while len(self.h.trackers()[0]['endpoints']) == 0:
             time.sleep(0.1)
-            tracker_list = [tracker for tracker in self.h.trackers()]
-        pickled_trackers = pickle.dumps(tracker_list)
+        pickled_trackers = pickle.dumps(self.h.trackers())
         unpickled_trackers = pickle.loads(pickled_trackers)
         self.assertEqual(unpickled_trackers[0]['url'], 'udp://tracker1.com')
         self.assertEqual(unpickled_trackers[0]['endpoints'][0]['last_error']['value'], 0)
 
     def test_file_status(self):
         self.setup()
-        l = self.h.file_status()
-        print(l)
+        status = self.h.file_status()
+        print(status)
 
     def test_piece_deadlines(self):
         self.setup()
@@ -154,17 +170,18 @@ class test_torrent_handle(unittest.TestCase):
         # time, wait for next full second to prevent second increment
         time.sleep(1 - datetime.datetime.now().microsecond / 1000000.0)
 
-        sessionStart = datetime.datetime.now().replace(microsecond=0)
         self.setup()
         st = self.h.status()
+        for attr in dir(st):
+            print('%s: %s' % (attr, getattr(st, attr)))
         # last upload and download times are at session start time
-        self.assertLessEqual(abs(st.last_upload - sessionStart), datetime.timedelta(seconds=1))
-        self.assertLessEqual(abs(st.last_download - sessionStart), datetime.timedelta(seconds=1))
+        self.assertEqual(st.last_upload, None)
+        self.assertEqual(st.last_download, None)
 
     def test_serialize_trackers(self):
         """Test to ensure the dict contains only python built-in types"""
         self.setup()
-        self.h.add_tracker({'url':'udp://tracker1.com'})
+        self.h.add_tracker({'url': 'udp://tracker1.com'})
         tr = self.h.trackers()[0]
         # wait a bit until the endpoints list gets populated
         while len(tr['endpoints']) == 0:
@@ -181,6 +198,7 @@ class test_torrent_handle(unittest.TestCase):
         # make sure we can compare torrent_status objects
         st2 = self.h.status()
         self.assertEqual(st2, st)
+        print(st2)
 
     def test_read_resume_data(self):
 
@@ -198,8 +216,10 @@ class test_torrent_handle(unittest.TestCase):
         self.assertEqual(tp.file_priorities, [0, 1, 1])
         self.assertEqual(tp.peers, [('1.1.1.1', 1), ('2.2.2.2', 2)])
 
-        ses = lt.session({'alert_mask': lt.alert.category_t.all_categories})
+        ses = lt.session(settings)
         h = ses.add_torrent(tp)
+        for attr in dir(tp):
+            print('%s: %s' % (attr, getattr(tp, attr)))
 
         h.connect_peer(('3.3.3.3', 3))
 
@@ -221,8 +241,7 @@ class test_torrent_handle(unittest.TestCase):
         self.assertEqual(cs.pieces, [])
 
     def test_unknown_torrent_parameter(self):
-        self.ses = lt.session({'alert_mask': lt.alert.category_t.all_categories,
-            'enable_dht': False})
+        self.ses = lt.session(settings)
         try:
             self.h = self.ses.add_torrent({'unexpected-key-name': ''})
             self.assertFalse('should have thrown an exception')
@@ -230,35 +249,37 @@ class test_torrent_handle(unittest.TestCase):
             print(e)
 
     def test_torrent_parameter(self):
-        self.ses = lt.session({'alert_mask': lt.alert.category_t.all_categories,
-            'enable_dht': False})
-        self.ti = lt.torrent_info('url_seed_multi.torrent');
+        self.ses = lt.session(settings)
+        self.ti = lt.torrent_info('url_seed_multi.torrent')
         self.h = self.ses.add_torrent({
             'ti': self.ti,
             'save_path': os.getcwd(),
             'trackers': ['http://test.com/announce'],
             'dht_nodes': [('1.2.3.4', 6881), ('4.3.2.1', 6881)],
-            'file_priorities': [1,1],
+            'file_priorities': [1, 1],
             'http_seeds': ['http://test.com/file3'],
             'url_seeds': ['http://test.com/announce-url'],
             'peers': [('5.6.7.8', 6881)],
             'banned_peers': [('8.7.6.5', 6881)],
-            'renamed_files': { 0: 'test.txt', 2: 'test.txt' }
-            })
+            'renamed_files': {0: 'test.txt', 2: 'test.txt'}
+        })
         self.st = self.h.status()
         self.assertEqual(self.st.save_path, os.getcwd())
-        trackers = self.h.trackers();
+        trackers = self.h.trackers()
         self.assertEqual(len(trackers), 1)
         self.assertEqual(trackers[0].get('url'), 'http://test.com/announce')
         self.assertEqual(trackers[0].get('tier'), 0)
-        self.assertEqual(self.h.file_priorities(), [1,1])
-        self.assertEqual(self.h.http_seeds(),['http://test.com/file3'])
-        # url_seeds was already set, test that it did not got overwritten
+        self.assertEqual(self.h.get_file_priorities(), [1, 1])
+        self.assertEqual(self.h.http_seeds(), ['http://test.com/file3'])
+        # url_seeds was already set, test that it did not get overwritten
         self.assertEqual(self.h.url_seeds(),
-            ['http://test.com/announce-url/', 'http://test.com/file/'])
-        self.assertEqual(self.h.piece_priorities(),[4])
-        self.assertEqual(self.ti.merkle_tree(),[])
-        self.assertEqual(self.st.verified_pieces,[])
+                         ['http://test.com/announce-url/', 'http://test.com/file/'])
+        # piece priorities weren't set explicitly, but they were updated by the
+        # file priorities being set
+        self.assertEqual(self.h.get_piece_priorities(), [1])
+        self.assertEqual(self.ti.merkle_tree(), [])
+        self.assertEqual(self.st.verified_pieces, [])
+
 
 class test_torrent_info(unittest.TestCase):
 
@@ -272,6 +293,7 @@ class test_torrent_info(unittest.TestCase):
 
         f = info.files()
         self.assertEqual(f.file_path(0), 'test_torrent')
+        self.assertEqual(f.file_name(0), 'test_torrent')
         self.assertEqual(f.file_size(0), 1234)
         self.assertEqual(info.total_size(), 1234)
 
@@ -299,8 +321,7 @@ class test_torrent_info(unittest.TestCase):
         if not HAVE_DEPRECATED_APIS:
             return
 
-        lt.session({'alert_mask': lt.alert.category_t.all_categories,
-                    'enable_dht': False})
+        lt.session(settings)
         ti = lt.torrent_info('url_seed_multi.torrent')
         files = ti.files()
 
@@ -314,20 +335,19 @@ class test_torrent_info(unittest.TestCase):
                              os.path.join('temp', 'foo'))
             idx += 1
 
-
     def test_announce_entry(self):
         ae = lt.announce_entry('test')
-        self.assertEquals(ae.url, 'test')
-        self.assertEquals(ae.tier, 0)
-        self.assertEquals(ae.verified, False)
-        self.assertEquals(ae.source, 0)
+        self.assertEqual(ae.url, 'test')
+        self.assertEqual(ae.tier, 0)
+        self.assertEqual(ae.verified, False)
+        self.assertEqual(ae.source, 0)
+
 
 class test_alerts(unittest.TestCase):
 
     def test_alert(self):
 
-        ses = lt.session({'alert_mask': lt.alert.category_t.all_categories,
-                          'enable_dht': False})
+        ses = lt.session(settings)
         ti = lt.torrent_info('base.torrent')
         h = ses.add_torrent({'ti': ti, 'save_path': os.getcwd()})
         st = h.status()
@@ -336,6 +356,8 @@ class test_alerts(unittest.TestCase):
         ses.wait_for_alert(1000)  # milliseconds
         alerts = ses.pop_alerts()
         for a in alerts:
+            if a.what() == 'add_torrent_alert':
+                self.assertEqual(a.torrent_name, 'temp')
             print(a.message())
             for field_name in dir(a):
                 if field_name.startswith('__'):
@@ -364,8 +386,7 @@ class test_alerts(unittest.TestCase):
         self.assertEqual(st.save_path, os.getcwd())
 
     def test_pop_alerts(self):
-        ses = lt.session({'alert_mask': lt.alert.category_t.all_categories,
-                          'enable_dht': False})
+        ses = lt.session(settings)
         ses.async_add_torrent(
             {"ti": lt.torrent_info("base.torrent"), "save_path": "."})
 
@@ -385,6 +406,18 @@ class test_alerts(unittest.TestCase):
                 print(a.message())
             time.sleep(0.1)
 
+    def test_alert_notify(self):
+        ses = lt.session(settings)
+        event = threading.Event()
+
+        def callback():
+            event.set()
+
+        ses.set_alert_notify(callback)
+        ses.async_add_torrent(
+            {"ti": lt.torrent_info("base.torrent"), "save_path": "."})
+        event.wait()
+
 
 class test_bencoder(unittest.TestCase):
 
@@ -403,9 +436,10 @@ class test_bencoder(unittest.TestCase):
 class test_sha1hash(unittest.TestCase):
 
     def test_sha1hash(self):
-        h = 'a0'*20
+        h = 'a0' * 20
         s = lt.sha1_hash(binascii.unhexlify(h))
         self.assertEqual(h, str(s))
+
 
 class test_magnet_link(unittest.TestCase):
 
@@ -413,55 +447,135 @@ class test_magnet_link(unittest.TestCase):
         ses = lt.session({})
         magnet = 'magnet:?xt=urn:btih:C6EIF4CCYDBTIJVG3APAGM7M4NDONCTI'
         p = lt.parse_magnet_uri(magnet)
+        self.assertEqual(str(p.info_hash), '178882f042c0c33426a6d81e0333ece346e68a68')
+        p.save_path = '.'
+        h = ses.add_torrent(p)
+        self.assertEqual(str(h.info_hash()), '178882f042c0c33426a6d81e0333ece346e68a68')
+
+    def test_parse_magnet_uri_dict(self):
+        ses = lt.session({})
+        magnet = 'magnet:?xt=urn:btih:C6EIF4CCYDBTIJVG3APAGM7M4NDONCTI'
+        p = lt.parse_magnet_uri_dict(magnet)
+        self.assertEqual(binascii.hexlify(p['info_hash']), b'178882f042c0c33426a6d81e0333ece346e68a68')
         p['save_path'] = '.'
         h = ses.add_torrent(p)
         self.assertEqual(str(h.info_hash()), '178882f042c0c33426a6d81e0333ece346e68a68')
 
+
+class test_peer_class(unittest.TestCase):
+
+    def test_peer_class_ids(self):
+        s = lt.session(settings)
+
+        print('global_peer_class_id:', lt.session.global_peer_class_id)
+        print('tcp_peer_class_id:', lt.session.tcp_peer_class_id)
+        print('local_peer_class_id:', lt.session.local_peer_class_id)
+
+        print('global: ', s.get_peer_class(s.global_peer_class_id))
+        print('tcp: ', s.get_peer_class(s.local_peer_class_id))
+        print('local: ', s.get_peer_class(s.local_peer_class_id))
+
+    def test_peer_class(self):
+        s = lt.session(settings)
+
+        c = s.create_peer_class('test class')
+        print('new class: ', s.get_peer_class(c))
+
+        nfo = s.get_peer_class(c)
+        self.assertEqual(nfo['download_limit'], 0)
+        self.assertEqual(nfo['upload_limit'], 0)
+        self.assertEqual(nfo['ignore_unchoke_slots'], False)
+        self.assertEqual(nfo['connection_limit_factor'], 100)
+        self.assertEqual(nfo['download_priority'], 1)
+        self.assertEqual(nfo['upload_priority'], 1)
+        self.assertEqual(nfo['label'], 'test class')
+
+        nfo['download_limit'] = 1337
+        nfo['upload_limit'] = 1338
+        nfo['ignore_unchoke_slots'] = True
+        nfo['connection_limit_factor'] = 42
+        nfo['download_priority'] = 2
+        nfo['upload_priority'] = 3
+
+        s.set_peer_class(c, nfo)
+
+        nfo2 = s.get_peer_class(c)
+        self.assertEqual(nfo, nfo2)
+
+    def test_peer_class_filter(self):
+        filt = lt.peer_class_type_filter()
+        filt.add(lt.peer_class_type_filter.tcp_socket, lt.session.global_peer_class_id)
+        filt.remove(lt.peer_class_type_filter.utp_socket, lt.session.local_peer_class_id)
+
+        filt.disallow(lt.peer_class_type_filter.tcp_socket, lt.session.global_peer_class_id)
+        filt.allow(lt.peer_class_type_filter.utp_socket, lt.session.local_peer_class_id)
+
+    def test_peer_class_ip_filter(self):
+        s = lt.session(settings)
+        s.set_peer_class_type_filter(lt.peer_class_type_filter())
+        s.set_peer_class_filter(lt.ip_filter())
+
+
 class test_session(unittest.TestCase):
 
     def test_add_torrent(self):
-        s = lt.session({'alert_mask': lt.alert.category_t.stats_notification, 'enable_dht': False})
-        h = s.add_torrent({'ti': lt.torrent_info('base.torrent'),
-            'save_path': '.',
-            'dht_nodes': [('1.2.3.4', 6881), ('4.3.2.1', 6881)],
-            'http_seeds': ['http://test.com/seed'],
-            'peers': [('5.6.7.8', 6881)],
-            'banned_peers': [('8.7.6.5', 6881)],
-            'file_priorities': [1,1,1,2,0]})
+        s = lt.session(settings)
+        s.add_torrent({'ti': lt.torrent_info('base.torrent'),
+                       'save_path': '.',
+                       'dht_nodes': [('1.2.3.4', 6881), ('4.3.2.1', 6881)],
+                       'http_seeds': ['http://test.com/seed'],
+                       'peers': [('5.6.7.8', 6881)],
+                       'banned_peers': [('8.7.6.5', 6881)],
+                       'file_priorities': [1, 1, 1, 2, 0]})
 
     def test_apply_settings(self):
 
-        s = lt.session({'enable_dht': False})
+        s = lt.session(settings)
         s.apply_settings({'num_want': 66, 'user_agent': 'test123'})
         self.assertEqual(s.get_settings()['num_want'], 66)
         self.assertEqual(s.get_settings()['user_agent'], 'test123')
 
     def test_post_session_stats(self):
-        s = lt.session({'alert_mask': lt.alert.category_t.stats_notification,
-                        'enable_dht': False})
+        s = lt.session({'alert_mask': lt.alert.category_t.stats_notification, 'enable_dht': False})
+        s.post_session_stats()
+        alerts = []
+        # first the stats headers log line. but not if logging is disabled
+        while len(alerts) == 0:
+            s.wait_for_alert(1000)
+            alerts = s.pop_alerts()
 
-        def test_post_session_stats(self):
-            s = lt.session({'alert_mask': lt.alert.category_t.stats_notification, 'enable_dht': False})
-            s.post_session_stats()
-            alerts = []
-            # first the stats headers log line. but not if logging is disabled
-            if 'log_alert' in [i[0] for i in inspect.getmembers(lt)]:
-                s.wait_for_alert(1000)
-                alerts = s.pop_alerts()
-                a = alerts.pop(0)
-                self.assertTrue(isinstance(a, lt.log_alert))
-            # then the actual stats values
-            if len(alerts) == 0:
-                s.wait_for_alert(1000)
-                alerts = s.pop_alerts()
-                a = alerts.pop(0)
-                self.assertTrue(isinstance(a, lt.session_stats_alert))
-                self.assertTrue(isinstance(a.values, dict))
-                self.assertTrue(len(a.values) > 0)
+        while len(alerts) > 0:
+            a = alerts.pop(0)
+            print(a)
+            if isinstance(a, lt.session_stats_header_alert):
+                break
+        self.assertTrue(isinstance(a, lt.session_stats_header_alert))
+        # then the actual stats values
+        while len(alerts) == 0:
+            s.wait_for_alert(1000)
+            alerts = s.pop_alerts()
+        a = alerts.pop(0)
+        print(a)
+        self.assertTrue(isinstance(a, lt.session_stats_alert))
+        self.assertTrue(isinstance(a.values, dict))
+        self.assertTrue(len(a.values) > 0)
+
+    def test_post_dht_stats(self):
+        s = lt.session({'alert_mask': lt.alert.category_t.stats_notification, 'enable_dht': False})
+        s.post_dht_stats()
+        alerts = []
+        # first the stats headers log line. but not if logging is disabled
+        while len(alerts) == 0:
+            s.wait_for_alert(1000)
+            alerts = s.pop_alerts()
+        a = alerts.pop(0)
+        self.assertTrue(isinstance(a, lt.dht_stats_alert))
+        self.assertTrue(isinstance(a.active_requests, list))
+        self.assertTrue(isinstance(a.routing_table, list))
 
     def test_unknown_settings(self):
         try:
-            s = lt.session({'unexpected-key-name': 42})
+            lt.session({'unexpected-key-name': 42})
             self.assertFalse('should have thrown an exception')
         except KeyError as e:
             print(e)
@@ -485,6 +599,11 @@ class test_session(unittest.TestCase):
         self.assertTrue('connection_speed' in seed_mode)
         self.assertTrue('file_pool_size' in seed_mode)
 
+    def test_default_settings(self):
+
+        default = lt.default_settings()
+        print(default)
+
 
 class test_example_client(unittest.TestCase):
 
@@ -499,52 +618,52 @@ class test_example_client(unittest.TestCase):
             my_stdin = slave_fd
 
         process = sub.Popen(
-            [sys.executable,"client.py","url_seed_multi.torrent"],
+            [sys.executable, "client.py", "url_seed_multi.torrent"],
             stdin=my_stdin, stdout=sub.PIPE, stderr=sub.PIPE)
         # python2 has no Popen.wait() timeout
         time.sleep(5)
         returncode = process.poll()
-        if returncode == None:
+        if returncode is None:
             # this is an expected use-case
             process.kill()
         err = process.stderr.read().decode("utf-8")
         self.assertEqual('', err, 'process throw errors: \n' + err)
         # check error code if process did unexpected end
-        if returncode != None:
+        if returncode is not None:
             # in case of error return: output stdout if nothing was on stderr
             if returncode != 0:
                 print("stdout:\n" + process.stdout.read().decode("utf-8"))
             self.assertEqual(returncode, 0, "returncode: " + str(returncode) + "\n"
-                + "stderr: empty\n"
-                + "some configuration does not output errors like missing module members,"
-                + "try to call it manually to get the error message\n")
+                             + "stderr: empty\n"
+                             + "some configuration does not output errors like missing module members,"
+                             + "try to call it manually to get the error message\n")
 
     def test_execute_simple_client(self):
         process = sub.Popen(
-            [sys.executable,"simple_client.py","url_seed_multi.torrent"],
+            [sys.executable, "simple_client.py", "url_seed_multi.torrent"],
             stdout=sub.PIPE, stderr=sub.PIPE)
         # python2 has no Popen.wait() timeout
         time.sleep(5)
         returncode = process.poll()
-        if returncode == None:
+        if returncode is None:
             # this is an expected use-case
             process.kill()
         err = process.stderr.read().decode("utf-8")
         self.assertEqual('', err, 'process throw errors: \n' + err)
         # check error code if process did unexpected end
-        if returncode != None:
+        if returncode is not None:
             # in case of error return: output stdout if nothing was on stderr
             if returncode != 0:
                 print("stdout:\n" + process.stdout.read().decode("utf-8"))
             self.assertEqual(returncode, 0, "returncode: " + str(returncode) + "\n"
-                + "stderr: empty\n"
-                + "some configuration does not output errors like missing module members,"
-                + "try to call it manually to get the error message\n")
+                             + "stderr: empty\n"
+                             + "some configuration does not output errors like missing module members,"
+                             + "try to call it manually to get the error message\n")
 
     def test_execute_make_torrent(self):
         process = sub.Popen(
-            [sys.executable,"make_torrent.py","url_seed_multi.torrent",
-            "http://test.com/test"], stdout=sub.PIPE, stderr=sub.PIPE)
+            [sys.executable, "make_torrent.py", "url_seed_multi.torrent",
+             "http://test.com/test"], stdout=sub.PIPE, stderr=sub.PIPE)
         returncode = process.wait()
         # python2 has no Popen.wait() timeout
         err = process.stderr.read().decode("utf-8")
@@ -553,14 +672,15 @@ class test_example_client(unittest.TestCase):
         if returncode != 0:
             print("stdout:\n" + process.stdout.read().decode("utf-8"))
         self.assertEqual(returncode, 0, "returncode: " + str(returncode) + "\n"
-            + "stderr: empty\n"
-            + "some configuration does not output errors like missing module members,"
-            + "try to call it manually to get the error message\n")
+                         + "stderr: empty\n"
+                         + "some configuration does not output errors like missing module members,"
+                         + "try to call it manually to get the error message\n")
 
     def test_default_settings(self):
 
         default = lt.default_settings()
         print(default)
+
 
 class test_operation_t(unittest.TestCase):
 
@@ -570,6 +690,7 @@ class test_operation_t(unittest.TestCase):
         self.assertEqual(lt.operation_name(lt.operation_t.mkdir), "mkdir")
         self.assertEqual(lt.operation_name(lt.operation_t.partfile_write), "partfile_write")
         self.assertEqual(lt.operation_name(lt.operation_t.hostname_lookup), "hostname_lookup")
+
 
 if __name__ == '__main__':
     print(lt.__version__)

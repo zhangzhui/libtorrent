@@ -47,6 +47,8 @@ POSSIBILITY OF SUCH DAMAGE.
 
 using namespace lt;
 
+namespace {
+
 void test_transfer()
 {
 	// in case the previous run was terminated
@@ -60,9 +62,11 @@ void test_transfer()
 	session_proxy p1;
 	session_proxy p2;
 
-	auto const mask = alert::all_categories
-		& ~(alert::progress_notification
-			| alert::performance_warning
+	auto const mask = ~(
+			alert::performance_warning
+#if TORRENT_ABI_VERSION == 1
+			| alert::progress_notification
+#endif
 			| alert::stats_notification);
 
 	settings_pack pack;
@@ -131,6 +135,8 @@ void test_transfer()
 	p1 = ses1.abort();
 	p2 = ses2.abort();
 }
+
+} // anonymous namespace
 
 TORRENT_TEST(utp)
 {

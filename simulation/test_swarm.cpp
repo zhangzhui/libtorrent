@@ -44,6 +44,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "setup_transfer.hpp" // for ep()
 #include "fake_peer.hpp"
 
+#include "simulator/nat.hpp"
 #include "simulator/queue.hpp"
 #include "utils.hpp"
 
@@ -94,6 +95,25 @@ TORRENT_TEST(seed_mode_disable_hash_checks)
 		// terminate
 		, [](int, lt::session&) -> bool
 		{ return false; });
+}
+
+TORRENT_TEST(seed_mode_suggest)
+{
+	setup_swarm(2, swarm_test::upload
+		// add session
+		, [](lt::settings_pack& pack) {
+			pack.set_int(settings_pack::suggest_mode, settings_pack::suggest_read_cache);
+			pack.set_int(settings_pack::cache_size, 2);
+		}
+		// add torrent
+		, [](lt::add_torrent_params& params) {
+			params.flags |= torrent_flags::seed_mode;
+		}
+		// on alert
+		, [](lt::alert const* a, lt::session& ses) {}
+		// terminate
+		, [](int ticks, lt::session& ses) -> bool
+		{ return true; });
 }
 
 TORRENT_TEST(plain)
@@ -157,7 +177,8 @@ TORRENT_TEST(session_stats)
 		});
 }
 
-
+// this test relies on picking up log alerts
+#ifndef TORRENT_DISABLE_LOGGING
 TORRENT_TEST(suggest)
 {
 	int num_suggests = 0;
@@ -166,6 +187,7 @@ TORRENT_TEST(suggest)
 		, [](lt::settings_pack& pack) {
 			pack.set_int(settings_pack::suggest_mode, settings_pack::suggest_read_cache);
 			pack.set_int(settings_pack::max_suggest_pieces, 10);
+			pack.set_int(settings_pack::cache_size, 2);
 		}
 		// add torrent
 		, [](lt::add_torrent_params&) {}
@@ -197,6 +219,7 @@ TORRENT_TEST(suggest)
 	// time
 	TEST_CHECK(num_suggests > 0);
 }
+#endif
 
 TORRENT_TEST(utp_only)
 {
@@ -277,7 +300,7 @@ void test_stop_start_download(swarm_test type, bool graceful)
 
 			std::printf("tick: %d\n", ticks);
 
-			const int timeout = type == swarm_test::download ? 20 : 100;
+			const int timeout = type == swarm_test::download ? 21 : 100;
 			if (ticks > timeout)
 			{
 				TEST_ERROR("timeout");
@@ -360,7 +383,7 @@ TORRENT_TEST(stop_start_seed_graceful)
 
 TORRENT_TEST(shutdown)
 {
-	setup_swarm(2, swarm_test::download
+	setup_swarm(4, swarm_test::download
 		// add session
 		, [](lt::settings_pack&) {}
 		// add torrent
@@ -440,6 +463,60 @@ TORRENT_TEST(dead_peers)
 	TEST_EQUAL(num_connect_timeout, 3);
 }
 
+// the address 50.0.0.1 sits behind a NAT. All of its outgoing connections have
+// their source address rewritten to 51.51.51.51
+struct nat_config : sim::default_config
+{
+	nat_config() : m_nat_hop(std::make_shared<nat>(addr("51.51.51.51"))) {}
+
+	sim::route outgoing_route(lt::address ip) override
+	{
+		// This is extremely simplistic. It will simply alter the percieved source
+		// IP of the connecting client.
+		sim::route r;
+		if (ip == addr("50.0.0.1")) r.append(m_nat_hop);
+		return r;
+	}
+	std::shared_ptr<nat> m_nat_hop;
+};
+
+TORRENT_TEST(self_connect)
+{
+	int num_self_connection_disconnects = 0;
+
+	nat_config network_cfg;
+	sim::simulation sim{network_cfg};
+
+	setup_swarm(1, swarm_test::download, sim
+		// add session
+		, [](lt::settings_pack& p) {
+			p.set_bool(settings_pack::enable_incoming_utp, false);
+			p.set_bool(settings_pack::enable_outgoing_utp, false);
+		}
+		// add torrent
+		, [](lt::add_torrent_params& params) {
+			// this is our own address and listen port, just to make sure we get
+			// ourself as a peer (which normally happens one way or another in the
+			// wild)
+			params.peers.assign({ep("50.0.0.1", 6881)});
+		}
+		// on alert
+		, [&](lt::alert const* a, lt::session&) {
+			auto* e = alert_cast<peer_disconnected_alert>(a);
+			if (e
+				&& e->op == operation_t::bittorrent
+				&& e->error == error_code(errors::self_connection))
+			{
+				++num_self_connection_disconnects;
+			}
+		}
+		// terminate
+		, [](int t, lt::session&) -> bool
+		{ return t > 100; });
+
+	TEST_EQUAL(num_self_connection_disconnects, 1);
+}
+
 TORRENT_TEST(delete_files)
 {
 	std::string save_path;
@@ -510,7 +587,7 @@ TORRENT_TEST(torrent_completed_alert)
 		// add session
 		, [](lt::settings_pack& pack)
 		{
-			pack.set_int(lt::settings_pack::alert_mask, alert::progress_notification);
+			pack.set_int(lt::settings_pack::alert_mask, alert::file_progress_notification);
 		}
 		// add torrent
 		, [](lt::add_torrent_params&) {}
@@ -548,7 +625,7 @@ TORRENT_TEST(block_uploaded_alert)
 		, [](lt::settings_pack& pack)
 		{
 			pack.set_int(lt::settings_pack::alert_mask,
-				alert::progress_notification | alert::status_notification);
+				alert::upload_notification | alert::status_notification);
 		}
 		// add torrent
 		, [](lt::add_torrent_params&) {}
@@ -635,7 +712,7 @@ TORRENT_TEST(redundant_have)
 	);
 }
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 TORRENT_TEST(lazy_bitfields)
 {
 	test_settings([](lt::settings_pack& pack) {

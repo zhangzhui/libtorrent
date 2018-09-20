@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2016, Arvid Norberg
+Copyright (c) 2007-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -52,7 +52,7 @@ namespace libtorrent {
 	TORRENT_EXPORT std::string make_magnet_uri(torrent_handle const& handle);
 	TORRENT_EXPORT std::string make_magnet_uri(torrent_info const& info);
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 #ifndef BOOST_NO_EXCEPTIONS
 	// deprecated in 0.14
 	TORRENT_DEPRECATED_EXPORT
@@ -61,7 +61,7 @@ namespace libtorrent {
 		, storage_mode_t storage_mode = storage_mode_sparse
 		, bool paused = false
 		, storage_constructor_type sc = default_storage_constructor
-		, void* userdata = 0);
+		, void* userdata = nullptr);
 
 	// deprecated in 0.16. Instead, pass in the magnet link as add_torrent_params::url
 	TORRENT_DEPRECATED_EXPORT
@@ -73,11 +73,16 @@ namespace libtorrent {
 	TORRENT_DEPRECATED_EXPORT
 	torrent_handle add_magnet_uri(session& ses, std::string const& uri
 		, add_torrent_params p, error_code& ec);
+#endif // TORRENT_ABI_VERSION
 
-#endif
 
 	// This function parses out information from the magnet link and populates the
-	// add_torrent_params object.
+	// add_torrent_params object. The overload that does not take an
+	// ``error_code`` reference will throw a system_error on error
+	// The overload taking an ``add_torrent_params`` reference will fill in the
+	// fields specified in the magnet URI.
+	TORRENT_EXPORT add_torrent_params parse_magnet_uri(string_view uri, error_code& ec);
+	TORRENT_EXPORT add_torrent_params parse_magnet_uri(string_view uri);
 	TORRENT_EXPORT void parse_magnet_uri(string_view uri, add_torrent_params& p, error_code& ec);
 }
 

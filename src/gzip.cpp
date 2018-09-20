@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2016, Arvid Norberg
+Copyright (c) 2007-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,7 +34,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/puff.hpp"
 #include "libtorrent/gzip.hpp"
 
-#include <vector>
 #include <string>
 
 namespace {
@@ -59,9 +58,9 @@ namespace libtorrent {
 	struct gzip_error_category : boost::system::error_category
 	{
 		const char* name() const BOOST_SYSTEM_NOEXCEPT override;
-		std::string message(int ev) const BOOST_SYSTEM_NOEXCEPT override;
+		std::string message(int ev) const override;
 		boost::system::error_condition default_error_condition(int ev) const BOOST_SYSTEM_NOEXCEPT override
-		{ return boost::system::error_condition(ev, *this); }
+		{ return {ev, *this}; }
 	};
 
 	const char* gzip_error_category::name() const BOOST_SYSTEM_NOEXCEPT
@@ -69,7 +68,7 @@ namespace libtorrent {
 		return "gzip error";
 	}
 
-	std::string gzip_error_category::message(int ev) const BOOST_SYSTEM_NOEXCEPT
+	std::string gzip_error_category::message(int ev) const
 	{
 		static char const* msgs[] =
 		{
@@ -105,24 +104,22 @@ namespace libtorrent {
 	{
 		boost::system::error_code make_error_code(error_code_enum e)
 		{
-			return boost::system::error_code(e, gzip_category());
+			return {e, gzip_category()};
 		}
 	}
 
 namespace {
 
 	// returns -1 if gzip header is invalid or the header size in bytes
-	int gzip_header(span<char const> const buf)
+	int gzip_header(span<char const> const in)
 	{
-		TORRENT_ASSERT(!buf.empty());
+		// The zip header cannot be shorter than 10 bytes
+		if (in.size() < 10) return -1;
 
 		span<unsigned char const> buffer(
-			reinterpret_cast<const unsigned char*>(buf.data()), buf.size());
+			reinterpret_cast<const unsigned char*>(in.data()), in.size());
 
 		// gzip is defined in https://tools.ietf.org/html/rfc1952
-
-		// The zip header cannot be shorter than 10 bytes
-		if (buffer.size() < 10) return -1;
 
 		// check the magic header of gzip
 		if ((buffer[0] != GZIP_MAGIC0) || (buffer[1] != GZIP_MAGIC1)) return -1;
@@ -145,29 +142,29 @@ namespace {
 		{
 			if (buffer.size() < 2) return -1;
 
-			std::size_t const extra_len = static_cast<std::size_t>((buffer[1] << 8) | buffer[0]);
+			auto const extra_len = static_cast<std::size_t>((buffer[1] << 8) | buffer[0]);
 			if (buffer.size() < extra_len + 2) return -1;
 			buffer = buffer.subspan(extra_len + 2);
 		}
 
 		if (flags & FNAME)
 		{
-			if (buf.empty()) return -1;
+			if (buffer.empty()) return -1;
 			while (buffer[0] != 0)
 			{
 				buffer = buffer.subspan(1);
-				if (buf.empty()) return -1;
+				if (buffer.empty()) return -1;
 			}
 			buffer = buffer.subspan(1);
 		}
 
 		if (flags & FCOMMENT)
 		{
-			if (buf.empty()) return -1;
+			if (buffer.empty()) return -1;
 			while (buffer[0] != 0)
 			{
 				buffer = buffer.subspan(1);
-				if (buf.empty()) return -1;
+				if (buffer.empty()) return -1;
 			}
 			buffer = buffer.subspan(1);
 		}
@@ -178,12 +175,11 @@ namespace {
 			buffer = buffer.subspan(2);
 		}
 
-		return static_cast<int>(buf.size() - buffer.size());
+		return static_cast<int>(in.size() - buffer.size());
 	}
 	} // anonymous namespace
 
-	TORRENT_EXTRA_EXPORT void inflate_gzip(
-		span<char const> in
+	void inflate_gzip(span<char const> in
 		, std::vector<char>& buffer
 		, int maximum_size
 		, error_code& ec)
@@ -191,7 +187,7 @@ namespace {
 		ec.clear();
 		TORRENT_ASSERT(maximum_size > 0);
 
-		int header_len = gzip_header(in);
+		int const header_len = gzip_header(in);
 		if (header_len < 0)
 		{
 			ec = gzip_errors::invalid_gzip_header;
@@ -266,4 +262,3 @@ namespace {
 	}
 
 }
-

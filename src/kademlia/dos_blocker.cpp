@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2006-2016, Arvid Norberg
+Copyright (c) 2006-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -43,15 +43,16 @@ namespace libtorrent { namespace dht {
 		: m_message_rate_limit(5)
 		, m_block_timeout(5 * 60)
 	{
-		for (int i = 0; i < num_ban_nodes; ++i)
+		for (auto& e : m_ban_nodes)
 		{
-			m_ban_nodes[i].count = 0;
-			m_ban_nodes[i].limit = min_time();
+			e.count = 0;
+			e.limit = min_time();
 		}
 	}
 
-	bool dos_blocker::incoming(address const& addr, time_point now, dht_logger* logger)
+	bool dos_blocker::incoming(address const& addr, time_point const now, dht_logger* logger)
 	{
+		TORRENT_UNUSED(logger);
 		node_ban_entry* match = nullptr;
 		node_ban_entry* min = m_ban_nodes;
 		for (node_ban_entry* i = m_ban_nodes; i < m_ban_nodes + num_ban_nodes; ++i)

@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2007-2016, Arvid Norberg
+Copyright (c) 2007-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -32,11 +32,11 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/http_connection.hpp"
 #include "libtorrent/aux_/escape_string.hpp"
-#include "libtorrent/instantiate_connection.hpp"
+#include "libtorrent/aux_/instantiate_connection.hpp"
 #include "libtorrent/gzip.hpp"
 #include "libtorrent/parse_url.hpp"
 #include "libtorrent/socket.hpp"
-#include "libtorrent/socket_type.hpp" // for async_shutdown
+#include "libtorrent/aux_/socket_type.hpp" // for async_shutdown
 #include "libtorrent/resolver_interface.hpp"
 #include "libtorrent/settings_pack.hpp"
 #include "libtorrent/aux_/time.hpp"
@@ -48,6 +48,12 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <string>
 #include <algorithm>
 #include <sstream>
+
+#ifdef TORRENT_USE_OPENSSL
+#include "libtorrent/aux_/disable_warnings_push.hpp"
+#include <boost/asio/ssl/context.hpp>
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
+#endif
 
 using namespace std::placeholders;
 
@@ -161,8 +167,7 @@ void http_connection::get(std::string const& url, time_duration timeout, int pri
 
 	TORRENT_ASSERT(prio >= 0 && prio < 3);
 
-	bool ssl = false;
-	if (protocol == "https") ssl = true;
+	bool const ssl = (protocol == "https");
 
 	std::stringstream request;
 
@@ -272,9 +277,12 @@ void http_connection::start(std::string const& hostname, int port
 		error_code err;
 		if (m_sock.is_open()) m_sock.close(err);
 
+		aux::proxy_settings const* proxy = ps;
+
 #if TORRENT_USE_I2P
 		bool is_i2p = false;
 		char const* top_domain = strrchr(hostname.c_str(), '.');
+		aux::proxy_settings i2p_proxy;
 		if (top_domain && top_domain == ".i2p"_sv && i2p_conn)
 		{
 			// this is an i2p name, we need to use the sam connection
@@ -285,23 +293,16 @@ void http_connection::start(std::string const& hostname, int port
 			// because i2p is sloooooow
 			m_completion_timeout *= 4;
 			m_read_timeout *= 4;
-		}
-#endif
 
 #if TORRENT_USE_I2P
-		if (is_i2p && i2p_conn->proxy().type != settings_pack::i2p_proxy)
-		{
-			m_timer.get_io_service().post(std::bind(&http_connection::callback
-				, me, error_code(errors::no_i2p_router), span<char>{}));
-			return;
-		}
+			if (is_i2p && i2p_conn->proxy().type != settings_pack::i2p_proxy)
+			{
+				m_timer.get_io_service().post(std::bind(&http_connection::callback
+					, me, error_code(errors::no_i2p_router), span<char>{}));
+				return;
+			}
 #endif
 
-		aux::proxy_settings const* proxy = ps;
-#if TORRENT_USE_I2P
-		aux::proxy_settings i2p_proxy;
-		if (is_i2p)
-		{
 			i2p_proxy = i2p_conn->proxy();
 			proxy = &i2p_proxy;
 		}
@@ -324,8 +325,7 @@ void http_connection::start(std::string const& hostname, int port
 		{
 			if (m_ssl_ctx == nullptr)
 			{
-				m_ssl_ctx = new (std::nothrow) ssl::context(
-					m_timer.get_io_service(), ssl::context::sslv23_client);
+				m_ssl_ctx = new (std::nothrow) ssl::context(ssl::context::sslv23_client);
 				if (m_ssl_ctx)
 				{
 					m_own_ssl_context = true;
@@ -473,25 +473,21 @@ void http_connection::close(bool force)
 #if TORRENT_USE_I2P
 void http_connection::connect_i2p_tracker(char const* destination)
 {
+	TORRENT_ASSERT(m_sock.get<i2p_stream>());
 #ifdef TORRENT_USE_OPENSSL
 	TORRENT_ASSERT(m_ssl == false);
-	TORRENT_ASSERT(m_sock.get<socket_type>());
-	TORRENT_ASSERT(m_sock.get<socket_type>()->get<i2p_stream>());
-	m_sock.get<socket_type>()->get<i2p_stream>()->set_destination(destination);
-	m_sock.get<socket_type>()->get<i2p_stream>()->set_command(i2p_stream::cmd_connect);
-	m_sock.get<socket_type>()->get<i2p_stream>()->set_session_id(m_i2p_conn->session_id());
-#else
+#endif
 	m_sock.get<i2p_stream>()->set_destination(destination);
 	m_sock.get<i2p_stream>()->set_command(i2p_stream::cmd_connect);
 	m_sock.get<i2p_stream>()->set_session_id(m_i2p_conn->session_id());
-#endif
 	ADD_OUTSTANDING_ASYNC("http_connection::on_connect");
+	TORRENT_ASSERT(!m_connecting);
+	m_connecting = true;
 	m_sock.async_connect(tcp::endpoint(), std::bind(&http_connection::on_connect
 		, shared_from_this(), _1));
 }
 
-void http_connection::on_i2p_resolve(error_code const& e
-	, char const* destination)
+void http_connection::on_i2p_resolve(error_code const& e, char const* destination)
 {
 	COMPLETE_ASYNC("http_connection::on_i2p_resolve");
 	if (e)
@@ -533,11 +529,16 @@ void http_connection::on_resolve(error_code const& e
 		auto new_end = std::partition(m_endpoints.begin(), m_endpoints.end()
 			, [this] (tcp::endpoint const& ep)
 		{
-			if (ep.address().is_v4() != m_bind_addr->is_v4())
+			if (is_v4(ep) != m_bind_addr->is_v4())
 				return false;
-			if (ep.address().is_v4() && m_bind_addr->is_v4())
+			if (is_v4(ep) && m_bind_addr->is_v4())
 				return true;
-			TORRENT_ASSERT(ep.address().is_v6() && m_bind_addr->is_v6());
+			TORRENT_ASSERT(is_v6(ep) && m_bind_addr->is_v6());
+			// don't try to connect to a global address with a local source address
+			// this is mainly needed to prevent attempting to connect to a global
+			// address using a ULA as the source
+			if (!is_local(ep.address()) && is_local(*m_bind_addr))
+				return false;
 			return ep.address().to_v6().scope_id() == m_bind_addr->to_v6().scope_id();
 		});
 		m_endpoints.erase(new_end, m_endpoints.end());
@@ -566,7 +567,7 @@ void http_connection::connect()
 		// is, ec will be represent "success". If so, don't set it as the socks5
 		// hostname, just connect to the IP
 		error_code ec;
-		address adr = address::from_string(m_hostname, ec);
+		address adr = make_address(m_hostname, ec);
 
 		if (ec)
 		{
@@ -870,6 +871,8 @@ void http_connection::on_assign_bandwidth(error_code const& e)
 	}
 	m_limiter_timer_active = false;
 	if (e) return;
+
+	if (m_abort) return;
 
 	if (m_download_quota > 0) return;
 

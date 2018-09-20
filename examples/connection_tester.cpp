@@ -49,6 +49,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <iostream>
 #include <atomic>
 #include <array>
+#include <chrono>
 
 #if BOOST_ASIO_DYN_LINK
 #if BOOST_VERSION >= 104500
@@ -103,17 +104,6 @@ std::atomic<int> num_suggest(0);
 
 // the number of requests made from suggested pieces
 std::atomic<int> num_suggested_requests(0);
-
-void sleep_ms(int milliseconds)
-{
-#if defined TORRENT_WINDOWS || defined TORRENT_CYGWIN
-	Sleep(milliseconds);
-#elif defined TORRENT_BEOS
-	snooze_until(system_time() + std::int64_t(milliseconds) * 1000, B_SYSTEM_TIMEBASE);
-#else
-	usleep(milliseconds * 1000);
-#endif
-}
 
 std::string leaf_path(std::string f)
 {
@@ -440,12 +430,10 @@ struct peer_conn
 
 		char ep_str[200];
 		address const& addr = s.local_endpoint(e).address();
-#if TORRENT_USE_IPV6
 		if (addr.is_v6())
 			std::snprintf(ep_str, sizeof(ep_str), "[%s]:%d", addr.to_string(e).c_str()
 				, s.local_endpoint(e).port());
 		else
-#endif
 			std::snprintf(ep_str, sizeof(ep_str), "%s:%d", addr.to_string(e).c_str()
 				, s.local_endpoint(e).port());
 		std::printf("%s ep: %s sent: %d received: %d duration: %d ms up: %.1fMB/s down: %.1fMB/s\n"
@@ -639,7 +627,7 @@ struct peer_conn
 				}
 				else
 				{
-					block = (std::min)(start / 0x4000, block);
+					block = std::min(start / 0x4000, block);
 					if (block == 0)
 					{
 						pieces.push_back(current_piece);
@@ -739,6 +727,8 @@ void print_usage()
 		"    options for this command:\n"
 		"    -s <size>          the size of the torrent in megabytes\n"
 		"    -n <num-files>     the number of files in the test torrent\n"
+		"    -a                 introduce a lot of pad-files\n"
+		"                       (pad files are not supported for gen-data or upload)\n"
 		"    -t <file>          the file to save the .torrent file to\n"
 		"    -T <name>          the name of the torrent (and directory\n"
 		"                       its files are saved in)\n\n"
@@ -794,13 +784,12 @@ void hasher_thread(lt::create_torrent* t, piece_index_t const start_piece
 }
 
 // size is in megabytes
-void generate_torrent(std::vector<char>& buf, int size, int num_files
-	, char const* torrent_name)
+void generate_torrent(std::vector<char>& buf, int num_pieces, int num_files
+	, char const* torrent_name, bool with_padding)
 {
 	file_storage fs;
 	// 1 MiB piece size
 	const int piece_size = 1024 * 1024;
-	const int num_pieces = size;
 	const std::int64_t total_size = std::int64_t(piece_size) * num_pieces;
 
 	std::int64_t s = total_size;
@@ -811,12 +800,14 @@ void generate_torrent(std::vector<char>& buf, int size, int num_files
 		char b[100];
 		std::snprintf(b, sizeof(b), "%s/stress_test%d", torrent_name, i);
 		++i;
-		fs.add_file(b, (std::min)(s, std::int64_t(file_size)));
+		fs.add_file(b, std::min(s, file_size));
 		s -= file_size;
 		file_size += 200;
 	}
 
-	lt::create_torrent t(fs, piece_size);
+	lt::create_torrent t(fs, piece_size, with_padding ? 100 : -1);
+
+	num_pieces = t.num_pieces();
 
 	int const num_threads = std::thread::hardware_concurrency()
 		? std::thread::hardware_concurrency() : 4;
@@ -846,7 +837,7 @@ void generate_data(char const* path, torrent_info const& ti)
 
 	file_pool fp;
 
-	aux::vector<std::uint8_t, file_index_t> priorities;
+	aux::vector<download_priority_t, file_index_t> priorities;
 	sha1_hash info_hash;
 	storage_params params{
 		fs,
@@ -906,6 +897,7 @@ int main(int argc, char* argv[])
 	char const* destination_ip = "127.0.0.1";
 	int destination_port = 6881;
 	int churn = 0;
+	bool gen_pad_files = false;
 
 	argv += 2;
 	argc -= 2;
@@ -926,6 +918,7 @@ int main(int argc, char* argv[])
 		switch (optname[1])
 		{
 			case 'C': test_corruption = true; continue;
+			case 'a': gen_pad_files = true; continue;
 		}
 
 		if (argc == 0)
@@ -960,7 +953,7 @@ int main(int argc, char* argv[])
 		name = name.substr(0, name.find_last_of('.'));
 		std::printf("generating torrent: %s\n", name.c_str());
 		generate_torrent(tmp, size ? size : 1024, num_files ? num_files : 1
-			, name.c_str());
+			, name.c_str(), gen_pad_files);
 
 		FILE* output = stdout;
 		if ("-"_sv != torrent_file)
@@ -1010,7 +1003,7 @@ int main(int argc, char* argv[])
 			const int piece_size = 1024 * 1024;
 			lt::create_torrent t(fs, piece_size);
 			sha1_hash zero(nullptr);
-			for (piece_index_t k(0); k < fs.end_piece(); ++k)
+			for (auto const k : fs.piece_range())
 				t.set_hash(k, zero);
 
 			buf.clear();
@@ -1091,7 +1084,7 @@ int main(int argc, char* argv[])
 		else if (test_mode == dual_test) seed = (i & 1);
 		conns.push_back(new peer_conn(ios[i % num_threads], ti.num_pieces(), ti.piece_length() / 16 / 1024
 			, ep, (char const*)&ti.info_hash()[0], seed, churn, corrupt));
-		sleep_ms(1);
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		ios[i % num_threads].poll_one(ec);
 		if (ec)
 		{

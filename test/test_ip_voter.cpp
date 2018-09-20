@@ -36,15 +36,17 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/socket.hpp"
 #include "libtorrent/random.hpp"
 #include "libtorrent/socket_io.hpp"
-#include "libtorrent/aux_/session_impl.hpp"
+#include "libtorrent/aux_/session_interface.hpp"
 #include "libtorrent/broadcast_socket.hpp" // for supports_ipv6()
 #include "setup_transfer.hpp" // for rand_v4
 
 using namespace lt;
 
+namespace {
+
 bool cast_vote(ip_voter& ipv, address ext_ip, address voter)
 {
-	bool new_ip = ipv.cast_vote(ext_ip, 1, voter);
+	bool new_ip = ipv.cast_vote(ext_ip, aux::session_interface::source_dht, voter);
 	std::printf("%15s -> %-15s\n"
 		, print_address(voter).c_str()
 		, print_address(ext_ip).c_str());
@@ -55,6 +57,8 @@ bool cast_vote(ip_voter& ipv, address ext_ip, address voter)
 	}
 	return new_ip;
 }
+
+} // anonymous namespace
 
 // test the case where every time we get a new IP. Make sure
 // we don't flap
@@ -165,8 +169,8 @@ TORRENT_TEST(ip_voter_1)
 	TEST_CHECK(!ec);
 	for (int i = 0; i < 50; ++i)
 	{
-		ipv1.cast_vote(real_external, aux::session_impl::source_dht, rand_v4());
-		ipv1.cast_vote(rand_v4(), aux::session_impl::source_dht, malicious);
+		ipv1.cast_vote(real_external, aux::session_interface::source_dht, rand_v4());
+		ipv1.cast_vote(rand_v4(), aux::session_interface::source_dht, malicious);
 	}
 	TEST_CHECK(ipv1.external_address() == real_external);
 }
@@ -191,7 +195,6 @@ TORRENT_TEST(ip_voter_2)
 	address malicious2;
 	address real_external2;
 	address malicious_external2;
-#if TORRENT_USE_IPV6
 	if (supports_ipv6())
 	{
 		malicious2 = address_v6::from_string("2f90::", ec);
@@ -201,25 +204,19 @@ TORRENT_TEST(ip_voter_2)
 		malicious_external2 = address_v6::from_string("2f70::", ec);
 		TEST_CHECK(!ec);
 	}
-#endif
 
 	for (int i = 0; i < 50; ++i)
 	{
-		ipv2.cast_vote(real_external1, aux::session_impl::source_dht, rand_v4());
-		ipv2.cast_vote(malicious_external, aux::session_impl::source_dht, malicious);
-#if TORRENT_USE_IPV6
+		ipv2.cast_vote(real_external1, aux::session_interface::source_dht, rand_v4());
+		ipv2.cast_vote(malicious_external, aux::session_interface::source_dht, malicious);
 		if (supports_ipv6())
 		{
-			ipv6.cast_vote(real_external2, aux::session_impl::source_dht, rand_v6());
-			ipv6.cast_vote(malicious_external2, aux::session_impl::source_dht, malicious2);
+			ipv6.cast_vote(real_external2, aux::session_interface::source_dht, rand_v6());
+			ipv6.cast_vote(malicious_external2, aux::session_interface::source_dht, malicious2);
 		}
-#endif
 	}
 	TEST_CHECK(ipv2.external_address() == real_external1);
-#if TORRENT_USE_IPV6
 	if (supports_ipv6())
 		TEST_CHECK(ipv6.external_address() == real_external2);
-#endif
-
 }
 

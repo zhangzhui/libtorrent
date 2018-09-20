@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2005-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -30,55 +30,26 @@ POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#ifndef TORRENT_EXPORT_HPP_INCLUDED
-#define TORRENT_EXPORT_HPP_INCLUDED
+#include "libtorrent/aux_/generate_peer_id.hpp"
+#include "libtorrent/aux_/session_settings.hpp"
+#include "libtorrent/peer_id.hpp"
+#include "libtorrent/string_util.hpp" // for url_random
 
-#include <boost/config.hpp>
+#include <string>
 
-// backwards compatibility with older versions of boost
-#if !defined BOOST_SYMBOL_EXPORT && !defined BOOST_SYMBOL_IMPORT
-# if defined _MSC_VER || defined __MINGW32__
-#  define BOOST_SYMBOL_EXPORT __declspec(dllexport)
-#  define BOOST_SYMBOL_IMPORT __declspec(dllimport)
-# elif __GNU__ >= 4
-#  define BOOST_SYMBOL_EXPORT __attribute__((visibility("default")))
-#  define BOOST_SYMBOL_IMPORT __attribute__((visibility("default")))
-# else
-#  define BOOST_SYMBOL_EXPORT
-#  define BOOST_SYMBOL_IMPORT
-# endif
-#endif
+namespace libtorrent { namespace aux {
 
-#if defined TORRENT_BUILDING_SHARED
-# define TORRENT_EXPORT BOOST_SYMBOL_EXPORT
-#elif defined TORRENT_LINKING_SHARED
-# define TORRENT_EXPORT BOOST_SYMBOL_IMPORT
-#endif
+peer_id generate_peer_id(session_settings const& sett)
+{
+	peer_id ret;
+	std::string print = sett.get_str(settings_pack::peer_fingerprint);
+	if (print.size() > ret.size()) print.resize(ret.size());
 
-// when this is specified, export a bunch of extra
-// symbols, mostly for the unit tests to reach
-#if defined TORRENT_EXPORT_EXTRA
-# if defined TORRENT_BUILDING_SHARED
-#  define TORRENT_EXTRA_EXPORT BOOST_SYMBOL_EXPORT
-# elif defined TORRENT_LINKING_SHARED
-#  define TORRENT_EXTRA_EXPORT BOOST_SYMBOL_IMPORT
-# endif
-#endif
+	// the client's fingerprint
+	std::copy(print.begin(), print.end(), ret.begin());
+	if (print.length() < ret.size())
+		url_random(span<char>(ret).subspan(print.length()));
+	return ret;
+}
 
-#ifndef TORRENT_EXPORT
-# define TORRENT_EXPORT
-#endif
-
-#ifndef TORRENT_EXTRA_EXPORT
-# define TORRENT_EXTRA_EXPORT
-#endif
-
-// only export this type if deprecated functions are enabled
-#ifdef TORRENT_NO_DEPRECATE
-#define TORRENT_DEPRECATED_EXPORT TORRENT_EXTRA_EXPORT
-#else
-#define TORRENT_DEPRECATED_EXPORT TORRENT_EXPORT
-#endif
-
-#endif
-
+}}

@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2009-2016, Arvid Norberg
+Copyright (c) 2009-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -137,9 +137,6 @@ enum
 {
 	ACK_MASK = 0xffff,
 
-	// the number of packets that'll fit in the reorder buffer
-	max_packets_reorder = 512,
-
 	// if a packet receives more than this number of
 	// duplicate acks, we'll trigger a fast re-send
 	dup_ack_limit = 3,
@@ -242,6 +239,8 @@ struct utp_socket_impl
 		, m_stalled(false)
 		, m_confirmed(false)
 	{
+		TORRENT_ASSERT((m_recv_id == ((m_send_id + 1) & 0xffff))
+			|| (m_send_id == ((m_recv_id + 1) & 0xffff)));
 		m_sm.inc_stats_counter(counters::num_utp_idle);
 		TORRENT_ASSERT(m_userdata);
 		m_delay_sample_hist.fill(std::numeric_limits<std::uint32_t>::max());
@@ -306,14 +305,11 @@ struct utp_socket_impl
 	packet_ptr acquire_packet(int const allocate) { return m_sm.acquire_packet(allocate); }
 	void release_packet(packet_ptr p) { m_sm.release_packet(std::move(p)); }
 
-private:
-
 	// non-copyable
 	utp_socket_impl(utp_socket_impl const&) = delete;
 	utp_socket_impl const& operator=(utp_socket_impl const&) = delete;
 
 	// TODO: 2 it would be nice if not everything would have to be public here
-public:
 
 	void check_receive_buffers() const;
 
@@ -457,7 +453,7 @@ public:
 	std::int32_t m_read_buffer_size = 0;
 
 	// max number of bytes to allocate for receive buffer
-	std::int32_t m_in_buf_size = 1024 * 1024;
+	std::int32_t m_receive_buffer_capacity = 1024 * 1024;
 
 	// this holds the 3 last delay measurements,
 	// these are the actual corrected delay measurements.
@@ -872,7 +868,7 @@ int utp_stream::read_buffer_size() const
 
 void utp_stream::on_close_reason(void* self, close_reason_t reason)
 {
-	utp_stream* s = static_cast<utp_stream*>(self);
+	auto* s = static_cast<utp_stream*>(self);
 
 	// it's possible the socket has been unlinked already, in which case m_impl
 	// will be nullptr
@@ -883,7 +879,7 @@ void utp_stream::on_close_reason(void* self, close_reason_t reason)
 void utp_stream::on_read(void* self, std::size_t const bytes_transferred
 	, error_code const& ec, bool const shutdown)
 {
-	utp_stream* s = static_cast<utp_stream*>(self);
+	auto* s = static_cast<utp_stream*>(self);
 
 	UTP_LOGV("%8p: calling read handler read:%d ec:%s shutdown:%d\n", static_cast<void*>(s->m_impl)
 		, int(bytes_transferred), ec.message().c_str(), shutdown);
@@ -903,7 +899,7 @@ void utp_stream::on_read(void* self, std::size_t const bytes_transferred
 void utp_stream::on_write(void* self, std::size_t const bytes_transferred
 	, error_code const& ec, bool const shutdown)
 {
-	utp_stream* s = static_cast<utp_stream*>(self);
+	auto* s = static_cast<utp_stream*>(self);
 
 	UTP_LOGV("%8p: calling write handler written:%d ec:%s shutdown:%d\n"
 		, static_cast<void*>(s->m_impl)
@@ -921,9 +917,9 @@ void utp_stream::on_write(void* self, std::size_t const bytes_transferred
 	}
 }
 
-void utp_stream::on_connect(void* self, error_code const& ec, bool shutdown)
+void utp_stream::on_connect(void* self, error_code const& ec, bool const shutdown)
 {
-	utp_stream* s = static_cast<utp_stream*>(self);
+	auto* s = static_cast<utp_stream*>(self);
 	TORRENT_ASSERT(s);
 
 	UTP_LOGV("%8p: calling connect handler ec:%s shutdown:%d\n"
@@ -1127,7 +1123,7 @@ void utp_stream::issue_write()
 void utp_stream::do_connect(tcp::endpoint const& ep)
 {
 	int link_mtu, utp_mtu;
-	m_impl->m_sm.mtu_for_dest(ep.address(), link_mtu, utp_mtu);
+	std::tie(link_mtu, utp_mtu) = m_impl->m_sm.mtu_for_dest(ep.address());
 	m_impl->init_mtu(link_mtu, utp_mtu);
 	TORRENT_ASSERT(m_impl->m_connect_handler == false);
 	m_impl->m_remote_address = ep.address();
@@ -1310,7 +1306,7 @@ void utp_socket_impl::send_syn()
 	p->num_fast_resend = 0;
 #endif
 	p->need_resend = false;
-	utp_header* h = reinterpret_cast<utp_header*>(p->buf);
+	auto* h = reinterpret_cast<utp_header*>(p->buf);
 	h->type_ver = (ST_SYN << 4) | 1;
 	h->extension = utp_no_extension;
 	// using recv_id here is intentional! This is an odd
@@ -1645,7 +1641,7 @@ void utp_socket_impl::remove_sack_header(packet* p)
 
 	// remove the sack header
 	std::uint8_t* ptr = p->buf + sizeof(utp_header);
-	utp_header* h = reinterpret_cast<utp_header*>(p->buf);
+	auto* h = reinterpret_cast<utp_header*>(p->buf);
 
 	TORRENT_ASSERT(h->extension == utp_sack);
 
@@ -1706,17 +1702,6 @@ bool utp_socket_impl::send_pkt(int const flags)
 			m_fast_resend_seq_nr = (m_fast_resend_seq_nr + 1) & ACK_MASK;
 	}
 
-	int sack = 0;
-	if (m_inbuf.size())
-	{
-		// the SACK bitfield should ideally fit all
-		// the pieces we have successfully received
-		sack = (m_inbuf.span() + 7) / 8;
-		if (sack > 32) sack = 32;
-	}
-
-	std::uint32_t const close_reason = static_cast<std::uint32_t>(m_close_reason);
-
 	// MTU DISCOVERY
 
 	// under these conditions, the next packet we send should be an MTU probe.
@@ -1729,13 +1714,30 @@ bool utp_socket_impl::send_pkt(int const flags)
 		&& m_write_buffer_size >= m_mtu_floor * 3
 		&& m_seq_nr != 0
 		&& (m_cwnd >> 16) > m_mtu_floor * 3);
+	// for non MTU-probes, use the conservative packet size
+	int const effective_mtu = mtu_probe ? m_mtu : m_mtu_floor;
+
+	std::uint32_t const close_reason = static_cast<std::uint32_t>(m_close_reason);
+
+	int sack = 0;
+	if (m_inbuf.size())
+	{
+		const int max_sack_size = effective_mtu
+			- int(sizeof(utp_header))
+			- 2 // for sack padding/header
+			- (close_reason ? 6 : 0);
+
+		// the SACK bitfield should ideally fit all
+		// the pieces we have successfully received
+		sack = (m_inbuf.span() + 7) / 8;
+		if (sack > max_sack_size) sack = max_sack_size;
+	}
 
 	int const header_size = int(sizeof(utp_header))
 		+ (sack ? sack + 2 : 0)
 		+ (close_reason ? 6 : 0);
 
 	// for non MTU-probes, use the conservative packet size
-	int const effective_mtu = mtu_probe ? m_mtu : m_mtu_floor;
 	int payload_size = std::min(m_write_buffer_size
 		, effective_mtu - header_size);
 	TORRENT_ASSERT(payload_size >= 0);
@@ -1744,7 +1746,7 @@ bool utp_socket_impl::send_pkt(int const flags)
 	// congestion window and the advertised receive window from
 	// the other end.
 	if (m_bytes_in_flight + payload_size > std::min(int(m_cwnd >> 16)
-		, int(m_adv_wnd) - m_bytes_in_flight))
+		, int(m_adv_wnd)))
 	{
 		// this means there's not enough room in the send window for
 		// another packet. We have to hold off sending this data.
@@ -1791,8 +1793,6 @@ bool utp_socket_impl::send_pkt(int const flags)
 		return false;
 	}
 
-	int packet_size = header_size + payload_size;
-
 	packet_ptr p;
 	std::uint8_t* ptr = nullptr;
 	utp_header* h = nullptr;
@@ -1808,6 +1808,7 @@ bool utp_socket_impl::send_pkt(int const flags)
 			m_sm.inc_stats_counter(counters::utp_payload_pkts_out);
 		}
 
+		int const packet_size = header_size + payload_size;
 		p->size = std::uint16_t(packet_size);
 		p->header_size = std::uint16_t(packet_size - payload_size);
 		p->num_transmissions = 0;
@@ -1881,7 +1882,6 @@ bool utp_socket_impl::send_pkt(int const flags)
 			return false;
 		}
 
-		packet_size = p->size;
 		payload_size = p->size - p->header_size;
 	}
 
@@ -1934,7 +1934,8 @@ bool utp_socket_impl::send_pkt(int const flags)
 	}
 
 	h->timestamp_difference_microseconds = m_reply_micro;
-	h->wnd_size = aux::numeric_cast<std::uint32_t>(std::max(m_in_buf_size - m_buffered_incoming_bytes
+	h->wnd_size = static_cast<std::uint32_t>(std::max(
+		m_receive_buffer_capacity - m_buffered_incoming_bytes
 		- m_receive_buffer_size, 0));
 	h->ack_nr = m_ack_nr;
 
@@ -2112,7 +2113,7 @@ bool utp_socket_impl::resend_packet(packet* p, bool fast_resend)
 	// since we can't re-packetize, some packets that are
 	// larger than the congestion window must be allowed through
 	// but only if we don't have any outstanding bytes
-	int window_size_left = std::min(int(m_cwnd >> 16), int(m_adv_wnd)) - m_bytes_in_flight;
+	int const window_size_left = std::min(int(m_cwnd >> 16), int(m_adv_wnd)) - m_bytes_in_flight;
 	if (!fast_resend
 		&& p->size - p->header_size > window_size_left
 		&& m_bytes_in_flight > 0)
@@ -2135,7 +2136,7 @@ bool utp_socket_impl::resend_packet(packet* p, bool fast_resend)
 	if (fast_resend) ++p->num_fast_resend;
 #endif
 	p->need_resend = false;
-	utp_header* h = reinterpret_cast<utp_header*>(p->buf);
+	auto* h = reinterpret_cast<utp_header*>(p->buf);
 	// update packet header
 	h->timestamp_difference_microseconds = m_reply_micro;
 	p->send_time = clock_type::now();
@@ -2437,7 +2438,7 @@ bool utp_socket_impl::consume_incoming_data(
 	}
 
 	if (m_read_buffer_size == 0
-		&& m_receive_buffer_size >= m_in_buf_size - m_buffered_incoming_bytes)
+		&& m_receive_buffer_size >= m_receive_buffer_capacity - m_buffered_incoming_bytes)
 	{
 		// if we don't have a buffer from the upper layer, and the
 		// number of queued up bytes, waiting for the upper layer,
@@ -2445,7 +2446,7 @@ bool utp_socket_impl::consume_incoming_data(
 		// more data packets
 		UTP_LOG("%8p: ERROR: our advertized window is not honored. "
 			"recv_buf: %d buffered_in: %d max_size: %d\n"
-			, static_cast<void*>(this), m_receive_buffer_size, m_buffered_incoming_bytes, m_in_buf_size);
+			, static_cast<void*>(this), m_receive_buffer_size, m_buffered_incoming_bytes, m_receive_buffer_capacity);
 		return false;
 	}
 
@@ -2453,7 +2454,7 @@ bool utp_socket_impl::consume_incoming_data(
 	{
 		TORRENT_ASSERT(m_inbuf.at(m_ack_nr) == nullptr);
 
-		if (m_buffered_incoming_bytes + m_receive_buffer_size + payload_size > m_in_buf_size)
+		if (m_buffered_incoming_bytes + m_receive_buffer_size + payload_size > m_receive_buffer_capacity)
 		{
 			UTP_LOGV("%8p: other end is not honoring our advertised window, dropping packet\n"
 				, static_cast<void*>(this));
@@ -2512,7 +2513,7 @@ bool utp_socket_impl::consume_incoming_data(
 			return true;
 		}
 
-		if (m_buffered_incoming_bytes + m_receive_buffer_size + payload_size > m_in_buf_size)
+		if (m_buffered_incoming_bytes + m_receive_buffer_size + payload_size > m_receive_buffer_capacity)
 		{
 			UTP_LOGV("%8p: other end is not honoring our advertised window, dropping packet %d\n"
 				, static_cast<void*>(this), int(ph->seq_nr));
@@ -2569,7 +2570,7 @@ bool utp_socket_impl::test_socket_state()
 	return false;
 }
 
-void utp_socket_impl::init_mtu(int link_mtu, int utp_mtu)
+void utp_socket_impl::init_mtu(int const link_mtu, int utp_mtu)
 {
 	INVARIANT_CHECK;
 
@@ -2577,9 +2578,8 @@ void utp_socket_impl::init_mtu(int link_mtu, int utp_mtu)
 	{
 		// we can't use larger packets than this since we're
 		// not allocating any more memory for socket buffers
-		int decrease = link_mtu - TORRENT_ETHERNET_MTU;
+		int const decrease = link_mtu - TORRENT_ETHERNET_MTU;
 		utp_mtu -= decrease;
-		link_mtu -= decrease;
 	}
 
 	// set the ceiling to what we found out from the interface
@@ -2604,9 +2604,16 @@ bool utp_socket_impl::incoming_packet(span<std::uint8_t const> buf
 {
 	INVARIANT_CHECK;
 
-	utp_header const* ph = reinterpret_cast<utp_header const*>(buf.data());
-
+	auto const* ph = reinterpret_cast<utp_header const*>(buf.data());
 	m_sm.inc_stats_counter(counters::utp_packets_in);
+
+	if (buf.size() < sizeof(utp_header))
+	{
+		UTP_LOG("%8p: ERROR: incoming packet size too small:%d (ignored)\n"
+			, static_cast<void*>(this), int(buf.size()));
+		m_sm.inc_stats_counter(counters::utp_invalid_pkts_in);
+		return false;
+	}
 
 	if (ph->get_version() != 1)
 	{
@@ -2743,6 +2750,10 @@ bool utp_socket_impl::incoming_packet(span<std::uint8_t const> buf
 
 	if (ph->get_type() == ST_DATA)
 		m_sm.inc_stats_counter(counters::utp_payload_pkts_in);
+
+	// the number of packets that'll fit in the reorder buffer
+	std::uint32_t const max_packets_reorder
+		= static_cast<std::uint32_t>(std::max(16, m_receive_buffer_capacity / 1100));
 
 	if (m_state != UTP_STATE_NONE
 		&& m_state != UTP_STATE_SYN_SENT
@@ -3001,7 +3012,14 @@ bool utp_socket_impl::incoming_packet(span<std::uint8_t const> buf
 				UTP_LOGV("%8p: received ST_SYN state:%s seq_nr:%d ack_nr:%d\n"
 					, static_cast<void*>(this), socket_state_names[m_state], m_seq_nr, m_ack_nr);
 #endif
-				TORRENT_ASSERT(m_send_id == ph->connection_id);
+				if (m_send_id != ph->connection_id)
+				{
+#if TORRENT_UTP_LOG
+					UTP_LOGV("%8p: received invalid connection_id:%d expected: %d\n"
+						, static_cast<void*>(this), int(ph->connection_id), int(m_send_id));
+#endif
+					return false;
+				}
 				TORRENT_ASSERT(m_recv_id == ((m_send_id + 1) & 0xffff));
 
 				defer_ack();
@@ -3050,6 +3068,7 @@ bool utp_socket_impl::incoming_packet(span<std::uint8_t const> buf
 			}
 			BOOST_FALLTHROUGH;
 		}
+		// fall through
 		case UTP_STATE_CONNECTED:
 		{
 			// the lowest seen RTT can be used to clamp the delay
@@ -3343,14 +3362,14 @@ void utp_socket_impl::do_ledbat(const int acked_bytes, const int delay
 		m_sm.inc_stats_counter(counters::utp_samples_below_target);
 	}
 
-	std::int64_t linear_gain = (window_factor * delay_factor) >> 16;
-	linear_gain *= std::int64_t(m_sm.gain_factor());
+	std::int64_t const linear_gain = ((window_factor * delay_factor) >> 16)
+		* std::int64_t(m_sm.gain_factor());
 
 	// if the user is not saturating the link (i.e. not filling the
 	// congestion window), don't adjust it at all.
 	if (cwnd_saturated)
 	{
-		std::int64_t exponential_gain = std::int64_t(acked_bytes) * (1 << 16);
+		std::int64_t const exponential_gain = std::int64_t(acked_bytes) * (1 << 16);
 		if (m_slow_start)
 		{
 			// mimic TCP slow-start by adding the number of acked
@@ -3382,8 +3401,8 @@ void utp_socket_impl::do_ledbat(const int acked_bytes, const int delay
 	}
 
 	// make sure we don't wrap the cwnd
-	if (scaled_gain >= (std::numeric_limits<std::int64_t>::max)() - m_cwnd)
-		scaled_gain = (std::numeric_limits<std::int64_t>::max)() - m_cwnd - 1;
+	if (scaled_gain >= std::numeric_limits<std::int64_t>::max() - m_cwnd)
+		scaled_gain = std::numeric_limits<std::int64_t>::max() - m_cwnd - 1;
 
 	UTP_LOGV("%8p: do_ledbat delay:%d off_target: %d window_factor:%f target_factor:%f "
 		"scaled_gain:%f cwnd:%d slow_start:%d\n"
@@ -3405,7 +3424,7 @@ void utp_socket_impl::do_ledbat(const int acked_bytes, const int delay
 
 	TORRENT_ASSERT(m_cwnd >= 0);
 
-	int window_size_left = std::min(int(m_cwnd >> 16), int(m_adv_wnd)) - in_flight + acked_bytes;
+	int const window_size_left = std::min(int(m_cwnd >> 16), int(m_adv_wnd)) - in_flight + acked_bytes;
 	if (window_size_left >= m_mtu)
 	{
 		UTP_LOGV("%8p: mtu:%d in_flight:%d adv_wnd:%d cwnd:%d acked_bytes:%d cwnd_full -> 0\n"
@@ -3450,7 +3469,7 @@ int utp_socket_impl::packet_timeout() const
 	return timeout;
 }
 
-void utp_socket_impl::tick(time_point now)
+void utp_socket_impl::tick(time_point const now)
 {
 	INVARIANT_CHECK;
 

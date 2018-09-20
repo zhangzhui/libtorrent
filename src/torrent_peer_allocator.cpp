@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -37,23 +37,9 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	torrent_peer_allocator::torrent_peer_allocator()
-		: m_ipv4_peer_pool(sizeof(libtorrent::ipv4_peer), 500)
-#if TORRENT_USE_IPV6
-		, m_ipv6_peer_pool(sizeof(libtorrent::ipv6_peer), 500)
-#endif
-#if TORRENT_USE_I2P
-		, m_i2p_peer_pool(sizeof(libtorrent::i2p_peer), 500)
-#endif
-		, m_total_bytes(0)
-		, m_total_allocations(0)
-		, m_live_bytes(0)
-		, m_live_allocations(0)
-	{
-	}
-
 	torrent_peer* torrent_peer_allocator::allocate_peer_entry(int type)
 	{
+		TORRENT_ASSERT(m_in_use);
 		torrent_peer* p = nullptr;
 		switch(type)
 		{
@@ -66,7 +52,6 @@ namespace libtorrent {
 				++m_live_allocations;
 				++m_total_allocations;
 				break;
-#if TORRENT_USE_IPV6
 			case torrent_peer_allocator_interface::ipv6_peer_type:
 				p = static_cast<torrent_peer*>(m_ipv6_peer_pool.malloc());
 				if (p == nullptr) return nullptr;
@@ -76,7 +61,6 @@ namespace libtorrent {
 				++m_live_allocations;
 				++m_total_allocations;
 				break;
-#endif
 #if TORRENT_USE_I2P
 			case torrent_peer_allocator_interface::i2p_peer_type:
 				p = static_cast<torrent_peer*>(m_i2p_peer_pool.malloc());
@@ -94,7 +78,8 @@ namespace libtorrent {
 
 	void torrent_peer_allocator::free_peer_entry(torrent_peer* p)
 	{
-#if TORRENT_USE_IPV6
+		TORRENT_ASSERT(m_in_use);
+		TORRENT_ASSERT(p->in_use);
 		if (p->is_v6_addr)
 		{
 			TORRENT_ASSERT(m_ipv6_peer_pool.is_from(static_cast<libtorrent::ipv6_peer*>(p)));
@@ -106,7 +91,6 @@ namespace libtorrent {
 			--m_live_allocations;
 			return;
 		}
-#endif
 #if TORRENT_USE_I2P
 		if (p->is_i2p_addr)
 		{

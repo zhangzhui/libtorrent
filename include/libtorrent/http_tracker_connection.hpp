@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -33,26 +33,20 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef TORRENT_HTTP_TRACKER_CONNECTION_HPP_INCLUDED
 #define TORRENT_HTTP_TRACKER_CONNECTION_HPP_INCLUDED
 
-#include <string>
 #include <vector>
 #include <memory>
 
 #include "libtorrent/config.hpp"
-#include "libtorrent/lazy_entry.hpp"
 #include "libtorrent/peer_id.hpp"
-#include "libtorrent/tracker_manager.hpp"
-#include "libtorrent/i2p_stream.hpp"
 #include "libtorrent/error_code.hpp"
 
 namespace libtorrent {
 
+	class tracker_manager;
 	struct http_connection;
-	class entry;
 	class http_parser;
 	struct bdecode_node;
 	struct peer_entry;
-
-	namespace aux { struct session_settings; }
 
 	class TORRENT_EXTRA_EXPORT http_tracker_connection
 		: public tracker_connection
@@ -86,9 +80,6 @@ namespace libtorrent {
 
 		std::shared_ptr<http_connection> m_tracker_connection;
 		address m_tracker_ip;
-#if TORRENT_USE_I2P
-		i2p_connection* m_i2p_conn;
-#endif
 	};
 
 	TORRENT_EXTRA_EXPORT tracker_response parse_tracker_response(

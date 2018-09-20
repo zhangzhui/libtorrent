@@ -71,6 +71,7 @@ EXTRA_DIST = Jamfile \
   test_torrents/httpseed.torrent \
   test_torrents/invalid_file_size.torrent \
   test_torrents/invalid_info.torrent \
+  test_torrents/invalid_merkle.torrent \
   test_torrents/invalid_name.torrent \
   test_torrents/invalid_name2.torrent \
   test_torrents/invalid_name3.torrent \
@@ -110,6 +111,8 @@ EXTRA_DIST = Jamfile \
   test_torrents/url_seed_multi_space.torrent \
   test_torrents/url_seed_multi_space_nolist.torrent \
   test_torrents/whitespace_url.torrent \
+  test_torrents/invalid_filename.torrent \
+  test_torrents/invalid_filename2.torrent \
   mutable_test_torrents/test1.torrent \
   mutable_test_torrents/test1_pad_files.torrent \
   mutable_test_torrents/test1_single.torrent\
@@ -196,7 +199,8 @@ test_primitives_SOURCES = \
   test_fence.cpp \
   test_dos_blocker.cpp \
   test_upnp.cpp \
-  test_flags.cpp
+  test_flags.cpp \
+  test_generate_peer_id.cpp
 
 test_recheck_SOURCES = test_recheck.cpp
 test_stat_cache_SOURCES = test_stat_cache.cpp

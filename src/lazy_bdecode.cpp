@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2008-2016, Arvid Norberg
+Copyright (c) 2008-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -30,12 +30,14 @@ POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#ifndef TORRENT_NO_DEPRECATE
-
 #include "libtorrent/config.hpp"
+
+#if TORRENT_ABI_VERSION == 1
+
 #include "libtorrent/lazy_entry.hpp"
 #include "libtorrent/bdecode.hpp" // for error codes
 #include "libtorrent/string_util.hpp" // for is_digit
+#include <algorithm>
 #include <cstring> // for memset
 #include <limits> // for numeric_limits
 #include <cstdio> // for snprintf
@@ -80,7 +82,7 @@ namespace {
 
 	} // anonymous namespace
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 	int lazy_bdecode(char const* start, char const* end
 		, lazy_entry& ret, int depth_limit, int item_limit)
 	{
@@ -263,11 +265,10 @@ namespace {
 		}
 		else if (int(m_size) == this->capacity())
 		{
-			int const capacity = this->capacity() * lazy_entry_grow_factor / 100;
-			lazy_dict_entry* tmp = new (std::nothrow) lazy_dict_entry[capacity + 1];
+			std::size_t const capacity = std::size_t(this->capacity()) * lazy_entry_grow_factor / 100;
+			auto* tmp = new (std::nothrow) lazy_dict_entry[capacity + 1];
 			if (tmp == nullptr) return nullptr;
-			std::memcpy(tmp, m_data.dict, sizeof(lazy_dict_entry) * (m_size + 1));
-			for (int i = 0; i < int(m_size); ++i) m_data.dict[i + 1].val.release();
+			std::move(m_data.dict, m_data.dict + m_size + 1, tmp);
 
 			delete[] m_data.dict;
 			m_data.dict = tmp;
@@ -349,7 +350,7 @@ namespace {
 	pascal_string lazy_entry::dict_find_pstr(char const* name) const
 	{
 		lazy_entry const* e = dict_find(name);
-		if (e == nullptr || e->type() != lazy_entry::string_t) return pascal_string(nullptr, 0);
+		if (e == nullptr || e->type() != lazy_entry::string_t) return {nullptr, 0};
 		return e->string_pstr();
 	}
 
@@ -434,11 +435,10 @@ namespace {
 		}
 		else if (int(m_size) == this->capacity())
 		{
-			int const capacity = this->capacity() * lazy_entry_grow_factor / 100;
+			std::size_t const capacity = std::size_t(this->capacity()) * lazy_entry_grow_factor / 100;
 			lazy_entry* tmp = new (std::nothrow) lazy_entry[capacity + 1];
 			if (tmp == nullptr) return nullptr;
-			std::memcpy(tmp, m_data.list, sizeof(lazy_entry) * (m_size + 1));
-			for (int i = 0; i < int(m_size); ++i) m_data.list[i + 1].release();
+			std::move(m_data.list, m_data.list + m_size + 1, tmp);
 
 			delete[] m_data.list;
 			m_data.list = tmp;
@@ -459,7 +459,7 @@ namespace {
 	pascal_string lazy_entry::list_pstr_at(int i) const
 	{
 		lazy_entry const* e = list_at(i);
-		if (e == nullptr || e->type() != lazy_entry::string_t) return pascal_string(nullptr, 0);
+		if (e == nullptr || e->type() != lazy_entry::string_t) return {nullptr, 0};
 		return e->string_pstr();
 	}
 
@@ -489,8 +489,19 @@ namespace {
 
 	std::pair<char const*, int> lazy_entry::data_section() const
 	{
-		typedef std::pair<char const*, int> return_t;
-		return return_t(m_begin, m_len);
+		return {m_begin, m_len};
+	}
+
+	lazy_entry::lazy_entry(lazy_entry&& other)
+		: lazy_entry()
+	{
+		this->swap(other);
+	}
+
+	lazy_entry& lazy_entry::operator=(lazy_entry&& other)
+	{
+		this->swap(other);
+		return *this;
 	}
 
 	namespace {
@@ -664,4 +675,4 @@ namespace {
 	}
 }
 
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION

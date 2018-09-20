@@ -149,7 +149,7 @@ void test_transfer(lt::session& ses, std::shared_ptr<torrent_info> torrent_file
 
 	file_storage const& fs = torrent_file->files();
 	int pad_file_size = 0;
-	for (file_index_t i(0); i < fs.end_file(); ++i)
+	for (auto const i : fs.file_range())
 	{
 		if (fs.file_flags(i) & file_storage::flag_pad_file)
 			pad_file_size += int(fs.file_size(i));
@@ -216,22 +216,20 @@ void test_transfer(lt::session& ses, std::shared_ptr<torrent_info> torrent_file
 
 		if (st.is_seeding)
 		{
+			std::int64_t const total_blocks = (torrent_file->total_size() + 0x3fff) / 0x4000;
 			// we need to sleep here a bit to let the session sync with the torrent stats
 			// commented out because it takes such a long time
 			for (int i = 0; i < 50; ++i)
 			{
 				cnt = get_counters(ses);
-				if (cnt["disk.read_cache_blocks"]
-						== (torrent_file->total_size() + 0x3fff) / 0x4000
-					&& cnt["disk.disk_blocks_in_use"]
-						== (torrent_file->total_size() + 0x3fff) / 0x4000)
+				if (std::abs(int(cnt["disk.read_cache_blocks"] - total_blocks)) <= 2 &&
+					std::abs(int(cnt["disk.disk_blocks_in_use"] - total_blocks)) <= 2)
 					break;
 				std::printf("cache_size: %d/%d\n", int(cnt["disk.read_cache_blocks"])
 					, int(cnt["disk.disk_blocks_in_use"]));
 				std::this_thread::sleep_for(lt::milliseconds(100));
 			}
-			TEST_CHECK(std::abs(int(cnt["disk.disk_blocks_in_use"]
-				- (torrent_file->total_size() + 0x3fff) / 0x4000)) <= 2);
+			TEST_CHECK(std::abs(int(cnt["disk.disk_blocks_in_use"] - total_blocks)) <= 2);
 		}
 	}
 
@@ -258,7 +256,7 @@ void test_transfer(lt::session& ses, std::shared_ptr<torrent_info> torrent_file
 
 	if (!test_ban)
 	{
-		for (file_index_t i(0); i < fs.end_file(); ++i)
+		for (auto const i : fs.file_range())
 		{
 			bool const expect = !fs.pad_file_at(i);
 			std::string file_path = combine_path(save_path, fs.file_path(i));
@@ -394,8 +392,11 @@ int EXPORT run_http_suite(int proxy, char const* protocol, bool test_url_seed
 
 		{
 			auto const mask = alert::all_categories
-				& ~(alert::progress_notification
-					| alert::performance_warning
+				& ~(
+					alert::performance_warning
+#if TORRENT_ABI_VERSION == 1
+					| alert::progress_notification
+#endif
 					| alert::stats_notification);
 
 			settings_pack pack;

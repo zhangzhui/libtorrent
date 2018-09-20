@@ -39,6 +39,8 @@ POSSIBILITY OF SUCH DAMAGE.
 
 using namespace lt;
 
+namespace {
+
 void setup_test_storage(file_storage& st)
 {
 	st.add_file(combine_path("test", "a"), 10000);
@@ -75,6 +77,8 @@ void setup_test_storage(file_storage& st)
 	std::printf("%d\n", st.num_pieces());
 	TEST_EQUAL(st.num_pieces(), (100000 + 0x3fff) / 0x4000);
 }
+
+} // anonymous namespace
 
 TORRENT_TEST(coalesce_path)
 {
@@ -183,6 +187,7 @@ TORRENT_TEST(pointer_offset)
 	// test filename_ptr and filename_len
 	TEST_EQUAL(st.file_name_ptr(file_index_t{0}), filename);
 	TEST_EQUAL(st.file_name_len(file_index_t{0}), 5);
+	TEST_EQUAL(st.file_name(file_index_t{0}), string_view(filename, 5));
 
 	TEST_EQUAL(st.file_path(file_index_t{0}, ""), combine_path("test-torrent-1", "test1"));
 	TEST_EQUAL(st.file_path(file_index_t{0}, "tmp"), combine_path("tmp"
@@ -200,6 +205,32 @@ TORRENT_TEST(pointer_offset)
 	// test filename_ptr and filename_len
 	TEST_EQUAL(st.file_name_ptr(file_index_t{0}), filename + 5);
 	TEST_EQUAL(st.file_name_len(file_index_t{0}), 5);
+}
+
+TORRENT_TEST(invalid_path1)
+{
+	file_storage st;
+#ifdef TORRENT_WINDOWS
+	st.add_file_borrow({}, R"(+\\\()", 10);
+#else
+	st.add_file_borrow({}, "+///(", 10);
+#endif
+
+	TEST_EQUAL(st.file_name(file_index_t{0}), "(");
+	TEST_EQUAL(st.file_path(file_index_t{0}, ""), combine_path("+", "("));
+}
+
+TORRENT_TEST(invalid_path2)
+{
+	file_storage st;
+#ifdef TORRENT_WINDOWS
+	st.add_file_borrow({}, R"(+\\\+\\()", 10);
+#else
+	st.add_file_borrow({}, "+///+//(", 10);
+#endif
+
+	TEST_EQUAL(st.file_name(file_index_t{0}), "(");
+	TEST_EQUAL(st.file_path(file_index_t{0}, ""), combine_path("+", combine_path("+", "(")));
 }
 
 TORRENT_TEST(map_file)
@@ -399,6 +430,8 @@ TORRENT_TEST(piece_range)
 	TEST_CHECK(aux::file_piece_range_exclusive(fs, file_index_t(1)) == std::make_tuple(piece_index_t(3), piece_index_t(7)));
 }
 
+namespace {
+
 void test_optimize(std::vector<int> file_sizes
 	, int const alignment
 	, int const pad_file_limit
@@ -416,15 +449,16 @@ void test_optimize(std::vector<int> file_sizes
 	TEST_EQUAL(fs.num_files(), int(expected_order.size()));
 	if (fs.num_files() != int(expected_order.size())) return;
 
-	file_index_t idx{0};
-	int num_pad_files = 0;
 	std::cout << "{ ";
-	for (file_index_t i{0}; i != fs.end_file(); ++i)
+	for (auto const idx : fs.file_range())
 	{
-		if (fs.file_flags(i) & file_storage::flag_pad_file) std::cout << "*";
-		std::cout << fs.file_size(i) << " ";
+		if (fs.file_flags(idx) & file_storage::flag_pad_file) std::cout << "*";
+		std::cout << fs.file_size(idx) << " ";
 	}
 	std::cout << "}\n";
+
+	file_index_t idx{0};
+	int num_pad_files = 0;
 	for (int expect : expected_order)
 	{
 		if (expect == -1)
@@ -435,11 +469,13 @@ void test_optimize(std::vector<int> file_sizes
 		else
 		{
 			TEST_EQUAL(fs.file_name(idx), std::to_string(expect));
-			TEST_EQUAL(fs.file_size(idx), file_sizes[expect]);
+			TEST_EQUAL(fs.file_size(idx), file_sizes[std::size_t(expect)]);
 		}
 		++idx;
 	}
 }
+
+} // anonymous namespace
 
 TORRENT_TEST(optimize_order_large_first)
 {
@@ -591,4 +627,3 @@ TORRENT_TEST(map_block_mid)
 // TODO: test file attributes
 // TODO: test symlinks
 // TODO: test reorder_file (make sure internal_file_entry::swap() is used)
-

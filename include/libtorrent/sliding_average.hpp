@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2010-2016, Arvid Norberg
+Copyright (c) 2010-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -81,35 +81,6 @@ private:
 	// the number of samples we have received, but no more than inverted_gain
 	// this is the effective inverted_gain
 	int m_num_samples = 0;
-};
-
-struct average_accumulator
-{
-	average_accumulator() {}
-
-	void add_sample(std::int64_t s)
-	{
-		++m_num_samples;
-		m_sample_sum += s;
-	}
-
-	int mean()
-	{
-		int ret;
-		if (m_num_samples == 0) ret = 0;
-		else ret = int(m_sample_sum / m_num_samples);
-		// in case we don't get any more samples, at least
-		// let the average roll over, but only be worth a
-		// single sample
-		m_num_samples = 1;
-		m_sample_sum = ret;
-		return ret;
-	}
-
-private:
-
-	int m_num_samples = 0;
-	std::int64_t m_sample_sum = 0;
 };
 
 }

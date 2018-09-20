@@ -39,6 +39,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/hex.hpp" // to_hex
 #include "libtorrent/aux_/path.hpp"
 
+namespace {
+
 enum flags_t
 {
 	seed_mode = 1,
@@ -69,10 +71,9 @@ void test_read_piece(int flags)
 	std::srand(10);
 	int piece_size = 0x4000;
 
-	static const int file_sizes[] = { 100000, 10000 };
+	static std::array<const int, 2> const file_sizes{{ 100000, 10000 }};
 
-	create_random_files(combine_path("tmp1_read_piece", "test_torrent")
-		, file_sizes, 2);
+	create_random_files(combine_path("tmp1_read_piece", "test_torrent"), file_sizes);
 
 	add_files(fs, combine_path("tmp1_read_piece", "test_torrent"));
 	lt::create_torrent t(fs, piece_size, 0x4000);
@@ -89,9 +90,11 @@ void test_read_piece(int flags)
 	std::printf("generated torrent: %s tmp1_read_piece/test_torrent\n"
 		, aux::to_hex(ti->info_hash()).c_str());
 
-	auto const mask = alert::all_categories
-		& ~(alert::progress_notification
-			| alert::performance_warning
+	auto const mask = ~(
+			alert::performance_warning
+#if TORRENT_ABI_VERSION == 1
+			| alert::progress_notification
+#endif
 			| alert::stats_notification);
 
 	settings_pack sett;
@@ -149,6 +152,8 @@ void test_read_piece(int flags)
 		, ec.value(), ec.message().c_str());
 }
 
+} // anonymous namespace
+
 TORRENT_TEST(read_piece)
 {
 	test_read_piece(0);
@@ -163,4 +168,3 @@ TORRENT_TEST(time_critical)
 {
 	test_read_piece(time_critical);
 }
-

@@ -43,6 +43,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <functional>
 
 #include "test.hpp"
+#include "test_utils.hpp"
 #include "setup_transfer.hpp"
 #include "settings.hpp"
 #include <fstream>
@@ -50,6 +51,8 @@ POSSIBILITY OF SUCH DAMAGE.
 
 using namespace lt;
 using std::ignore;
+
+namespace {
 
 alert_category_t const mask = alert::all_categories & ~(alert::performance_warning | alert::stats_notification);
 
@@ -81,7 +84,7 @@ void test_transfer(settings_pack const& sett, bool test_deprecated = false)
 
 	cleanup();
 
-	settings_pack pack = sett;
+	lt::settings_pack pack = sett;
 
 	// we need a short reconnect time since we
 	// finish the torrent and then restart it
@@ -106,6 +109,9 @@ void test_transfer(settings_pack const& sett, bool test_deprecated = false)
 
 	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:48075");
 	pack.set_int(settings_pack::alert_mask, mask);
+#if TORRENT_ABI_VERSION == 1
+	pack.set_bool(settings_pack::rate_limit_utp, true);
+#endif
 
 	lt::session ses1(pack);
 
@@ -123,7 +129,7 @@ void test_transfer(settings_pack const& sett, bool test_deprecated = false)
 	file.close();
 
 	wait_for_listen(ses1, "ses1");
-	wait_for_listen(ses2, "ses1");
+	wait_for_listen(ses2, "ses2");
 
 	peer_disconnects = 0;
 
@@ -132,12 +138,12 @@ void test_transfer(settings_pack const& sett, bool test_deprecated = false)
 		, true, false, true, "_priority", 8 * 1024, &t, false, nullptr);
 
 	int const num_pieces = tor2.torrent_file()->num_pieces();
-	aux::vector<int, piece_index_t> priorities(num_pieces, 1);
+	aux::vector<download_priority_t, piece_index_t> priorities(std::size_t(num_pieces), 1_pri);
 	// set half of the pieces to priority 0
-	std::fill(priorities.begin(), priorities.begin() + (num_pieces / 2), 0);
+	std::fill(priorities.begin(), priorities.begin() + (num_pieces / 2), 0_pri);
 	tor2.prioritize_pieces(priorities);
 	std::cout << "setting priorities: ";
-	std::copy(priorities.begin(), priorities.end(), std::ostream_iterator<int>(std::cout, ", "));
+	std::copy(priorities.begin(), priorities.end(), std::ostream_iterator<download_priority_t>(std::cout, ", "));
 	std::cout << std::endl;
 
 	for (int i = 0; i < 200; ++i)
@@ -165,6 +171,7 @@ void test_transfer(settings_pack const& sett, bool test_deprecated = false)
 		}
 
 		TEST_CHECK(st1.state == torrent_status::seeding
+			|| st1.state == torrent_status::checking_resume_data
 			|| st1.state == torrent_status::checking_files);
 		TEST_CHECK(st2.state == torrent_status::downloading
 			|| st2.state == torrent_status::checking_resume_data);
@@ -184,16 +191,18 @@ void test_transfer(settings_pack const& sett, bool test_deprecated = false)
 		std::cout << "torrent is finished (50% complete)" << std::endl;
 	else return;
 
-	std::vector<int> priorities2 = tor2.piece_priorities();
-	std::copy(priorities2.begin(), priorities2.end(), std::ostream_iterator<int>(std::cout, ", "));
+	std::vector<download_priority_t> priorities2 = tor2.get_piece_priorities();
+	std::copy(priorities2.begin(), priorities2.end()
+		, std::ostream_iterator<download_priority_t>(std::cout, ", "));
 	std::cout << std::endl;
 	TEST_CHECK(std::equal(priorities.begin(), priorities.end(), priorities2.begin()));
 
 	std::cout << "force recheck" << std::endl;
 	tor2.force_recheck();
 
-	priorities2 = tor2.piece_priorities();
-	std::copy(priorities2.begin(), priorities2.end(), std::ostream_iterator<int>(std::cout, ", "));
+	priorities2 = tor2.get_piece_priorities();
+	std::copy(priorities2.begin(), priorities2.end()
+		, std::ostream_iterator<download_priority_t>(std::cout, ", "));
 	std::cout << std::endl;
 	TEST_CHECK(std::equal(priorities.begin(), priorities.end(), priorities2.begin()));
 
@@ -224,8 +233,8 @@ void test_transfer(settings_pack const& sett, bool test_deprecated = false)
 
 	std::cout << "recheck complete" << std::endl;
 
-	priorities2 = tor2.piece_priorities();
-	std::copy(priorities2.begin(), priorities2.end(), std::ostream_iterator<int>(std::cout, ", "));
+	priorities2 = tor2.get_piece_priorities();
+	std::copy(priorities2.begin(), priorities2.end(), std::ostream_iterator<download_priority_t>(std::cout, ", "));
 	std::cout << std::endl;
 	TEST_CHECK(std::equal(priorities.begin(), priorities.end(), priorities2.begin()));
 
@@ -280,7 +289,8 @@ done:
 
 	std::cout << "re-adding" << std::endl;
 	add_torrent_params p;
-#ifndef TORRENT_NO_DEPRECATE
+	TORRENT_UNUSED(test_deprecated);
+#if TORRENT_ABI_VERSION == 1
 	if (test_deprecated)
 	{
 		p.resume_data = resume_data;
@@ -288,9 +298,9 @@ done:
 	else
 #endif
 	{
-		error_code ec;
-		p = read_resume_data(resume_data, ec);
-		TEST_CHECK(!ec);
+		error_code ec1;
+		p = read_resume_data(resume_data, ec1);
+		TEST_CHECK(!ec1);
 	}
 	p.flags &= ~torrent_flags::paused;
 	p.flags &= ~torrent_flags::auto_managed;
@@ -325,12 +335,13 @@ done:
 	TEST_CHECK(!st2.is_seeding);
 	TEST_CHECK(st2.is_finished);
 
-	std::fill(priorities.begin(), priorities.end(), 1);
+	std::fill(priorities.begin(), priorities.end(), 1_pri);
 	tor2.prioritize_pieces(priorities);
 	std::cout << "setting priorities to 1" << std::endl;
 	TEST_EQUAL(tor2.status().is_finished, false);
 
-	std::copy(priorities.begin(), priorities.end(), std::ostream_iterator<int>(std::cout, ", "));
+	std::copy(priorities.begin(), priorities.end()
+		, std::ostream_iterator<download_priority_t>(std::cout, ", "));
 	std::cout << std::endl;
 
 	// drain alerts
@@ -378,6 +389,8 @@ done:
 	sp.push_back(ses2.abort());
 }
 
+} // anonymous namespace
+
 TORRENT_TEST(priority)
 {
 	using namespace lt;
@@ -386,7 +399,7 @@ TORRENT_TEST(priority)
 	cleanup();
 }
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 TORRENT_TEST(priority_deprecated)
 {
 	using namespace lt;
@@ -398,10 +411,9 @@ TORRENT_TEST(priority_deprecated)
 
 // test to set piece and file priority on a torrent that doesn't have metadata
 // yet
-TORRENT_TEST(no_metadata_file_prio)
+TORRENT_TEST(no_metadata_prioritize_files)
 {
-	settings_pack pack = settings();
-	lt::session ses(pack);
+	lt::session ses(settings());
 
 	add_torrent_params addp;
 	addp.flags &= ~torrent_flags::paused;
@@ -410,18 +422,47 @@ TORRENT_TEST(no_metadata_file_prio)
 	addp.save_path = ".";
 	torrent_handle h = ses.add_torrent(addp);
 
-	h.file_priority(file_index_t(0), 0);
-	TEST_EQUAL(h.file_priority(file_index_t(0)), 0);
-	h.file_priority(file_index_t(0), 1);
-	TEST_EQUAL(h.file_priority(file_index_t(0)), 1);
+	std::vector<lt::download_priority_t> prios(3);
+	prios[0] = lt::dont_download;
+
+	h.prioritize_files(prios);
+	// TODO 2: this should wait for an alert instead of just sleeping
+	std::this_thread::sleep_for(lt::milliseconds(100));
+	TEST_CHECK(h.get_file_priorities() == prios);
+
+	prios[0] = lt::low_priority;
+	h.prioritize_files(prios);
+	std::this_thread::sleep_for(lt::milliseconds(100));
+	TEST_CHECK(h.get_file_priorities() == prios);
+
+	ses.remove_torrent(h);
+}
+
+TORRENT_TEST(no_metadata_file_prio)
+{
+	lt::session ses(settings());
+
+	add_torrent_params addp;
+	addp.flags &= ~torrent_flags::paused;
+	addp.flags &= ~torrent_flags::auto_managed;
+	addp.info_hash = sha1_hash("abababababababababab");
+	addp.save_path = ".";
+	torrent_handle h = ses.add_torrent(addp);
+
+	h.file_priority(file_index_t(0), 0_pri);
+	// TODO 2: this should wait for an alert instead of just sleeping
+	std::this_thread::sleep_for(lt::milliseconds(100));
+	TEST_EQUAL(h.file_priority(file_index_t(0)), 0_pri);
+	h.file_priority(file_index_t(0), 1_pri);
+	std::this_thread::sleep_for(lt::milliseconds(100));
+	TEST_EQUAL(h.file_priority(file_index_t(0)), 1_pri);
 
 	ses.remove_torrent(h);
 }
 
 TORRENT_TEST(no_metadata_piece_prio)
 {
-	settings_pack pack = settings();
-	lt::session ses(pack);
+	lt::session ses(settings());
 
 	add_torrent_params addp;
 	addp.flags &= ~torrent_flags::paused;
@@ -431,10 +472,100 @@ TORRENT_TEST(no_metadata_piece_prio)
 	torrent_handle h = ses.add_torrent(addp);
 
 	// you can't set piece priorities before the metadata has been downloaded
-	h.piece_priority(piece_index_t(2), 0);
-	TEST_EQUAL(h.piece_priority(piece_index_t(2)), 4);
-	h.piece_priority(piece_index_t(2), 1);
-	TEST_EQUAL(h.piece_priority(piece_index_t(2)), 4);
+	h.piece_priority(piece_index_t(2), 0_pri);
+	TEST_EQUAL(h.piece_priority(piece_index_t(2)), 4_pri);
+	h.piece_priority(piece_index_t(2), 1_pri);
+	TEST_EQUAL(h.piece_priority(piece_index_t(2)), 4_pri);
 
 	ses.remove_torrent(h);
+}
+
+TORRENT_TEST(export_file_while_seed)
+{
+	settings_pack pack = settings();
+	lt::session ses(pack);
+
+	error_code ec;
+	create_directory("tmp2_priority", ec);
+	std::ofstream file("tmp2_priority/temporary");
+	auto t = ::create_torrent(&file, "temporary", 16 * 1024, 13, false);
+	file.close();
+
+	add_torrent_params addp;
+	addp.flags &= ~torrent_flags::paused;
+	addp.flags &= ~torrent_flags::auto_managed;
+	addp.save_path = ".";
+	addp.ti = t;
+	torrent_handle h = ses.add_torrent(addp);
+
+	// write to the partfile
+	h.file_priority(file_index_t{0}, lt::dont_download);
+
+	std::vector<char> piece(16 * 1024);
+	for (int i = 0; i < int(piece.size()); ++i)
+		piece[std::size_t(i)] = char((i % 26) + 'A');
+
+	for (piece_index_t i : t->piece_range())
+		h.add_piece(i, piece.data());
+
+	TEST_CHECK(!exists("temporary"));
+
+	for (int i = 0; i < 10; ++i)
+	{
+		if (h.status().is_seeding) break;
+		std::this_thread::sleep_for(lt::milliseconds(100));
+	}
+	TEST_EQUAL(h.status().is_seeding, true);
+
+	// this should cause the file to be exported
+	h.file_priority(file_index_t{0}, lt::low_priority);
+
+	for (int i = 0; i < 10; ++i)
+	{
+		if (h.file_priority(file_index_t{0}) == lt::low_priority) break;
+		std::this_thread::sleep_for(lt::milliseconds(100));
+	}
+
+	TEST_CHECK(exists("temporary"));
+}
+
+TORRENT_TEST(test_piece_priority_after_resume)
+{
+	auto const new_prio = lt::low_priority;
+
+	add_torrent_params p;
+	auto ti = generate_torrent();
+	{
+		auto const prio = top_priority;
+
+		p.save_path = ".";
+		p.ti = ti;
+		p.file_priorities.resize(1, prio);
+
+		lt::session ses(settings());
+		torrent_handle h = ses.add_torrent(p);
+
+		TEST_EQUAL(h.piece_priority(piece_index_t{0}), prio);
+
+		using prio_vec = std::vector<std::pair<lt::piece_index_t, lt::download_priority_t>>;
+		h.prioritize_pieces(prio_vec{{piece_index_t{0}, new_prio}});
+		TEST_EQUAL(h.piece_priority(piece_index_t{0}), new_prio);
+
+		ses.pause();
+		h.save_resume_data();
+
+		alert const* a = wait_for_alert(ses, save_resume_data_alert::alert_type);
+		save_resume_data_alert const* rd = alert_cast<save_resume_data_alert>(a);
+
+		p = rd->params;
+	}
+	{
+		p.save_path = ".";
+		p.ti = ti;
+
+		lt::session ses(settings());
+		torrent_handle h = ses.add_torrent(p);
+
+		TEST_EQUAL(h.piece_priority(piece_index_t{0}), new_prio);
+	}
 }

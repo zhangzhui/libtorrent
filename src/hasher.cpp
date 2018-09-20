@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -75,7 +75,7 @@ namespace libtorrent {
 		gcry_md_copy(&m_context, h.m_context);
 	}
 
-	hasher& hasher::operator=(hasher const& h)
+	hasher& hasher::operator=(hasher const& h) &
 	{
 		if (this == &h) return;
 		gcry_md_close(m_context);
@@ -84,7 +84,7 @@ namespace libtorrent {
 	}
 #else
 	hasher::hasher(hasher const&) = default;
-	hasher& hasher::operator=(hasher const&) = default;
+	hasher& hasher::operator=(hasher const&) & = default;
 #endif
 
 	hasher& hasher::update(char const* data, int len)
@@ -114,7 +114,7 @@ namespace libtorrent {
 		sha1_hash digest;
 #ifdef TORRENT_USE_LIBGCRYPT
 		gcry_md_final(m_context);
-		digest.assign((char const*)gcry_md_read(m_context, 0));
+		digest.assign(reinterpret_cast<char const*>(gcry_md_read(m_context, 0)));
 #elif TORRENT_USE_COMMONCRYPTO
 		CC_SHA1_Final(reinterpret_cast<unsigned char*>(digest.data()), &m_context);
 #elif TORRENT_USE_CRYPTOAPI

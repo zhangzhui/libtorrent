@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2006-2016, Arvid Norberg
+Copyright (c) 2006-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,6 +34,9 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_EXTENSIONS_HPP_INCLUDED
 
 #include "libtorrent/units.hpp"
+#include "libtorrent/flags.hpp"
+#include "libtorrent/peer_info.hpp" // for peer_source_flags_t
+#include "libtorrent/torrent_status.hpp" // for torrent_status::state_t
 
 // OVERVIEW
 //
@@ -64,11 +67,12 @@ POSSIBILITY OF SUCH DAMAGE.
 // All the callbacks are always called from the libtorrent network thread. In
 // case portions of your plugin are called from other threads, typically the main
 // thread, you cannot use any of the member functions on the internal structures
-// in libtorrent, since those require the mutex to be locked. Furthermore, you would
-// also need to have a mutex on your own shared data within the plugin, to make
-// sure it is not accessed at the same time from the libtorrent thread (through a
-// callback). If you need to send out a message from another thread, it is
-// advised to use an internal queue, and do the actual sending in ``tick()``.
+// in libtorrent, since those require being called from the libtorrent network
+// thread . Furthermore, you also need to synchronize your own shared data
+// within the plugin, to make sure it is not accessed at the same time from the
+// libtorrent thread (through a callback). If you need to send out a message
+// from another thread, it is advised to use an internal queue, and do the
+// actual sending in ``tick()``.
 //
 // Since the plugin interface gives you easy access to internal structures, it
 // is not supported as a stable API. Plugins should be considered specific to a
@@ -125,8 +129,8 @@ POSSIBILITY OF SUCH DAMAGE.
 //
 // 	virtual std::string message() const;
 //
-// 	static const int static_category = *<bitmask of alert::category_t flags>*;
-// 	virtual int category() const { return static_category; }
+// 	static const alert_category_t static_category = *<bitmask of alert::category_t flags>*;
+// 	virtual alert_category_t category() const { return static_category; }
 //
 // 	virtual char const* what() const { return *<string literal of the name of this alert>*; }
 //
@@ -156,12 +160,10 @@ POSSIBILITY OF SUCH DAMAGE.
 //
 // .. _`alert section`: reference-Alerts.html
 
-
-#ifndef TORRENT_DISABLE_EXTENSIONS
-
 #include <vector>
 
 #include "libtorrent/config.hpp"
+#include "libtorrent/fwd.hpp"
 #include "libtorrent/span.hpp"
 #include "libtorrent/sha1_hash.hpp"
 #include "libtorrent/string_view.hpp"
@@ -170,17 +172,11 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	struct peer_plugin;
-	struct peer_request;
-	class entry;
-	struct bdecode_node;
-	struct bitfield;
-	class alert;
-	struct torrent_plugin;
-	struct add_torrent_params;
-	struct torrent_handle;
-	struct session_handle;
-	struct peer_connection_handle;
+#ifndef TORRENT_DISABLE_EXTENSIONS
+
+	// these are flags that can be returned by implemented_features()
+	// indicating which callbacks this plugin is interested in
+	using feature_flags_t = flags::bitfield_flag<std::uint8_t, struct feature_flags_tag>;
 
 	// this is the base class for a session plugin. One primary feature
 	// is that it is notified of all torrents that are added to the session,
@@ -190,26 +186,21 @@ namespace libtorrent {
 		// hidden
 		virtual ~plugin() {}
 
-		// these are flags that can be returned by implemented_features()
-		// indicating which callbacks this plugin is interested in
-		enum feature_flags_t
-		{
-			// include this bit if your plugin needs to alter the order of the
-			// optimistic unchoke of peers. i.e. have the on_optimistic_unchoke()
-			// callback be called.
-			optimistic_unchoke_feature = 1,
+		// include this bit if your plugin needs to alter the order of the
+		// optimistic unchoke of peers. i.e. have the on_optimistic_unchoke()
+		// callback be called.
+		static constexpr feature_flags_t optimistic_unchoke_feature = 1_bit;
 
-			// include this bit if your plugin needs to have on_tick() called
-			tick_feature = 2,
+		// include this bit if your plugin needs to have on_tick() called
+		static constexpr feature_flags_t tick_feature = 2_bit;
 
-			// include this bit if your plugin needs to have on_dht_request()
-			// called
-			dht_request_feature = 4,
+		// include this bit if your plugin needs to have on_dht_request()
+		// called
+		static constexpr feature_flags_t dht_request_feature = 3_bit;
 
-			// include this bit if your plugin needs to have on_alert()
-			// called
-			alert_feature = 8,
-		};
+		// include this bit if your plugin needs to have on_alert()
+		// called
+		static constexpr feature_flags_t alert_feature = 4_bit;
 
 		// This function is expected to return a bitmask indicating which features
 		// this plugin implements. Some callbacks on this object may not be called
@@ -217,7 +208,7 @@ namespace libtorrent {
 		// callbacks may still be called even if the corresponding feature is not
 		// specified in the return value here. See feature_flags_t for possible
 		// flags to return.
-		virtual std::uint32_t implemented_features() { return 0; }
+		virtual feature_flags_t implemented_features() { return {}; }
 
 		// this is called by the session every time a new torrent is added.
 		// The ``torrent*`` points to the internal torrent object created
@@ -265,7 +256,7 @@ namespace libtorrent {
 		// If multiple plugins implement this function the lowest return value
 		// (i.e. the highest priority) is used.
 		virtual uint64_t get_unchoke_priority(peer_connection_handle const& /* peer */)
-		{ return std::numeric_limits<uint64_t>::max(); }
+		{ return (std::numeric_limits<uint64_t>::max)(); }
 
 		// called when saving settings state
 		virtual void save_state(entry&) {}
@@ -273,6 +264,8 @@ namespace libtorrent {
 		// called when loading settings state
 		virtual void load_state(bdecode_node const&) {}
 	};
+
+	using add_peer_flags_t = flags::bitfield_flag<std::uint8_t, struct add_peer_flags_tag>;
 
 	// Torrent plugins are associated with a single torrent and have a number
 	// of functions called at certain events. Many of its functions have the
@@ -304,8 +297,8 @@ namespace libtorrent {
 		// check, respectively. The ``index`` is the piece index that was downloaded.
 		// It is possible to access the list of peers that participated in sending the
 		// piece through the ``torrent`` and the ``piece_picker``.
-		virtual void on_piece_pass(piece_index_t /*index*/) {}
-		virtual void on_piece_failed(piece_index_t /*index*/) {}
+		virtual void on_piece_pass(piece_index_t) {}
+		virtual void on_piece_failed(piece_index_t) {}
 
 		// This hook is called approximately once per second. It is a way of making it
 		// easy for plugins to do timed events, for sending messages or whatever.
@@ -335,19 +328,18 @@ namespace libtorrent {
 		// called when the torrent changes state
 		// the state is one of torrent_status::state_t
 		// enum members
-		virtual void on_state(int /*s*/) {}
+		virtual void on_state(torrent_status::state_t) {}
 
 		// called every time policy::add_peer is called
 		// src is a bitmask of which sources this peer
 		// has been seen from. flags is a bitmask of:
 
-		enum flags_t {
-			// this is the first time we see this peer
-			first_time = 1,
-			// this peer was not added because it was
-			// filtered by the IP filter
-			filtered = 2
-		};
+		// this is the first time we see this peer
+		static constexpr add_peer_flags_t first_time = 1_bit;
+
+		// this peer was not added because it was
+		// filtered by the IP filter
+		static constexpr add_peer_flags_t filtered = 2_bit;
 
 		// called every time a new peer is added to the peer list.
 		// This is before the peer is connected to. For ``flags``, see
@@ -356,7 +348,7 @@ namespace libtorrent {
 		// bitmask, because many sources may have told us about the same
 		// peer. For peer source flags, see peer_info::peer_source_flags.
 		virtual void on_add_peer(tcp::endpoint const&,
-			int /*src*/, int /*flags*/) {}
+			peer_source_flags_t, add_peer_flags_t) {}
 	};
 
 	// peer plugins are associated with a specific peer. A peer could be
@@ -379,7 +371,7 @@ namespace libtorrent {
 		virtual void add_handshake(entry&) {}
 
 		// called when the peer is being disconnected.
-		virtual void on_disconnect(error_code const& /*ec*/) {}
+		virtual void on_disconnect(error_code const&) {}
 
 		// called when the peer is successfully connected. Note that
 		// incoming connections will have been connected by the time
@@ -394,7 +386,7 @@ namespace libtorrent {
 		// Returning false means that the other end doesn't support this extension
 		// and will remove it from the list of plugins. this is not called for web
 		// seeds
-		virtual bool on_handshake(span<char const> /*reserved_bits*/) { return true; }
+		virtual bool on_handshake(span<char const>) { return true; }
 
 		// called when the extension handshake from the other end is received
 		// if this returns false, it means that this extension isn't
@@ -476,6 +468,9 @@ namespace libtorrent {
 		// no other plugin will have this function called.
 		virtual bool write_request(peer_request const&) { return false; }
 	};
+#endif // TORRENT_DISABLE_EXTENSIONS
+
+#if !defined TORRENT_DISABLE_ENCRYPTION
 
 	struct TORRENT_EXPORT crypto_plugin
 	{
@@ -511,8 +506,8 @@ namespace libtorrent {
 		// advance the next step of decryption. default is 0
 		virtual std::tuple<int, int, int> decrypt(span<span<char>> /*receive_vec*/) = 0;
 	};
-}
 
-#endif
+#endif // TORRENT_DISABLE_ENCRYPTION
+}
 
 #endif // TORRENT_EXTENSIONS_HPP_INCLUDED

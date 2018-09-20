@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -43,6 +43,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
 #include "libtorrent/config.hpp"
+#include "libtorrent/fwd.hpp"
 #include "libtorrent/bdecode.hpp"
 #include "libtorrent/time.hpp"
 #include "libtorrent/assert.hpp"
@@ -57,9 +58,6 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	class peer_connection;
-	class entry;
-	struct announce_entry;
 	struct lazy_entry;
 
 	// internal, exposed for the unit test
@@ -77,7 +75,7 @@ namespace libtorrent {
 		// http seed spec. by John Hoffman
 		enum type_t { url_seed, http_seed };
 
-		typedef std::vector<std::pair<std::string, std::string>> headers_t;
+		using headers_t = std::vector<std::pair<std::string, std::string>>;
 
 		web_seed_entry(std::string const& url_, type_t type_
 			, std::string const& auth_ = std::string()
@@ -163,7 +161,7 @@ namespace libtorrent {
 		explicit torrent_info(span<char const> buffer, from_span_t);
 		explicit torrent_info(std::string const& filename);
 #endif // BOOST_NO_EXCEPTIONS
-		explicit torrent_info(torrent_info const& t);
+		torrent_info(torrent_info const& t);
 		explicit torrent_info(sha1_hash const& info_hash);
 		torrent_info(bdecode_node const& torrent_file, error_code& ec);
 		torrent_info(char const* buffer, int size, error_code& ec)
@@ -171,7 +169,7 @@ namespace libtorrent {
 		torrent_info(span<char const> buffer, error_code& ec, from_span_t);
 		torrent_info(std::string const& filename, error_code& ec);
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 #ifndef BOOST_NO_EXCEPTIONS
 		TORRENT_DEPRECATED
 		torrent_info(char const* buffer, int size, int)
@@ -196,7 +194,7 @@ namespace libtorrent {
 		torrent_info(std::wstring const& filename, error_code& ec);
 		TORRENT_DEPRECATED
 		explicit torrent_info(std::wstring const& filename);
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
 
 		// frees all storage associated with this torrent_info object
 		~torrent_info();
@@ -243,13 +241,13 @@ namespace libtorrent {
 			copy_on_write();
 			m_files.rename_file(index, new_filename);
 		}
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		// all wstring APIs are deprecated since 0.16.11
 		// instead, use the wchar -> utf8 conversion functions
 		// and pass in utf8 strings
 		TORRENT_DEPRECATED
 		void rename_file(file_index_t index, std::wstring const& new_filename);
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
 
 		// Remaps the file storage to a new file layout. This can be used to, for
 		// instance, download all data in a torrent to a single file, or to a
@@ -281,7 +279,7 @@ namespace libtorrent {
 		std::vector<sha1_hash> similar_torrents() const;
 		std::vector<std::string> collections() const;
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		// deprecated in 0.16. Use web_seeds() instead
 		TORRENT_DEPRECATED
 		std::vector<std::string> url_seeds() const;
@@ -291,7 +289,7 @@ namespace libtorrent {
 		// deprecated in 1.1
 		TORRENT_DEPRECATED
 		bool parse_info_section(lazy_entry const& e, error_code& ec);
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
 
 		// ``web_seeds()`` returns all url seeds and http seeds in the torrent.
 		// Each entry is a ``web_seed_entry`` and may refer to either a url seed
@@ -338,21 +336,26 @@ namespace libtorrent {
 		// ``last_piece()`` returns the index to the last piece in the torrent and
 		// ``end_piece()`` returns the index to the one-past-end piece in the
 		// torrent
-		piece_index_t last_piece() const { return piece_index_t(m_files.num_pieces() - 1); }
+		// ``piece_range()`` returns an implementation-defined type that can be
+		// used as the container in a range-for loop. Where the values are the
+		// indices of all pieces in the file_storage.
+		piece_index_t last_piece() const { return m_files.last_piece(); }
 		piece_index_t end_piece() const
 		{
 			TORRENT_ASSERT(m_files.num_pieces() > 0);
-			return piece_index_t(m_files.num_pieces());
+			return m_files.end_piece();
 		}
+		index_range<piece_index_t> piece_range() const
+		{ return m_files.piece_range(); }
 
 		// returns the info-hash of the torrent
 		const sha1_hash& info_hash() const { return m_info_hash; }
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		// deprecated in 1.0. Use the variants that take an index instead
 		// internal_file_entry is no longer exposed in the API
-		typedef file_storage::iterator file_iterator;
-		typedef file_storage::reverse_iterator reverse_file_iterator;
+		using file_iterator = file_storage::iterator;
+		using reverse_file_iterator = file_storage::reverse_iterator;
 
 		// This class will need some explanation. First of all, to get a list of
 		// all files in the torrent, you can use ``begin_files()``,
@@ -377,7 +380,7 @@ namespace libtorrent {
 
 		TORRENT_DEPRECATED
 		file_entry file_at(int index) const { return m_files.at_deprecated(index); }
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
 
 		// If you need index-access to files you can use the ``num_files()`` along
 		// with the ``file_path()``, ``file_size()``-family of functions to access
@@ -408,7 +411,7 @@ namespace libtorrent {
 			return m_files.map_file(file, offset, size);
 		}
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 // ------- start deprecation -------
 		// deprecated in 1.2
 		void load(char const*, int, error_code&) {}

@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2006-2016, Arvid Norberg & Daniel Wallin
+Copyright (c) 2006-2018, Arvid Norberg & Daniel Wallin
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -127,7 +127,7 @@ observer_ptr find_data::new_observer(udp::endpoint const& ep
 #if TORRENT_USE_ASSERTS
 	if (o) o->m_in_constructor = false;
 #endif
-	return o;
+	return std::move(o);
 }
 
 char const* find_data::name() const { return "find_data"; }
@@ -147,7 +147,7 @@ void find_data::done()
 
 	std::vector<std::pair<node_entry, std::string>> results;
 	int num_results = m_node.m_table.bucket_size();
-	for (std::vector<observer_ptr>::iterator i = m_results.begin()
+	for (auto i = m_results.begin()
 		, end(m_results.end()); i != end && num_results > 0; ++i)
 	{
 		observer_ptr const& o = *i;
@@ -174,7 +174,7 @@ void find_data::done()
 #endif
 			continue;
 		}
-		results.push_back(std::make_pair(node_entry(o->id(), o->target_ep()), j->second));
+		results.emplace_back(node_entry(o->id(), o->target_ep()), j->second);
 #ifndef TORRENT_DISABLE_LOGGING
 		if (logger != nullptr && logger->should_log(dht_logger::traversal))
 		{

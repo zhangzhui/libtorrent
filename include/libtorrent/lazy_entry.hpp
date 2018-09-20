@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -33,7 +33,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef TORRENT_LAZY_ENTRY_HPP_INCLUDED
 #define TORRENT_LAZY_ENTRY_HPP_INCLUDED
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 
 #include <utility>
 #include <vector>
@@ -83,7 +83,7 @@ namespace libtorrent {
 	// which will be set to the byte offset into the buffer where an error occurred,
 	// in case the function fails.
 	TORRENT_DEPRECATED_EXPORT int lazy_bdecode(char const* start, char const* end
-		, lazy_entry& ret, error_code& ec, int* error_pos = 0
+		, lazy_entry& ret, error_code& ec, int* error_pos = nullptr
 		, int depth_limit = 1000, int item_limit = 1000000);
 
 	// for backwards compatibility, does not report error code
@@ -142,7 +142,7 @@ namespace libtorrent {
 		};
 
 		// internal
-		lazy_entry() : m_begin(0), m_len(0), m_size(0), m_type(none_t)
+		lazy_entry() : m_size(0), m_type(none_t)
 		{ m_data.start = nullptr; }
 
 		// tells you which specific type this lazy entry has.
@@ -354,6 +354,9 @@ namespace libtorrent {
 			swap(m_len, e.m_len);
 		}
 
+		lazy_entry(lazy_entry&&);
+		lazy_entry& operator=(lazy_entry&&);
+
 	private:
 
 		int capacity() const;
@@ -370,11 +373,11 @@ namespace libtorrent {
 
 		// used for dictionaries and lists to record the range
 		// in the original buffer they are based on
-		char const* m_begin;
+		char const* m_begin = nullptr;
 
 		// the number of bytes this entry extends in the
 		// bencoded buffer
-		std::uint32_t m_len;
+		std::uint32_t m_len = 0;
 
 		// if list or dictionary, the number of items
 		std::uint32_t m_size:29;
@@ -382,13 +385,13 @@ namespace libtorrent {
 		std::uint32_t m_type:3;
 
 		// non-copyable
-		lazy_entry(lazy_entry const&);
-		lazy_entry const& operator=(lazy_entry const&);
+		lazy_entry(lazy_entry const&) = delete;
+		lazy_entry const& operator=(lazy_entry const&) = delete;
 	};
 
 	struct TORRENT_DEPRECATED lazy_dict_entry
 	{
-		char const* name;
+		char const* name = nullptr;
 		lazy_entry val;
 	};
 
@@ -405,6 +408,6 @@ namespace libtorrent {
 
 }
 
-#endif // TORRENT_NO_DEPRECATE
+#endif // TORRENT_ABI_VERSION
 
 #endif

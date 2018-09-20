@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2008-2016, Arvid Norberg
+Copyright (c) 2008-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -42,6 +42,9 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/config.hpp"
 #include "libtorrent/span.hpp"
+#include "libtorrent/string_view.hpp"
+#include "libtorrent/time.hpp" // for seconds32
+#include "libtorrent/optional.hpp"
 
 namespace libtorrent {
 
@@ -60,14 +63,8 @@ namespace libtorrent {
 		enum flags_t { dont_parse_chunks = 1 };
 		explicit http_parser(int flags = 0);
 		~http_parser();
-		std::string const& header(char const* key) const
-		{
-			static std::string empty;
-			auto const i = m_header.find(key);
-			if (i == m_header.end()) return empty;
-			return i->second;
-		}
-
+		std::string const& header(string_view key) const;
+		boost::optional<seconds32> header_duration(string_view key) const;
 		std::string const& protocol() const { return m_protocol; }
 		int status_code() const { return m_status_code; }
 		std::string const& method() const { return m_method; }

@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -35,11 +35,11 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/config.hpp"
 
-#include <vector>
 #include <mutex>
 #include <atomic>
 #include <memory>
 
+#include "libtorrent/fwd.hpp"
 #include "libtorrent/aux_/disk_job_fence.hpp"
 #include "libtorrent/aux_/storage_piece_set.hpp"
 #include "libtorrent/storage_defs.hpp"
@@ -128,12 +128,7 @@ POSSIBILITY OF SUCH DAMAGE.
 //	}
 namespace libtorrent {
 
-	class session;
-	struct file_pool;
 	namespace aux { struct session_settings; }
-	struct add_torrent_params;
-
-	struct disk_io_thread;
 
 	// The storage interface is a pure virtual class that can be implemented to
 	// customize how and where data for a torrent is stored. The default storage
@@ -170,10 +165,24 @@ namespace libtorrent {
 		storage_interface(storage_interface const&) = delete;
 		storage_interface& operator=(storage_interface const&) = delete;
 
-		// This function is called when the storage is to be initialized. The
-		// default storage will create directories and empty files at this point.
-		// If ``allocate_files`` is true, it will also ``ftruncate`` all files to
-		// their target size.
+		// This function is called when the *storage* on disk is to be
+		// initialized. The default storage will create directories and empty
+		// files at this point. If ``allocate_files`` is true, it will also
+		// ``ftruncate`` all files to their target size.
+		//
+		// This function may be called multiple time on a single instance. When a
+		// torrent is force-rechecked, the storage is re-initialized to trigger
+		// the re-check from scratch.
+		//
+		// The function is not necessarily called before other member functions.
+		// For instance has_any_files() and verify_resume_data() are
+		// called early to determine whether we may have to check all files or
+		// not. If we're doing a full check of the files every piece will be
+		// hashed, causing readv() to be called as well.
+		//
+		// Any required internals that need initialization should be done in the
+		// constructor. This function is called before the torrent starts to
+		// download.
 		//
 		// If an error occurs, ``storage_error`` should be set to reflect it.
 		virtual void initialize(storage_error& ec) = 0;
@@ -223,7 +232,7 @@ namespace libtorrent {
 		// change the priorities of files. This is a fenced job and is
 		// guaranteed to be the only running function on this storage
 		// when called
-		virtual void set_file_priority(aux::vector<std::uint8_t, file_index_t> const& prio
+		virtual void set_file_priority(aux::vector<download_priority_t, file_index_t>& prio
 			, storage_error& ec) = 0;
 
 		// This function should move all the files belonging to the storage to
@@ -352,7 +361,7 @@ namespace libtorrent {
 		// the file_storage object is owned by the torrent.
 		std::shared_ptr<void> m_torrent;
 
-		storage_index_t m_storage_index;
+		storage_index_t m_storage_index{0};
 
 		// the number of block_cache_reference objects referencing this storage
 		std::atomic<int> m_references{1};
@@ -363,8 +372,6 @@ namespace libtorrent {
 	// override some of its behavior, when implementing a custom storage.
 	class TORRENT_EXPORT default_storage : public storage_interface
 	{
-		friend struct write_fileop;
-		friend struct read_fileop;
 	public:
 		// constructs the default_storage based on the give file_storage (fs).
 		// ``mapped`` is an optional argument (it may be nullptr). If non-nullptr it
@@ -383,7 +390,7 @@ namespace libtorrent {
 		~default_storage() override;
 
 		bool has_any_file(storage_error& ec) override;
-		void set_file_priority(aux::vector<std::uint8_t, file_index_t> const& prio
+		void set_file_priority(aux::vector<download_priority_t, file_index_t>& prio
 			, storage_error& ec) override;
 		void rename_file(file_index_t index, std::string const& new_filename
 			, storage_error& ec) override;
@@ -411,8 +418,6 @@ namespace libtorrent {
 
 	private:
 
-		void delete_one_file(std::string const& p, error_code& ec);
-
 		void need_partfile();
 
 		std::unique_ptr<file_storage> m_mapped_files;
@@ -427,9 +432,24 @@ namespace libtorrent {
 		file_handle open_file(file_index_t file, open_mode_t mode, storage_error& ec) const;
 		file_handle open_file_impl(file_index_t file, open_mode_t mode, error_code& ec) const;
 
-		aux::vector<std::uint8_t, file_index_t> m_file_priority;
+		bool use_partfile(file_index_t index) const;
+		void use_partfile(file_index_t index, bool b);
+
+		aux::vector<download_priority_t, file_index_t> m_file_priority;
 		std::string m_save_path;
 		std::string m_part_file_name;
+
+		// this this is an array indexed by file-index. Each slot represents
+		// whether this file has the part-file enabled for it. This is used for
+		// backwards compatibility with pre-partfile versions of libtorrent. If
+		// this vector is empty, the default is that files *do* use the partfile.
+		// on startup, any 0-priority file that's found in it's original location
+		// is expected to be an old-style (pre-partfile) torrent storage, and
+		// those files have their slot set to false in this vector.
+		// note that the vector is *sparse*, it's only allocated if a file has its
+		// entry set to false, and only indices up to that entry.
+		aux::vector<bool, file_index_t> m_use_partfile;
+
 		// the file pool is a member of the disk_io_thread
 		// to make all storage instances share the pool
 		file_pool& m_pool;

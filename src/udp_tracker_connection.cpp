@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -62,7 +62,7 @@ namespace libtorrent {
 		, tracker_manager& man
 		, tracker_request const& req
 		, std::weak_ptr<request_callback> c)
-		: tracker_connection(man, req, ios, c)
+		: tracker_connection(man, req, ios, std::move(c))
 		, m_transaction_id(0)
 		, m_attempts(0)
 		, m_state(action_t::error)
@@ -91,9 +91,11 @@ namespace libtorrent {
 
 		aux::session_settings const& settings = m_man.settings();
 
+		int const proxy_type = settings.get_int(settings_pack::proxy_type);
+
 		if (settings.get_bool(settings_pack::proxy_hostnames)
-			&& (settings.get_int(settings_pack::proxy_type) == settings_pack::socks5
-				|| settings.get_int(settings_pack::proxy_type) == settings_pack::socks5_pw))
+			&& (proxy_type == settings_pack::socks5
+				|| proxy_type == settings_pack::socks5_pw))
 		{
 			m_hostname = hostname;
 			m_target.port(std::uint16_t(port));
@@ -125,12 +127,12 @@ namespace libtorrent {
 			, settings.get_int(settings_pack::tracker_receive_timeout));
 	}
 
-	void udp_tracker_connection::fail(error_code const& ec, int code
+	void udp_tracker_connection::fail(error_code const& ec
 		, char const* msg, seconds32 const interval, seconds32 const min_interval)
 	{
 		// m_target failed. remove it from the endpoint list
 		auto const i = std::find(m_endpoints.begin()
-			, m_endpoints.end(), tcp::endpoint(m_target.address(), m_target.port()));
+			, m_endpoints.end(), make_tcp(m_target));
 
 		if (i != m_endpoints.end()) m_endpoints.erase(i);
 
@@ -138,7 +140,7 @@ namespace libtorrent {
 		// fail the whole announce
 		if (m_endpoints.empty() || !tracker_req().outgoing_socket)
 		{
-			tracker_connection::fail(ec, code, msg, interval, min_interval);
+			tracker_connection::fail(ec, msg, interval, min_interval);
 			return;
 		}
 
@@ -146,18 +148,18 @@ namespace libtorrent {
 		std::shared_ptr<request_callback> cb = requester();
 		if (cb && cb->should_log())
 		{
-			cb->debug_log("*** UDP_TRACKER [ host: \"%s\" ip: \"%s\" | error: \"%s\" ]"
+			cb->debug_log(R"(*** UDP_TRACKER [ host: "%s" ip: "%s" | error: "%s" ])"
 				, m_hostname.c_str(), print_endpoint(m_target).c_str(), ec.message().c_str());
 		}
 #endif
 
 		// pick another target endpoint and try again
-		m_target = pick_target_endpoint();
+		m_target = make_udp(m_endpoints.front());
 
 #ifndef TORRENT_DISABLE_LOGGING
 		if (cb && cb->should_log())
 		{
-			cb->debug_log("*** UDP_TRACKER trying next IP [ host: \"%s\" ip: \"%s\" ]"
+			cb->debug_log(R"(*** UDP_TRACKER trying next IP [ host: "%s" ip: "%s" ])"
 				, m_hostname.c_str(), print_endpoint(m_target).c_str());
 		}
 #endif
@@ -207,16 +209,12 @@ namespace libtorrent {
 		// we're listening on. To make sure the tracker get our
 		// correct listening address.
 		bool is_v4 = bind_address.is_v4();
-#if TORRENT_USE_IPV6
 		auto scope = is_v4 ? 0 : bind_address.to_v6().scope_id();
-#endif
 		for (auto const& addr : addresses)
 		{
 			if (addr.is_v4() != is_v4) continue;
-#if TORRENT_USE_IPV6
 			if (addr.is_v6() && addr.to_v6().scope_id() != scope)
 				continue;
-#endif
 			m_endpoints.emplace_back(addr, std::uint16_t(port));
 		}
 
@@ -254,47 +252,9 @@ namespace libtorrent {
 			return;
 		}
 
-		m_target = pick_target_endpoint();
+		m_target = make_udp(m_endpoints.front());
 
 		start_announce();
-	}
-
-	udp::endpoint udp_tracker_connection::pick_target_endpoint() const
-	{
-		auto iter = m_endpoints.begin();
-		udp::endpoint target = udp::endpoint(iter->address(), iter->port());
-
-		if (bind_interface() != address_v4::any())
-		{
-			// find first endpoint that matches our bind interface type
-			for (; iter != m_endpoints.end() && iter->address().is_v4()
-				!= bind_interface().is_v4(); ++iter);
-
-			if (iter == m_endpoints.end())
-			{
-				TORRENT_ASSERT(target.address().is_v4() != bind_interface().is_v4());
-				std::shared_ptr<request_callback> cb = requester();
-				if (cb)
-				{
-					char const* tracker_address_type = target.address().is_v4() ? "IPv4" : "IPv6";
-					char const* bind_address_type = bind_interface().is_v4() ? "IPv4" : "IPv6";
-					char msg[200];
-					std::snprintf(msg, sizeof(msg)
-						, "the tracker only resolves to an %s  address, and you're "
-						"listening on an %s socket. This may prevent you from receiving "
-						"incoming connections."
-						, tracker_address_type, bind_address_type);
-
-					cb->tracker_warning(tracker_req(), msg);
-				}
-			}
-			else
-			{
-				target = udp::endpoint(iter->address(), iter->port());
-			}
-		}
-
-		return target;
 	}
 
 	void udp_tracker_connection::start_announce()
@@ -424,7 +384,7 @@ namespace libtorrent {
 
 		if (action == action_t::error)
 		{
-			fail(error_code(errors::tracker_failure), -1
+			fail(error_code(errors::tracker_failure)
 				, std::string(buf.data(), buf.size()).c_str());
 			return true;
 		}
@@ -511,7 +471,8 @@ namespace libtorrent {
 			return;
 		}
 
-		char buf[16];
+		std::size_t const connect_packet_size = 16;
+		std::array<char, connect_packet_size> buf;
 		span<char> view = buf;
 
 		TORRENT_ASSERT(m_transaction_id != 0);
@@ -520,7 +481,7 @@ namespace libtorrent {
 		aux::write_uint32(0x27101980, view); // connection_id
 		aux::write_int32(action_t::connect, view); // action (connect)
 		aux::write_int32(m_transaction_id, view); // transaction_id
-		TORRENT_ASSERT(view.size() == 0);
+		TORRENT_ASSERT(view.empty());
 
 		error_code ec;
 		if (!m_hostname.empty())
@@ -621,13 +582,9 @@ namespace libtorrent {
 		resp.incomplete = aux::read_int32(buf);
 		resp.complete = aux::read_int32(buf);
 
-		std::size_t const ip_stride =
-#if TORRENT_USE_IPV6
-			m_target.address().is_v6() ? 18 :
-#endif
-			6;
+		std::size_t const ip_stride = is_v6(m_target) ? 18 : 6;
 
-		int const num_peers = static_cast<int>(buf.size() / ip_stride);
+		std::size_t const num_peers = buf.size() / ip_stride;
 		if (buf.size() % ip_stride != 0)
 		{
 			fail(error_code(errors::invalid_tracker_response_length));
@@ -648,13 +605,12 @@ namespace libtorrent {
 			return true;
 		}
 
-#if TORRENT_USE_IPV6
-		if (m_target.address().is_v6())
+		if (is_v6(m_target))
 		{
-			resp.peers6.reserve(std::size_t(num_peers));
-			for (int i = 0; i < num_peers; ++i)
+			resp.peers6.reserve(num_peers);
+			for (std::size_t i = 0; i < num_peers; ++i)
 			{
-				ipv6_peer_entry e;
+				ipv6_peer_entry e{};
 				std::memcpy(e.ip.data(), buf.data(), 16);
 				buf = buf.subspan(16);
 				e.port = aux::read_uint16(buf);
@@ -662,12 +618,11 @@ namespace libtorrent {
 			}
 		}
 		else
-#endif
 		{
-			resp.peers4.reserve(std::size_t(num_peers));
-			for (int i = 0; i < num_peers; ++i)
+			resp.peers4.reserve(num_peers);
+			for (std::size_t i = 0; i < num_peers; ++i)
 			{
-				ipv4_peer_entry e;
+				ipv4_peer_entry e{};
 				std::memcpy(e.ip.data(), buf.data(), 4);
 				buf = buf.subspan(4);
 				e.port = aux::read_uint16(buf);
@@ -702,7 +657,7 @@ namespace libtorrent {
 
 		if (action == action_t::error)
 		{
-			fail(error_code(errors::tracker_failure), -1
+			fail(error_code(errors::tracker_failure)
 				, std::string(buf.data(), buf.size()).c_str());
 			return true;
 		}
@@ -770,7 +725,7 @@ namespace libtorrent {
 			&& !settings.get_str(settings_pack::announce_ip).empty())
 		{
 			error_code ec;
-			address ip = address::from_string(settings.get_str(settings_pack::announce_ip).c_str(), ec);
+			address ip = make_address(settings.get_str(settings_pack::announce_ip).c_str(), ec);
 			if (!ec && ip.is_v4()) announce_ip = ip.to_v4();
 		}
 		aux::write_uint32(announce_ip.to_ulong(), out);

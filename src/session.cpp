@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2006-2016, Arvid Norberg, Magnus Jonsson
+Copyright (c) 2006-2018, Arvid Norberg, Magnus Jonsson
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -35,15 +35,62 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/extensions/ut_metadata.hpp"
 #include "libtorrent/extensions/smart_ban.hpp"
 #include "libtorrent/session.hpp"
+#include "libtorrent/extensions.hpp"
 #include "libtorrent/aux_/session_impl.hpp"
 #include "libtorrent/aux_/session_call.hpp"
+#include "libtorrent/extensions.hpp" // for add_peer_flags_t
 
 namespace libtorrent {
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+	// declared in extensions.hpp
+	// remove this once C++17 is required
+	constexpr feature_flags_t plugin::optimistic_unchoke_feature;
+	constexpr feature_flags_t plugin::tick_feature;
+	constexpr feature_flags_t plugin::dht_request_feature;
+	constexpr feature_flags_t plugin::alert_feature;
+#endif
+
+namespace aux {
+	constexpr torrent_list_index_t session_interface::torrent_state_updates;
+	constexpr torrent_list_index_t session_interface::torrent_want_tick;
+	constexpr torrent_list_index_t session_interface::torrent_want_peers_download;
+	constexpr torrent_list_index_t session_interface::torrent_want_peers_finished;
+	constexpr torrent_list_index_t session_interface::torrent_want_scrape;
+	constexpr torrent_list_index_t session_interface::torrent_downloading_auto_managed;
+	constexpr torrent_list_index_t session_interface::torrent_seeding_auto_managed;
+	constexpr torrent_list_index_t session_interface::torrent_checking_auto_managed;
+}
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+constexpr add_peer_flags_t torrent_plugin::first_time;
+constexpr add_peer_flags_t torrent_plugin::filtered;
+#endif
+
+namespace {
+
+#if defined TORRENT_ASIO_DEBUGGING
+	void wait_for_asio_handlers()
+	{
+		int counter = 0;
+		while (log_async())
+		{
+			std::this_thread::sleep_for(seconds(1));
+			++counter;
+			std::printf("\x1b[2J\x1b[0;0H\x1b[33m==== Waiting to shut down: %d ==== \x1b[0m\n\n"
+				, counter);
+		}
+		async_dec_threads();
+
+		std::fprintf(stderr, "\n\nEXPECTS NO MORE ASYNC OPS\n\n\n");
+	}
+#endif
+} // anonymous namespace
 
 	settings_pack min_memory_usage()
 	{
 		settings_pack set;
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 		// receive data directly into disk buffers
 		// this yields more system calls to read() and
 		// kqueue(), but saves RAM.
@@ -59,7 +106,6 @@ namespace libtorrent {
 		set.set_int(settings_pack::checking_mem_usage, 2);
 
 		// don't use any extra threads to do SHA-1 hashing
-		set.set_int(settings_pack::network_threads, 0);
 		set.set_int(settings_pack::aio_threads, 1);
 
 		set.set_int(settings_pack::alert_queue_size, 100);
@@ -202,7 +248,7 @@ namespace libtorrent {
 		set.set_int(settings_pack::peer_timeout, 20);
 		set.set_int(settings_pack::inactivity_timeout, 20);
 
-		set.set_int(settings_pack::active_limit, 2000);
+		set.set_int(settings_pack::active_limit, 20000);
 		set.set_int(settings_pack::active_tracker_limit, 2000);
 		set.set_int(settings_pack::active_dht_limit, 600);
 		set.set_int(settings_pack::active_seeds, 2000);
@@ -226,30 +272,13 @@ namespace libtorrent {
 		// connect to us if they want to
 		set.set_int(settings_pack::max_failcount, 1);
 
-		// the number of threads to use to call async_write_some
-		// and read_some on peer sockets
-		// this doesn't work. See comment in settings_pack.cpp
-		set.set_int(settings_pack::network_threads, 0);
-
 		// number of disk threads for low level file operations
 		set.set_int(settings_pack::aio_threads, 8);
 
-		// keep 5 MiB outstanding when checking hashes
-		// of a resumed file
-		set.set_int(settings_pack::checking_mem_usage, 320);
+		set.set_int(settings_pack::checking_mem_usage, 2048);
 
 		return set;
 	}
-
-#ifndef TORRENT_CFG
-#error TORRENT_CFG is not defined!
-#endif
-
-	// this is a dummy function that's exported and named based
-	// on the configuration. The session.hpp file will reference
-	// it and if the library and the client are built with different
-	// configurations this will give a link error
-	void TORRENT_CFG() {}
 
 	session_params read_session_params(bdecode_node const& e, save_state_flags_t const flags)
 	{
@@ -301,7 +330,7 @@ namespace libtorrent {
 			ios = m_io_service.get();
 		}
 
-		m_impl = std::make_shared<aux::session_impl>(*ios);
+		m_impl = std::make_shared<aux::session_impl>(std::ref(*ios), std::ref(params.settings));
 		*static_cast<session_handle*>(this) = session_handle(m_impl);
 
 #ifndef TORRENT_DISABLE_EXTENSIONS
@@ -317,7 +346,7 @@ namespace libtorrent {
 		m_impl->set_dht_storage(params.dht_storage_constructor);
 #endif
 
-		m_impl->start_session(std::move(params.settings));
+		m_impl->start_session();
 
 		if (internal_executor)
 		{
@@ -356,37 +385,26 @@ namespace {
 	session::~session()
 	{
 		aux::dump_call_profile();
-
 		TORRENT_ASSERT(m_impl);
-		std::shared_ptr<aux::session_impl> ptr = m_impl;
 
 		// capture the shared_ptr in the dispatched function
 		// to keep the session_impl alive
-		m_impl->get_io_service().dispatch([=] { ptr->abort(); });
-
-#if defined TORRENT_ASIO_DEBUGGING
-		int counter = 0;
-		while (log_async())
-		{
-			std::this_thread::sleep_for(seconds(1));
-			++counter;
-			std::printf("\x1b[2J\x1b[0;0H\x1b[33m==== Waiting to shut down: %d ==== \x1b[0m\n\n"
-				, counter);
-		}
-		async_dec_threads();
-
-		std::fprintf(stderr, "\n\nEXPECTS NO MORE ASYNC OPS\n\n\n");
-#endif
+		m_impl->call_abort();
 
 		if (m_thread && m_thread.unique())
+		{
+#if defined TORRENT_ASIO_DEBUGGING
+			wait_for_asio_handlers();
+#endif
 			m_thread->join();
+		}
 	}
 
 	session_proxy session::abort()
 	{
 		// stop calling the alert notify function now, to avoid it thinking the
 		// session is still alive
-		m_impl->alerts().set_notify_function(std::function<void()>());
+		m_impl->alerts().set_notify_function({});
 		return session_proxy(m_io_service, m_thread, m_impl);
 	}
 
@@ -396,7 +414,7 @@ namespace {
 		, std::shared_ptr<aux::session_impl> impl)
 		: m_io_service(std::move(ios))
 		, m_thread(std::move(t))
-		, m_impl(impl)
+		, m_impl(std::move(impl))
 	{}
 	session_proxy::session_proxy(session_proxy const&) = default;
 	session_proxy& session_proxy::operator=(session_proxy const&) = default;
@@ -405,11 +423,16 @@ namespace {
 	session_proxy::~session_proxy()
 	{
 		if (m_thread && m_thread.unique())
+		{
+#if defined TORRENT_ASIO_DEBUGGING
+			wait_for_asio_handlers();
+#endif
 			m_thread->join();
+		}
 	}
 
 	session_params::session_params(settings_pack sp)
-		: session_params(sp, default_plugins())
+		: session_params(std::move(sp), default_plugins())
 	{}
 
 	session_params::session_params(settings_pack sp
