@@ -37,6 +37,8 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
+TORRENT_CRYPTO_NAMESPACE
+
 #ifdef TORRENT_MACOS_DEPRECATED_LIBCRYPTO
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -66,7 +68,7 @@ namespace libtorrent {
 		: hasher()
 	{
 		TORRENT_ASSERT(len > 0);
-		update({data, size_t(len)});
+		update({data, len});
 	}
 
 #ifdef TORRENT_USE_LIBGCRYPT
@@ -77,7 +79,7 @@ namespace libtorrent {
 
 	hasher& hasher::operator=(hasher const& h) &
 	{
-		if (this == &h) return;
+		if (this == &h) return *this;
 		gcry_md_close(m_context);
 		gcry_md_copy(&m_context, h.m_context);
 		return *this;
@@ -89,22 +91,24 @@ namespace libtorrent {
 
 	hasher& hasher::update(char const* data, int len)
 	{
-		return update({data, size_t(len)});
+		return update({data, len});
 	}
 
 	hasher& hasher::update(span<char const> data)
 	{
-		TORRENT_ASSERT(!data.empty());
+		TORRENT_ASSERT(data.size() > 0);
 #ifdef TORRENT_USE_LIBGCRYPT
-		gcry_md_write(m_context, data.data(), data.size());
+		gcry_md_write(m_context, data.data(), static_cast<std::size_t>(data.size()));
 #elif TORRENT_USE_COMMONCRYPTO
 		CC_SHA1_Update(&m_context, reinterpret_cast<unsigned char const*>(data.data()), CC_LONG(data.size()));
 #elif TORRENT_USE_CRYPTOAPI
 		m_context.update(data);
 #elif defined TORRENT_USE_LIBCRYPTO
-		SHA1_Update(&m_context, reinterpret_cast<unsigned char const*>(data.data()), data.size());
+		SHA1_Update(&m_context, reinterpret_cast<unsigned char const*>(data.data())
+			, static_cast<std::size_t>(data.size()));
 #else
-		SHA1_update(&m_context, reinterpret_cast<unsigned char const*>(data.data()), data.size());
+		SHA1_update(&m_context, reinterpret_cast<unsigned char const*>(data.data())
+			, static_cast<std::size_t>(data.size()));
 #endif
 		return *this;
 	}
@@ -152,4 +156,7 @@ namespace libtorrent {
 #ifdef TORRENT_MACOS_DEPRECATED_LIBCRYPTO
 #pragma clang diagnostic pop
 #endif
+
+TORRENT_CRYPTO_NAMESPACE_END
+
 }

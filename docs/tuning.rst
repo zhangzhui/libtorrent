@@ -2,8 +2,7 @@
 libtorrent manual
 =================
 
-:Author: Arvid Norberg, arvid@libtorrent.org
-:Version: 1.2.0
+.. include:: header.rst
 
 .. contents:: Table of contents
   :depth: 2
@@ -143,7 +142,7 @@ significant.
 If you're short of memory, you should consider lowering the limit. 500 is probably
 enough. You can do this by setting ``settings_pack::max_peerlist_size`` to
 the max number of peers you want in a torrent's peer list. This limit applies per
-torrent. For 5 torrents, the total number of peers in peerlists will be 5 times
+torrent. For 5 torrents, the total number of peers in peer lists will be 5 times
 the setting.
 
 You should also lower the same limit but for paused torrents. It might even make sense
@@ -198,7 +197,7 @@ One, probably, safe macro to define is ``TORRENT_NO_DEPRECATE`` which removes al
 deprecated functions and struct members. As long as no deprecated functions are
 relied upon, this should be a simple way to eliminate a little bit of code.
 
-For all available options, see the `building libtorrent`_ secion.
+For all available options, see the `building libtorrent`_ section.
 
 .. _`building libtorrent`: building.html
 
@@ -255,9 +254,9 @@ there is a mixed mode algorithm. This attempts to detect congestion on the uTP p
 throttle TCP to avoid it taking over all bandwidth. This balances the bandwidth resources
 between the two protocols. When running on a network where the bandwidth is in such an
 abundance that it's virtually infinite, this algorithm is no longer necessary, and might
-even be harmful to throughput. It is adviced to experiment with the
+even be harmful to throughput. It is advised to experiment with the
 ``session_setting::mixed_mode_algorithm``, setting it to ``settings_pack::prefer_tcp``.
-This setting entirely disables the balancing and unthrottles all connections. On a typical
+This setting entirely disables the balancing and un-throttles all connections. On a typical
 home connection, this would mean that none of the benefits of uTP would be preserved
 (the modem's send buffer would be full at all times) and uTP connections would for the most
 part be squashed by the TCP traffic.
@@ -321,34 +320,21 @@ scalability
 
 In order to make more efficient use of the libtorrent interface when running a large
 number of torrents simultaneously, one can use the ``session::get_torrent_status()`` call
-together with ``session::refresh_torrent_status()``. Keep in mind that every call into
+together with ``session::post_torrent_updates()``. Keep in mind that every call into
 libtorrent that return some value have to block your thread while posting a message to
-the main network thread and then wait for a response (calls that don't return any data
-will simply post the message and then immediately return). The time this takes might
-become significant once you reach a few hundred torrents (depending on how many calls
-you make to each torrent and how often). ``get_torrent_status`` lets you query the
-status of all torrents in a single call. This will actually loop through all torrents
-and run a provided predicate function to determine whether or not to include it in
-the returned vector. If you have a lot of torrents, you might want to update the status
-of only certain torrents. For instance, you might only be interested in torrents that
-are being downloaded.
+the main network thread and then wait for a response. Calls that don't return any data
+will simply post the message and then immediately return, performing the work
+asynchronously. The time this takes might become significant once you reach a
+few hundred torrents, depending on how many calls you make to each torrent and how often.
+``session::get_torrent_status()`` lets you query the status of all torrents in a single call.
+This will actually loop through all torrents and run a provided predicate function to
+determine whether or not to include it in the returned vector.
 
-The intended use of these functions is to start off by calling ``get_torrent_status()``
-to get a list of all torrents that match your criteria. Then call ``refresh_torrent_status()``
-on that list. This will only refresh the status for the torrents in your list, and thus
-ignore all other torrents you might be running. This may save a significant amount of
-time, especially if the number of torrents you're interested in is small. In order to
-keep your list of interested torrents up to date, you can either call ``get_torrent_status()``
-from time to time, to include torrents you might have become interested in since the last
-time. In order to stop refreshing a certain torrent, simply remove it from the list.
-
-A more efficient way however, would be to subscribe to status alert notifications, and
-update your list based on these alerts. There are alerts for when torrents are added, removed,
-paused, resumed, completed etc. Doing this ensures that you only query status for the
-minimal set of torrents you are actually interested in.
-
-To get an update with only the torrents that have changed since last time, call
-``session::post_torrent_updates()``.
+To use ``session::post_torrent_updates()`` torrents need to have the ``flag_update_subscribe``
+flag set. When post_torrent_updates() is called, a ``state_update_alert`` alert
+is posted, with all the torrents that have updated since the last time this
+function was called. The client have to keep its own state of all torrents, and
+update it based on this alert.
 
 benchmarking
 ============

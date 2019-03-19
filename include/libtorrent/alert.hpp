@@ -123,7 +123,10 @@ namespace libtorrent {
 		static constexpr alert_category_t tracker_notification = 4_bit;
 
 		// Low level alerts for when peers are connected and disconnected.
-		static constexpr alert_category_t debug_notification = 5_bit;
+		static constexpr alert_category_t connect_notification = 5_bit;
+#if TORRENT_ABI_VERSION == 1
+		static constexpr alert_category_t TORRENT_DEPRECATED_MEMBER debug_notification = connect_notification;
+#endif
 
 		// Enables alerts for when a torrent or the session changes state.
 		static constexpr alert_category_t status_notification = 6_bit;
@@ -301,7 +304,7 @@ namespace libtorrent {
 template <class T> T* alert_cast(alert* a)
 {
 	static_assert(std::is_base_of<alert, T>::value
-		, "alert_cast<> can only be used with alert types (deriving from libtorrent::alert)");
+		, "alert_cast<> can only be used with alert types (deriving from lt::alert)");
 
 	if (a == nullptr) return nullptr;
 	if (a->type() == T::alert_type) return static_cast<T*>(a);
@@ -310,7 +313,7 @@ template <class T> T* alert_cast(alert* a)
 template <class T> T const* alert_cast(alert const* a)
 {
 	static_assert(std::is_base_of<alert, T>::value
-		, "alert_cast<> can only be used with alert types (deriving from libtorrent::alert)");
+		, "alert_cast<> can only be used with alert types (deriving from lt::alert)");
 	if (a == nullptr) return nullptr;
 	if (a->type() == T::alert_type) return static_cast<T const*>(a);
 	return nullptr;

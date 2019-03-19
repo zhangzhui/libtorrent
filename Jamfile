@@ -43,7 +43,9 @@ else
 		: : $(boost-include-path) ;
 }
 
-VERSION = 1.2.0 ;
+use-project /try_signal : ./deps/try_signal ;
+
+VERSION = 1.3.0 ;
 
 rule linking ( properties * )
 {
@@ -70,6 +72,10 @@ rule linking ( properties * )
 	{
 		result += <library>ssl ;
 		result += <library>crypto ;
+		if <target-os>linux in $(properties)
+		{
+			result += <library>dl ;
+		}
 	}
 	else if <crypto>libcrypto in $(properties)
 	{
@@ -180,6 +186,15 @@ rule linking ( properties * )
 		<define>BOOST_SYSTEM_NO_DEPRECATED
 		;
 
+	if <link>shared in $(properties)
+	{
+		result += <library>/try_signal//try_signal/<link>static/<fpic>on ;
+	}
+	else
+	{
+		result += <library>/try_signal//try_signal/<link>static ;
+	}
+
 	return $(result) ;
 }
 
@@ -256,6 +271,13 @@ rule building ( properties * )
 		result += <build>no ;
 	}
 
+	local VERSION = [ feature.get-values <cxxstd> : $(properties) ] ;
+	if ! $(VERSION) || $(VERSION) < 14
+	{
+		ECHO "libtorrent requires at least C++14. Specify <cxxstd>14 or higher" ;
+		result += <build>no ;
+	}
+
 	if <toolset>msvc in $(properties)
 	{
 		# allow larger .obj files (with more sections)
@@ -281,28 +303,10 @@ rule building ( properties * )
 		result += <source>src/pe_crypto.cpp ;
 	}
 
-	if <crypto>built-in in $(properties)
-		&& ! <target-os>windows in $(properties)
-		&& ! <target-os>darwin in $(properties)
-	{
-		result += <source>src/sha1.cpp ;
-		if <dht>on in $(properties)
-		{
-			result += <source>src/sha512.cpp ;
-		}
-	}
-
-	if <target-os>windows in $(properties)
-		&& <windows-version>xp in $(properties)
-	{
-		result += <source>src/sha512.cpp ;
-	}
-
 	if ( <toolset>darwin in $(properties)
 		|| <toolset>gcc in $(properties)
 		|| <toolset>clang in $(properties)
 		|| <toolset>clang-darwin in $(properties) )
-		&& <link>shared in $(properties)
 		# on GCC, enabling debugging in libstdc++
 		# breaks the ABI and its ability to appear
 		# in shared object interfaces, so when it's
@@ -359,20 +363,13 @@ rule openssl-lib-path ( properties * )
 		# brew install openssl
 		OPENSSL_LIB = /usr/local/opt/openssl/lib ;
 	}
-	else if <target-os>windows in $(properties)
-		&& <toolset>gcc in $(properties)
-		&& $(OPENSSL_LIB) = ""
-	{
-		# on mingw, assume openssl is installed in c:\OpenSSL-Win32 by default
-		OPENSSL_LIB = c:\\OpenSSL-Win32\\lib ;
-	}
 	else if <target-os>windows in $(properties) && $(OPENSSL_LIB) = ""
 	{
-		# on windows, just assume openssl is installed to c:\openssl
+		# on windows, assume openssl is installed to c:\OpenSSL-Win32
 		if <address-model>64 in $(properties)
-		{ OPENSSL_LIB = c:\\openssl\\lib64 ; }
+		{ OPENSSL_LIB = c:\\OpenSSL-Win64\\lib ; }
 		else
-		{ OPENSSL_LIB = c:\\openssl\\lib ; }
+		{ OPENSSL_LIB = c:\\OpenSSL-Win32\\lib ; }
 	}
 
 	local result ;
@@ -392,21 +389,13 @@ rule openssl-include-path ( properties * )
 		# brew install openssl
 		OPENSSL_INCLUDE = /usr/local/opt/openssl/include ;
 	}
-	else if <target-os>windows in $(properties)
-		&& <toolset>gcc in $(properties)
-		&& $(OPENSSL_INCLUDE) = ""
-	{
-		# on mingw, assume openssl is installed in c:\OpenSSL-Win32 by default
-		OPENSSL_INCLUDE = c:\\OpenSSL-Win32\\include ;
-	}
 	else if <target-os>windows in $(properties) && $(OPENSSL_INCLUDE) = ""
 	{
-		# on windows, just assume openssl is installed to c:\openssl
-		# not sure if there's a better way to find out where it may be
+		# on windows, assume openssl is installed to c:\OpenSSL-Win32
 		if <address-model>64 in $(properties)
-		{ OPENSSL_INCLUDE = c:\\openssl\\include64 ; }
+		{ OPENSSL_INCLUDE = c:\\OpenSSL-Win64\\include ; }
 		else
-		{ OPENSSL_INCLUDE = c:\\openssl\\include ; }
+		{ OPENSSL_INCLUDE = c:\\OpenSSL-Win32\\include ; }
 	}
 
 	local result ;
@@ -439,7 +428,7 @@ feature.compose <asserts>on : <define>TORRENT_USE_ASSERTS=1 ;
 feature.compose <asserts>production : <define>TORRENT_USE_ASSERTS=1 <define>TORRENT_PRODUCTION_ASSERTS=1 ;
 feature.compose <asserts>system : <define>TORRENT_USE_ASSERTS=1 <define>TORRENT_USE_SYSTEM_ASSERTS=1 ;
 
-feature windows-version : vista win7 xp : composite propagated link-incompatible ;
+feature windows-version : vista win7 xp : composite propagated ;
 feature.compose <windows-version>vista : <define>_WIN32_WINNT=0x0600 ;
 feature.compose <windows-version>win7 : <define>_WIN32_WINNT=0x0601 ;
 feature.compose <windows-version>xp : <define>_WIN32_WINNT=0x0501 ;
@@ -453,12 +442,11 @@ feature.compose <asio-debugging>on : <define>TORRENT_ASIO_DEBUGGING ;
 feature picker-debugging : off on : composite propagated link-incompatible ;
 feature.compose <picker-debugging>on : <define>TORRENT_DEBUG_REFCOUNTS ;
 
+feature mmap-disk-io : on off : composite propagated ;
+feature.compose <mmap-disk-io>off : <define>TORRENT_HAVE_MMAP=0 ;
+
 feature simulator : off on : composite propagated link-incompatible ;
 feature.compose <simulator>on : <define>TORRENT_BUILD_SIMULATOR ;
-
-feature piece-allocator : valloc memalign posix_memalign : composite propagated ;
-feature.compose <piece-allocator>memalign : <define>TORRENT_USE_MEMALIGN=1 ;
-feature.compose <piece-allocator>posix_memalign : <define>TORRENT_USE_POSIX_MEMALIGN=1 ;
 
 feature invariant-checks : off on full : composite propagated link-incompatible ;
 feature.compose <invariant-checks>on : <define>TORRENT_USE_INVARIANT_CHECKS=1 ;
@@ -551,44 +539,26 @@ lib shell32 : : <name>shell32 ;
 lib gdi32 : : <name>gdi32 ;
 lib z : : <link>shared <name>z ;
 
-# windows variants for libssl and libcrypto (they have different names and some
-# additional dependencies)
-lib crypto
-	: # sources
-	: # requirements
-	<target-os>windows
-	<openssl-version>pre1.1
-	<name>libeay32
-	<conditional>@openssl-lib-path
-	: # default-build
-	: # usage-requirements
-	<conditional>@openssl-include-path
-	<library>advapi32
-	<library>user32
-	<library>shell32
-	<library>gdi32
-	;
+# openssl libraries on windows
+alias ssl-deps : advapi32 user32 shell32 gdi32 ;
 
-lib ssl
-	: # sources
-	: # requirements
-	<target-os>windows
-	<openssl-version>pre1.1
-	<name>ssleay32
-	<use>crypto
-	<conditional>@openssl-lib-path
-	: # default-build
-	: # usage-requirments
-	<conditional>@openssl-include-path
-	<library>advapi32
-	<library>user32
-	<library>shell32
-	<library>gdi32
-	;
+# pre OpenSSL 1.1 windows
+lib crypto : ssl-deps : <target-os>windows <openssl-version>pre1.1 <name>libeay32
+	<conditional>@openssl-lib-path : : <conditional>@openssl-include-path ;
+lib ssl : ssl-deps : <target-os>windows <openssl-version>pre1.1 <name>ssleay32
+	<use>crypto <conditional>@openssl-lib-path : : <conditional>@openssl-include-path ;
 
+# OpenSSL 1.1+ windows
+lib crypto : ssl-deps : <toolset>msvc <openssl-version>1.1 <name>libcrypto
+	<conditional>@openssl-lib-path : : <conditional>@openssl-include-path ;
+lib ssl : ssl-deps : <toolset>msvc <openssl-version>1.1 <name>libssl <use>crypto
+	<conditional>@openssl-lib-path : : <conditional>@openssl-include-path ;
 
-lib crypto : : <name>crypto <use>z <conditional>@openssl-lib-path  : : <conditional>@openssl-include-path ;
-lib ssl : : <name>ssl <use>crypto <conditional>@openssl-lib-path : : <conditional>@openssl-include-path ;
+# generic OpenSSL
+lib crypto : : <name>crypto <use>z <conditional>@openssl-lib-path : :
+	<conditional>@openssl-include-path ;
+lib ssl : : <name>ssl <use>crypto <conditional>@openssl-lib-path : :
+	<conditional>@openssl-include-path ;
 
 lib dbghelp : : <name>dbghelp ;
 
@@ -615,7 +585,6 @@ lib iphlpapi : : <name>iphlpapi <link>shared ;
 SOURCES =
 	alert
 	alert_manager
-	allocator
 	announce_entry
 	assert
 	bandwidth_limit
@@ -623,7 +592,6 @@ SOURCES =
 	bandwidth_queue_entry
 	bdecode
 	bitfield
-	block_cache
 	bloom_filter
 	chained_buffer
 	choker
@@ -633,9 +601,11 @@ SOURCES =
 	create_torrent
 	disk_buffer_holder
 	disk_buffer_pool
+	disk_interface
 	disk_io_job
 	disk_io_thread
 	disk_io_thread_pool
+	disabled_disk_io
 	disk_job_fence
 	disk_job_pool
 	entry
@@ -685,13 +655,13 @@ SOURCES =
 	session_call
 	session_udp_sockets
 	settings_pack
+	sha1
 	sha1_hash
 	socket_io
 	socket_type
 	socks5_stream
 	stat
 	storage
-	storage_piece_set
 	storage_utils
 	torrent
 	torrent_handle
@@ -709,7 +679,7 @@ SOURCES =
 	utf8
 	utp_socket_manager
 	utp_stream
-	file_pool
+	file_view_pool
 	lsd
 	enum_net
 	broadcast_socket
@@ -734,6 +704,9 @@ SOURCES =
 	peer_info
 	stack_allocator
 	generate_peer_id
+	mmap
+	posix_disk_io
+	posix_storage
 
 # -- extensions --
 	ut_pex
@@ -773,6 +746,8 @@ ED25519_SOURCES =
 	sc
 	sign
 	verify
+	hasher512
+	sha512
 	;
 
 local usage-requirements =
@@ -788,6 +763,7 @@ local usage-requirements =
 	<define>BOOST_ASIO_ENABLE_CANCELIO
 # make sure asio uses std::chrono
 	<define>BOOST_ASIO_HAS_STD_CHRONO
+	<define>BOOST_ASIO_NO_DEPRECATED
 	<conditional>@linking
 # msvc optimizations
 	<toolset>msvc,<variant>release:<linkflags>"/OPT:ICF=5"
@@ -817,8 +793,7 @@ lib torrent
 	<link>shared:<define>BOOST_SYSTEM_SOURCE
 
 	<dht>on:<source>src/kademlia/$(KADEMLIA_SOURCES).cpp
-	<dht>on:<source>ed25519/src/$(ED25519_SOURCES).cpp
-	<dht>on:<source>src/hasher512.cpp
+	<dht>on:<source>src/ed25519/$(ED25519_SOURCES).cpp
 
 	<conditional>@building
 	<conditional>@warnings

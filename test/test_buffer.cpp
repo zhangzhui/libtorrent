@@ -73,7 +73,7 @@ TORRENT_TEST(buffer_swap)
 	buffer b1;
 	TEST_CHECK(b1.size() == 0);
 	buffer b2(10, data);
-	std::size_t const b2_size = b2.size();
+	auto const b2_size = b2.size();
 	TEST_CHECK(b2_size >= 10);
 
 	b1.swap(b2);
@@ -90,7 +90,7 @@ TORRENT_TEST(buffer_subscript)
 	TEST_CHECK(b.size() >= 50);
 
 	for (int i = 0; i < int(sizeof(data)/sizeof(data[0])); ++i)
-		TEST_CHECK(b[std::size_t(i)] == data[i]);
+		TEST_CHECK(b[i] == data[i]);
 }
 
 TORRENT_TEST(buffer_subscript2)
@@ -99,10 +99,10 @@ TORRENT_TEST(buffer_subscript2)
 	TEST_CHECK(b.size() >= 1);
 
 	for (int i = 0; i < int(b.size()); ++i)
-		b[std::size_t(i)] = char(i & 0xff);
+		b[i] = char(i & 0xff);
 
 	for (int i = 0; i < int(b.size()); ++i)
-		TEST_CHECK(b[std::size_t(i)] == (i & 0xff));
+		TEST_CHECK(b[i] == (i & 0xff));
 }
 
 TORRENT_TEST(buffer_move_construct)
@@ -161,12 +161,11 @@ template <class T>
 int copy_buffers(T const& b, char* target)
 {
 	int copied = 0;
-	for (typename T::const_iterator i = b.begin()
-		, end(b.end()); i != end; ++i)
+	for (auto const& i : b)
 	{
-		memcpy(target, boost::asio::buffer_cast<char const*>(*i), boost::asio::buffer_size(*i));
-		target += boost::asio::buffer_size(*i);
-		copied += int(boost::asio::buffer_size(*i));
+		memcpy(target, i.data(), i.size());
+		target += i.size();
+		copied += int(i.size());
 	}
 	return copied;
 }
@@ -175,7 +174,7 @@ bool compare_chained_buffer(chained_buffer& b, char const* mem, int size)
 {
 	if (size == 0) return true;
 	std::vector<char> flat((std::size_t(size)));
-	std::vector<boost::asio::const_buffer> const& iovec2 = b.build_iovec(size);
+	auto const iovec2 = b.build_iovec(size);
 	int copied = copy_buffers(iovec2, &flat[0]);
 	TEST_CHECK(copied == size);
 	return std::memcmp(&flat[0], mem, std::size_t(size)) == 0;

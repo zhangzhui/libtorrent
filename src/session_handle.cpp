@@ -36,12 +36,13 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/aux_/throw.hpp"
 #include "libtorrent/aux_/path.hpp"
 #include "libtorrent/torrent.hpp"
-#include "libtorrent/lazy_entry.hpp"
+#include "libtorrent/hasher.hpp"
 #include "libtorrent/peer_class.hpp"
 #include "libtorrent/peer_class_type_filter.hpp"
 
 #if TORRENT_ABI_VERSION == 1
 #include "libtorrent/read_resume_data.hpp"
+#include "libtorrent/lazy_entry.hpp"
 #endif
 
 using libtorrent::aux::session_impl;
@@ -67,7 +68,9 @@ namespace libtorrent {
 #endif
 
 	constexpr session_flags_t session_handle::add_default_plugins;
+#if TORRENT_ABI_VERSION == 1
 	constexpr session_flags_t session_handle::start_default_features;
+#endif
 
 	constexpr remove_flags_t session_handle::delete_files;
 	constexpr remove_flags_t session_handle::delete_partfile;
@@ -79,7 +82,7 @@ namespace libtorrent {
 	{
 		std::shared_ptr<session_impl> s = m_impl.lock();
 		if (!s) aux::throw_ex<system_error>(errors::invalid_session_handle);
-		s->get_io_service().dispatch([=]() mutable
+		dispatch(s->get_context(), [=]() mutable
 		{
 #ifndef BOOST_NO_EXCEPTIONS
 			try {
@@ -109,7 +112,7 @@ namespace libtorrent {
 		bool done = false;
 
 		std::exception_ptr ex;
-		s->get_io_service().dispatch([=, &done, &ex]() mutable
+		dispatch(s->get_context(), [=, &done, &ex]() mutable
 		{
 #ifndef BOOST_NO_EXCEPTIONS
 			try {
@@ -141,7 +144,7 @@ namespace libtorrent {
 		bool done = false;
 		Ret r;
 		std::exception_ptr ex;
-		s->get_io_service().dispatch([=, &r, &done, &ex]() mutable
+		dispatch(s->get_context(), [=, &r, &done, &ex]() mutable
 		{
 #ifndef BOOST_NO_EXCEPTIONS
 			try {
@@ -215,11 +218,11 @@ namespace libtorrent {
 		async_call(&session_impl::post_dht_stats);
 	}
 
-	io_service& session_handle::get_io_service()
+	io_context& session_handle::get_context()
 	{
 		std::shared_ptr<session_impl> s = m_impl.lock();
 		if (!s) aux::throw_ex<system_error>(errors::invalid_session_handle);
-		return s->get_io_service();
+		return s->get_context();
 	}
 
 	torrent_handle session_handle::find_torrent(sha1_hash const& info_hash) const
@@ -360,40 +363,49 @@ namespace {
 #endif // TORRENT_ABI_VERSION
 
 #ifndef BOOST_NO_EXCEPTIONS
-	torrent_handle session_handle::add_torrent(add_torrent_params const& params)
+	torrent_handle session_handle::add_torrent(add_torrent_params&& params)
 	{
 		TORRENT_ASSERT_PRECOND(!params.save_path.empty());
 
 #if TORRENT_ABI_VERSION == 1
-		add_torrent_params p = params;
-		handle_backwards_compatible_resume_data(p);
-#else
-		add_torrent_params const& p = params;
+		handle_backwards_compatible_resume_data(params);
 #endif
 		error_code ec;
 		auto ecr = std::ref(ec);
-		torrent_handle r = sync_call_ret<torrent_handle>(&session_impl::add_torrent, p, ecr);
+		torrent_handle r = sync_call_ret<torrent_handle>(&session_impl::add_torrent, std::move(params), ecr);
 		if (ec) aux::throw_ex<system_error>(ec);
 		return r;
 	}
+
+	torrent_handle session_handle::add_torrent(add_torrent_params const& params)
+	{
+		return add_torrent(add_torrent_params(params));
+	}
 #endif
 
-	torrent_handle session_handle::add_torrent(add_torrent_params const& params, error_code& ec)
+	torrent_handle session_handle::add_torrent(add_torrent_params&& params, error_code& ec)
 	{
 		TORRENT_ASSERT_PRECOND(!params.save_path.empty());
 
 		ec.clear();
 #if TORRENT_ABI_VERSION == 1
-		add_torrent_params p = params;
-		handle_backwards_compatible_resume_data(p);
-#else
-		add_torrent_params const& p = params;
+		handle_backwards_compatible_resume_data(params);
 #endif
 		auto ecr = std::ref(ec);
-		return sync_call_ret<torrent_handle>(&session_impl::add_torrent, p, ecr);
+		return sync_call_ret<torrent_handle>(&session_impl::add_torrent, std::move(params), ecr);
 	}
 
-	void session_handle::async_add_torrent(add_torrent_params params)
+	torrent_handle session_handle::add_torrent(add_torrent_params const& params, error_code& ec)
+	{
+		return add_torrent(add_torrent_params(params), ec);
+	}
+
+	void session_handle::async_add_torrent(add_torrent_params const& params)
+	{
+		async_add_torrent(add_torrent_params(params));
+	}
+
+	void session_handle::async_add_torrent(add_torrent_params&& params)
 	{
 		TORRENT_ASSERT_PRECOND(!params.save_path.empty());
 
@@ -418,10 +430,9 @@ namespace {
 		, std::string const& save_path
 		, entry const& resume_data
 		, storage_mode_t storage_mode
-		, bool paused
-		, storage_constructor_type sc)
+		, bool paused)
 	{
-		add_torrent_params p(std::move(sc));
+		add_torrent_params p;
 		p.ti = std::make_shared<torrent_info>(ti);
 		p.save_path = save_path;
 		if (resume_data.type() != entry::undefined_t)
@@ -442,12 +453,11 @@ namespace {
 		, entry const& resume_data
 		, storage_mode_t storage_mode
 		, bool paused
-		, storage_constructor_type sc
 		, void* userdata)
 	{
 		TORRENT_ASSERT_PRECOND(!save_path.empty());
 
-		add_torrent_params p(std::move(sc));
+		add_torrent_params p;
 		p.trackers.push_back(tracker_url);
 		p.info_hash = info_hash;
 		p.save_path = save_path;
@@ -493,29 +503,6 @@ namespace {
 		return sync_call_ret<session_status>(&session_impl::status);
 	}
 
-	void session_handle::get_cache_info(sha1_hash const& ih
-		, std::vector<cached_piece_info>& ret) const
-	{
-		cache_status st;
-		get_cache_info(&st, find_torrent(ih));
-		ret.swap(st.pieces);
-	}
-
-	cache_status session_handle::get_cache_status() const
-	{
-		cache_status st;
-		get_cache_info(&st);
-		return st;
-	}
-#endif
-
-	void session_handle::get_cache_info(cache_status* ret
-		, torrent_handle h, int flags) const
-	{
-		sync_call(&session_impl::get_cache_info, h, ret, flags);
-	}
-
-#if TORRENT_ABI_VERSION == 1
 	void session_handle::start_dht()
 	{
 		settings_pack p;
@@ -940,7 +927,23 @@ namespace {
 	}
 #endif
 
-	void session_handle::apply_settings(settings_pack s)
+	void session_handle::apply_settings(settings_pack const& s)
+	{
+		TORRENT_ASSERT_PRECOND(!s.has_val(settings_pack::out_enc_policy)
+			|| s.get_int(settings_pack::out_enc_policy)
+				<= settings_pack::pe_disabled);
+		TORRENT_ASSERT_PRECOND(!s.has_val(settings_pack::in_enc_policy)
+			|| s.get_int(settings_pack::in_enc_policy)
+				<= settings_pack::pe_disabled);
+		TORRENT_ASSERT_PRECOND(!s.has_val(settings_pack::allowed_enc_level)
+			|| s.get_int(settings_pack::allowed_enc_level)
+				<= settings_pack::pe_both);
+
+		auto copy = std::make_shared<settings_pack>(s);
+		async_call(&session_impl::apply_settings_pack, copy);
+	}
+
+	void session_handle::apply_settings(settings_pack&& s)
 	{
 		TORRENT_ASSERT_PRECOND(!s.has_val(settings_pack::out_enc_policy)
 			|| s.get_int(settings_pack::out_enc_policy)
@@ -1026,7 +1029,7 @@ namespace {
 		// setting
 		settings_pack pack;
 		pack.set_bool(settings_pack::proxy_tracker_connections
-			, s.type != aux::proxy_settings::none);
+			, s.type != settings_pack::none);
 		apply_settings(pack);
 	}
 

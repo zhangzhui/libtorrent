@@ -44,8 +44,6 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	struct TORRENT_EXPORT storage_interface;
-
 	using storage_index_t = aux::strong_typedef<std::uint32_t, struct storage_index_tag_t>;
 
 	// types of storage allocation used for add_torrent_params::storage_mode.
@@ -101,7 +99,7 @@ namespace libtorrent {
 	};
 #endif
 
-	struct TORRENT_EXPORT storage_params
+	struct TORRENT_EXTRA_EXPORT storage_params
 	{
 		storage_params(file_storage const& f, file_storage const* mf
 			, std::string const& sp, storage_mode_t const sm
@@ -121,20 +119,6 @@ namespace libtorrent {
 		aux::vector<download_priority_t, file_index_t> const& priorities;
 		sha1_hash const& info_hash;
 	};
-
-	using storage_constructor_type = std::function<storage_interface*(storage_params const& params, file_pool&)>;
-
-	// the constructor function for the regular file storage. This is the
-	// default value for add_torrent_params::storage.
-	TORRENT_EXPORT storage_interface* default_storage_constructor(storage_params const&
-		, file_pool& p);
-
-	// the constructor function for the disabled storage. This can be used for
-	// testing and benchmarking. It will throw away any data written to
-	// it and return garbage for anything read from it.
-	TORRENT_EXPORT storage_interface* disabled_storage_constructor(storage_params const&, file_pool&);
-
-	TORRENT_EXPORT storage_interface* zero_storage_constructor(storage_params const&, file_pool&);
 }
 
 #endif

@@ -11,19 +11,6 @@
 
 using namespace boost::python;
 
-#if BOOST_VERSION < 103400
-
-// From Boost 1.34
-object import(str name)
-{
-    // should be 'char const *' but older python versions don't use 'const' yet.
-    char *n = extract<char *>(name);
-    handle<> module(borrowed(PyImport_ImportModule(n)));
-    return object(module);
-}
-
-#endif
-
 object datetime_timedelta;
 object datetime_datetime;
 
@@ -146,5 +133,6 @@ void bind_datetime()
       , chrono_duration_to_python<std::chrono::seconds>>();
 
     optional_to_python<boost::posix_time::ptime>();
+    optional_to_python<std::time_t>();
 }
 

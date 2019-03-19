@@ -71,11 +71,9 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/aux_/path.hpp"
 #include "libtorrent/file.hpp" // for directory
 #include "libtorrent/string_util.hpp"
-#include "libtorrent/aux_/max_path.hpp" // for TORRENT_MAX_PATH
 #include <cstring>
 
-// for convert_to_wstring and convert_to_native
-#include "libtorrent/aux_/escape_string.hpp"
+#include "libtorrent/aux_/escape_string.hpp" // for convert_to_native
 #include "libtorrent/assert.hpp"
 #include "libtorrent/aux_/throw.hpp"
 
@@ -90,10 +88,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/utf8.hpp"
 #include "libtorrent/aux_/win_util.hpp"
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
+#include "libtorrent/aux_/windows.hpp"
 #include <winioctl.h>
 #ifndef TORRENT_MINGW
 #include <direct.h> // for _getcwd, _mkdir
@@ -129,21 +124,31 @@ namespace libtorrent {
 
 	int bufs_size(span<iovec_t const> bufs)
 	{
-		std::size_t size = 0;
+		std::ptrdiff_t size = 0;
 		for (auto buf : bufs) size += buf.size();
 		return int(size);
 	}
 
 #if defined TORRENT_WINDOWS
-	std::string convert_from_native_path(wchar_t const* s) { return convert_from_wstring(s); }
+	std::string convert_from_native_path(wchar_t const* s)
+	{
+		if (s[0] == L'\\' && s[1] == L'\\' && s[2] == L'?' && s[3] == L'\\') s += 4;
+		return convert_from_wstring(s);
+	}
 #else
 	std::string convert_from_native_path(char const* s) { return convert_from_native(s); }
 #endif
 
-	template <typename T>
-	std::unique_ptr<T, decltype(&std::free)> make_free_holder(T* ptr)
+namespace {
+	struct free_function
 	{
-		return std::unique_ptr<T, decltype(&std::free)>(ptr, &std::free);
+		void operator()(void* ptr) const noexcept { std::free(ptr); }
+	};
+
+	template <typename T>
+	std::unique_ptr<T, free_function> make_free_holder(T* ptr)
+	{
+		return std::unique_ptr<T, free_function>(ptr, free_function{});
 	}
 
 #ifdef TORRENT_WINDOWS
@@ -158,26 +163,17 @@ namespace libtorrent {
 		return time_t(ft / 10000000 - posix_time_offset);
 	}
 #endif
+} // anonymous namespace
 
 	native_path_string convert_to_native_path_string(std::string const& path)
 	{
-#ifdef TORRENT_WINDOWS
 #if TORRENT_USE_UNC_PATHS
-		std::string prepared_path;
 		// UNC paths must be absolute
 		// network paths are already UNC paths
-		if (path.substr(0,2) == "\\\\")
-			prepared_path = path;
-		else
-		{
-			std::string sep_path = path;
-			std::replace(sep_path.begin(), sep_path.end(), '/', '\\');
-			prepared_path = "\\\\?\\" + (is_complete(sep_path) ? sep_path : complete(sep_path));
-		}
-#else
-		std::string prepared_path = path;
+		std::string prepared_path = complete(path);
+		if (prepared_path.substr(0,2) != "\\\\")
+			prepared_path = "\\\\?\\" + prepared_path;
 		std::replace(prepared_path.begin(), prepared_path.end(), '/', '\\');
-#endif
 
 		return convert_to_wstring(prepared_path);
 #else // TORRENT_WINDOWS
@@ -227,7 +223,7 @@ namespace libtorrent {
 
 		// posix version
 
-		struct stat ret{};
+		struct ::stat ret{};
 		int retval;
 		if (flags & dont_follow_links)
 			retval = ::lstat(f.c_str(), &ret);
@@ -301,7 +297,7 @@ namespace libtorrent {
 			&& GetLastError() != ERROR_ALREADY_EXISTS)
 			ec.assign(GetLastError(), system_category());
 #else
-		int ret = ::mkdir(n.c_str(), S_IRWXU | S_IRGRP | S_IROTH);
+		int ret = ::mkdir(n.c_str(), S_IRWXU | S_IRWXG | S_IRWXO);
 		if (ret < 0 && errno != EEXIST)
 			ec.assign(errno, system_category());
 #endif
@@ -587,6 +583,24 @@ namespace libtorrent {
 		if (f == "/") return true;
 #endif
 		return false;
+	}
+
+	bool compare_path(std::string const& lhs, std::string const& rhs)
+	{
+		std::string::size_type const lhs_size = !lhs.empty()
+			&& (lhs[lhs.size()-1] == '/'
+#if defined(TORRENT_WINDOWS) || defined(TORRENT_OS2)
+			|| lhs[lhs.size()-1] == '\\'
+#endif
+			) ? lhs.size() - 1 : lhs.size();
+
+		std::string::size_type const rhs_size = !rhs.empty()
+			&& (rhs[rhs.size()-1] == '/'
+#if defined(TORRENT_WINDOWS) || defined(TORRENT_OS2)
+			|| rhs[rhs.size()-1] == '\\'
+#endif
+			) ? rhs.size() - 1 : rhs.size();
+		return lhs.compare(0, lhs_size, rhs, 0, rhs_size) == 0;
 	}
 
 	bool has_parent_path(std::string const& f)

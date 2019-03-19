@@ -78,7 +78,7 @@ namespace libtorrent {
 	constexpr status_flags_t torrent_handle::query_save_path;
 
 #ifndef BOOST_NO_EXCEPTIONS
-	void TORRENT_NO_RETURN throw_invalid_handle()
+	[[noreturn]] void throw_invalid_handle()
 	{
 		throw system_error(errors::invalid_torrent_handle);
 	}
@@ -90,7 +90,7 @@ namespace libtorrent {
 		std::shared_ptr<torrent> t = m_torrent.lock();
 		if (!t) aux::throw_ex<system_error>(errors::invalid_torrent_handle);
 		auto& ses = static_cast<session_impl&>(t->session());
-		ses.get_io_service().dispatch([=,&ses] ()
+		dispatch(ses.get_context(), [=,&ses] ()
 		{
 #ifndef BOOST_NO_EXCEPTIONS
 			try {
@@ -122,7 +122,7 @@ namespace libtorrent {
 		bool done = false;
 
 		std::exception_ptr ex;
-		ses.get_io_service().dispatch([=,&done,&ses,&ex] ()
+		dispatch(ses.get_context(), [=,&done,&ses,&ex] ()
 		{
 #ifndef BOOST_NO_EXCEPTIONS
 			try {
@@ -158,7 +158,7 @@ namespace libtorrent {
 		bool done = false;
 
 		std::exception_ptr ex;
-		ses.get_io_service().dispatch([=,&r,&done,&ses,&ex] ()
+		dispatch(ses.get_context(), [=,&r,&done,&ses,&ex] ()
 		{
 #ifndef BOOST_NO_EXCEPTIONS
 			try {
@@ -666,11 +666,6 @@ namespace libtorrent {
 	bool torrent_handle::have_piece(piece_index_t piece) const
 	{
 		return sync_call_ret<bool>(false, &torrent::user_have_piece, piece);
-	}
-
-	storage_interface* torrent_handle::get_storage_impl() const
-	{
-		return sync_call_ret<storage_interface*>(nullptr, &torrent::get_storage_impl);
 	}
 
 	bool torrent_handle::is_valid() const

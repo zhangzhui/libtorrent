@@ -39,6 +39,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <vector>
 #include <set>
 #include <thread>
+#include <iostream>
 
 using namespace lt;
 
@@ -55,12 +56,14 @@ int touch_file(std::string const& filename, int size)
 
 	file f;
 	error_code ec;
-	if (!f.open(filename, open_mode::write_only, ec)) return -1;
+	if (!f.open(filename, aux::open_mode::write, ec)) return -1;
+	TEST_EQUAL(ec, error_code());
 	if (ec) return -1;
-	iovec_t b = {&v[0], v.size()};
+	iovec_t b = {v};
 	std::int64_t written = f.writev(0, b, ec);
 	if (written != int(v.size())) return -3;
 	if (ec) return -3;
+	TEST_EQUAL(ec, error_code());
 	return 0;
 }
 
@@ -205,6 +208,30 @@ TORRENT_TEST(paths)
 	TEST_EQUAL(is_root_path("/"), true);
 #endif
 
+#ifdef TORRENT_WINDOWS
+	TEST_CHECK(compare_path("c:\\blah\\", "c:\\blah"));
+	TEST_CHECK(compare_path("c:\\blah", "c:\\blah"));
+	TEST_CHECK(compare_path("c:\\blah/", "c:\\blah"));
+	TEST_CHECK(compare_path("c:\\blah", "c:\\blah\\"));
+	TEST_CHECK(compare_path("c:\\blah", "c:\\blah"));
+	TEST_CHECK(compare_path("c:\\blah", "c:\\blah/"));
+
+	TEST_CHECK(!compare_path("c:\\bla", "c:\\blah/"));
+	TEST_CHECK(!compare_path("c:\\bla", "c:\\blah"));
+	TEST_CHECK(!compare_path("c:\\blah", "c:\\bla"));
+	TEST_CHECK(!compare_path("c:\\blah\\sdf", "c:\\blah"));
+#else
+	TEST_CHECK(compare_path("/blah", "/blah"));
+	TEST_CHECK(compare_path("/blah/", "/blah"));
+	TEST_CHECK(compare_path("/blah", "/blah"));
+	TEST_CHECK(compare_path("/blah", "/blah/"));
+
+	TEST_CHECK(!compare_path("/bla", "/blah/"));
+	TEST_CHECK(!compare_path("/bla", "/blah"));
+	TEST_CHECK(!compare_path("/blah", "/bla"));
+	TEST_CHECK(!compare_path("/blah/sdf", "/blah"));
+#endif
+
 	// if has_parent_path() returns false
 	// parent_path() should return the empty string
 	TEST_EQUAL(parent_path("blah"), "");
@@ -287,14 +314,18 @@ TORRENT_TEST(file)
 {
 	error_code ec;
 	file f;
-	std::string test_file_name = "test_file";
-	TEST_CHECK(f.open(test_file_name, open_mode::read_write, ec));
+#if TORRENT_USE_UNC_PATHS || !defined _WIN32
+	std::string const test_file_name = "con";
+#else
+	std::string const test_file_name = "test_file";
+#endif
+	TEST_CHECK(f.open(test_file_name, aux::open_mode::write, ec));
 	if (ec)
 		std::printf("open failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
 	TEST_EQUAL(ec, error_code());
 	if (ec) std::printf("%s\n", ec.message().c_str());
 	char test[] = "test";
-	size_t const test_word_size = sizeof(test) - 1;
+	int const test_word_size = int(sizeof(test)) - 1;
 	iovec_t b = {test, test_word_size};
 	TEST_EQUAL(f.writev(0, b, ec), test_word_size);
 	if (ec)
@@ -309,7 +340,7 @@ TORRENT_TEST(file)
 	TEST_CHECK(test_buf == "test"_sv);
 	f.close();
 
-	TEST_CHECK(f.open(test_file_name, open_mode::read_only, ec));
+	TEST_CHECK(f.open(test_file_name, aux::open_mode::read_only, ec));
 	if (ec)
 		std::printf("open failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
 	TEST_EQUAL(ec, error_code());
@@ -339,7 +370,7 @@ TORRENT_TEST(hard_link)
 	// read that file and assert we get the same stuff we wrote to the first file
 	error_code ec;
 	file f;
-	TEST_CHECK(f.open("original_file", open_mode::read_write, ec));
+	TEST_CHECK(f.open("original_file", aux::open_mode::write, ec));
 	if (ec)
 		std::printf("open failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
 	TEST_EQUAL(ec, error_code());
@@ -359,7 +390,7 @@ TORRENT_TEST(hard_link)
 	TEST_EQUAL(ec, error_code());
 
 
-	TEST_CHECK(f.open("second_link", open_mode::read_write, ec));
+	TEST_CHECK(f.open("second_link", aux::open_mode::write, ec));
 	if (ec)
 		std::printf("open failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
 	TEST_EQUAL(ec, error_code());
@@ -382,38 +413,6 @@ TORRENT_TEST(hard_link)
 		std::printf("remove failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
 }
 
-TORRENT_TEST(coalesce_buffer)
-{
-	error_code ec;
-	file f;
-	TEST_CHECK(f.open("test_file", open_mode::read_write, ec));
-	if (ec)
-		std::printf("open failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
-	TEST_EQUAL(ec, error_code());
-	if (ec) std::printf("%s\n", ec.message().c_str());
-	char test[] = "test";
-	char foobar[] = "foobar";
-	iovec_t b[2] = {{test, 4}, {foobar, 6}};
-	TEST_EQUAL(f.writev(0, b, ec, open_mode::coalesce_buffers), 4 + 6);
-	if (ec)
-		std::printf("writev failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
-	TEST_CHECK(!ec);
-	char test_buf1[5] = {0};
-	char test_buf2[7] = {0};
-	b[0] = { test_buf1, 4 };
-	b[1] = { test_buf2, 6 };
-	TEST_EQUAL(f.readv(0, b, ec), 4 + 6);
-	if (ec)
-	{
-		std::printf("readv failed: [%s] %s\n"
-			, ec.category().name(), ec.message().c_str());
-	}
-	TEST_EQUAL(ec, error_code());
-	TEST_CHECK(test_buf1 == "test"_sv);
-	TEST_CHECK(test_buf2 == "foobar"_sv);
-	f.close();
-}
-
 TORRENT_TEST(stat_file)
 {
 	file_status st;
@@ -423,31 +422,31 @@ TORRENT_TEST(stat_file)
 	TEST_EQUAL(ec, boost::system::errc::no_such_file_or_directory);
 }
 
-// specificaly UNC tests
+// UNC tests
 #if TORRENT_USE_UNC_PATHS
 
 namespace {
-std::tuple<int, bool> fill_current_directory_caps()
+std::tuple<int, bool> current_directory_caps()
 {
 #ifdef TORRENT_WINDOWS
-	error_code ec;
-	DWORD dw_maximum_component_length;
-	DWORD dw_file_system_flags;
-	if (!GetVolumeInformationA(nullptr, nullptr, 0, nullptr, &dw_maximum_component_length, &dw_file_system_flags, nullptr, 0))
+	DWORD maximum_component_length = FILENAME_MAX;
+	DWORD file_system_flags = 0;
+	if (GetVolumeInformation(nullptr
+		, nullptr, 0, nullptr
+		, &maximum_component_length, &file_system_flags, nullptr, 0) == 0)
 	{
-		ec.assign(GetLastError(), system_category());
-		std::printf("GetVolumeInformation: [%s] %s\n"
-			, ec.category().name(), ec.message().c_str());
-		return std::make_tuple(0, false);
+		error_code ec(GetLastError(), system_category());
+		std::printf("GetVolumeInformation: [%s : %d] %s\n"
+			, ec.category().name(), ec.value(), ec.message().c_str());
+		// ignore errors, this is best-effort
 	}
-	int maximum_component_length = int(dw_maximum_component_length);
-	bool support_hard_links = ((dw_file_system_flags & FILE_SUPPORTS_HARD_LINKS) != 0);
-	return std::make_tuple(maximum_component_length, support_hard_links);
+	bool const support_hard_links = ((file_system_flags & FILE_SUPPORTS_HARD_LINKS) != 0);
+	return std::make_tuple(int(maximum_component_length), support_hard_links);
 #else
-	return std::make_tuple(TORRENT_MAX_PATH, true);
+	return std::make_tuple(255, true);
 #endif
 }
-}
+} // anonymous namespace
 
 TORRENT_TEST(unc_tests)
 {
@@ -473,7 +472,7 @@ TORRENT_TEST(unc_tests)
 
 	for (std::string special_name : special_names)
 	{
-		TEST_EQUAL(touch_file(special_name, 10), 0);
+		touch_file(special_name, 10);
 		TEST_CHECK(lt::exists(special_name));
 		lt::remove(special_name, ec);
 		TEST_EQUAL(ec, error_code());
@@ -482,61 +481,88 @@ TORRENT_TEST(unc_tests)
 
 	int maximum_component_length;
 	bool support_hard_links;
-	std::tie(maximum_component_length, support_hard_links) = fill_current_directory_caps();
+	std::tie(maximum_component_length, support_hard_links) = current_directory_caps();
 
-	if (maximum_component_length > 0)
+	std::cout << "max file path component length: " << maximum_component_length << "\n"
+		<< "support hard links: " << (support_hard_links?"yes":"no") << "\n";
+
+	std::string long_dir_name;
+	maximum_component_length -= 12;
+	long_dir_name.resize(size_t(maximum_component_length));
+	for (int i = 0; i < maximum_component_length; ++i)
+		long_dir_name[i] = static_cast<char>((i % 26) + 'A');
+
+	std::string long_file_name1 = combine_path(long_dir_name, long_dir_name);
+	long_file_name1.back() = '1';
+	std::string long_file_name2 = long_file_name1;
+	long_file_name2.back() = '2';
+
+	lt::create_directory(long_dir_name, ec);
+	TEST_EQUAL(ec, error_code());
+	if (ec)
 	{
-		std::string long_component_name;
-		long_component_name.resize(size_t(maximum_component_length));
-		for (int i = 0; i < maximum_component_length; ++i)
-			long_component_name[i] = static_cast<char>((i % 26) + 'A');
+		std::cout << "create_directory \"" << long_dir_name << "\" failed: " << ec.message() << "\n";
+		std::wcout << convert_to_native_path_string(long_dir_name) << L"\n";
+	}
+	TEST_CHECK(lt::exists(long_dir_name));
+	TEST_CHECK(lt::is_directory(long_dir_name, ec));
+	TEST_EQUAL(ec, error_code());
+	if (ec)
+	{
+		std::cout << "is_directory \"" << long_dir_name << "\" failed " << ec.message() << "\n";
+		std::wcout << convert_to_native_path_string(long_dir_name) << L"\n";
+	}
 
-		std::string long_file_name1 =  combine_path(long_component_name, long_component_name);
-		long_file_name1.back() = '1';
-		std::string long_file_name2 { long_file_name1 };
-		long_file_name2.back() = '2';
+	touch_file(long_file_name1, 10);
+	TEST_CHECK(lt::exists(long_file_name1));
 
-		lt::create_directory(long_component_name, ec);
+	lt::rename(long_file_name1, long_file_name2, ec);
+	TEST_EQUAL(ec, error_code());
+	if (ec)
+	{
+		std::cout << "rename \"" << long_file_name1 << "\" failed " << ec.message() << "\n";
+		std::wcout << convert_to_native_path_string(long_file_name1) << L"\n";
+	}
+	TEST_CHECK(!lt::exists(long_file_name1));
+	TEST_CHECK(lt::exists(long_file_name2));
+
+	lt::copy_file(long_file_name2, long_file_name1, ec);
+	TEST_EQUAL(ec, error_code());
+	if (ec)
+	{
+		std::cout << "copy_file \"" << long_file_name2 << "\" failed " << ec.message() << "\n";
+		std::wcout << convert_to_native_path_string(long_file_name2) << L"\n";
+	}
+	TEST_CHECK(lt::exists(long_file_name1));
+
+	std::set<std::string> files;
+
+	for (lt::directory i(long_dir_name, ec); !i.done(); i.next(ec))
+	{
+		std::string f = i.file();
+		files.insert(f);
+	}
+
+	TEST_EQUAL(files.size(), 4);
+
+	lt::remove(long_file_name1, ec);
+	TEST_EQUAL(ec, error_code());
+	if (ec)
+	{
+		std::cout << "remove \"" << long_file_name1 << "\" failed " << ec.message() << "\n";
+		std::wcout << convert_to_native_path_string(long_file_name1) << L"\n";
+	}
+	TEST_CHECK(!lt::exists(long_file_name1));
+
+	if (support_hard_links)
+	{
+		lt::hard_link(long_file_name2, long_file_name1, ec);
 		TEST_EQUAL(ec, error_code());
-		TEST_CHECK(lt::exists(long_component_name));
-		TEST_CHECK(lt::is_directory(long_component_name, ec));
-
-		TEST_EQUAL(touch_file(long_file_name1, 10), 0);
 		TEST_CHECK(lt::exists(long_file_name1));
-
-		lt::rename(long_file_name1, long_file_name2, ec);
-		TEST_EQUAL(ec, error_code());
-		TEST_CHECK(!lt::exists(long_file_name1));
-		TEST_CHECK(lt::exists(long_file_name2));
-
-		lt::copy_file(long_file_name2, long_file_name1, ec);
-		TEST_EQUAL(ec, error_code());
-		TEST_CHECK(lt::exists(long_file_name1));
-
-		std::set<std::string> files;
-
-		for (lt::directory i(long_component_name, ec); !i.done(); i.next(ec))
-		{
-			std::string f = i.file();
-			files.insert(f);
-		}
-
-		TEST_EQUAL(files.size(), 4);
 
 		lt::remove(long_file_name1, ec);
 		TEST_EQUAL(ec, error_code());
 		TEST_CHECK(!lt::exists(long_file_name1));
-
-		if (support_hard_links)
-		{
-			lt::hard_link(long_file_name2, long_file_name1, ec);
-			TEST_EQUAL(ec, error_code());
-			TEST_CHECK(lt::exists(long_file_name1));
-
-			lt::remove(long_file_name1, ec);
-			TEST_EQUAL(ec, error_code());
-			TEST_CHECK(!lt::exists(long_file_name1));
-		}
 	}
 }
 
@@ -546,7 +572,7 @@ TORRENT_TEST(unc_paths)
 	error_code ec;
 	{
 		file f;
-		TEST_CHECK(f.open(reserved_name, open_mode::read_write, ec) && !ec);
+		TEST_CHECK(f.open(reserved_name, aux::open_mode::write, ec) && !ec);
 	}
 	remove(reserved_name, ec);
 	TEST_CHECK(!ec);

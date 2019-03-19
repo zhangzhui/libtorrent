@@ -36,7 +36,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "settings.hpp"
 
 #include "libtorrent/storage.hpp"
-#include "libtorrent/file_pool.hpp"
+#include "libtorrent/aux_/posix_storage.hpp"
+#include "libtorrent/aux_/file_view_pool.hpp"
 #include "libtorrent/hasher.hpp"
 #include "libtorrent/session.hpp"
 #include "libtorrent/alert_types.hpp"
@@ -44,8 +45,12 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/torrent_info.hpp"
 #include "libtorrent/read_resume_data.hpp"
 #include "libtorrent/write_resume_data.hpp"
+#include "libtorrent/disk_io_job.hpp"
+#include "libtorrent/disk_io_thread.hpp"
 #include "libtorrent/aux_/path.hpp"
 #include "libtorrent/aux_/storage_utils.hpp"
+#include "libtorrent/aux_/session_settings.hpp"
+#include "libtorrent/random.hpp"
 
 #include <memory>
 #include <functional> // for bind
@@ -58,10 +63,33 @@ POSSIBILITY OF SUCH DAMAGE.
 using namespace std::placeholders;
 using namespace lt;
 
+#if ! TORRENT_HAVE_MMAP && ! TORRENT_HAVE_MAP_VIEW_OF_FILE
+namespace libtorrent {
+namespace aux {
+	struct file_view_pool {};
+}
+}
+#endif
+
 namespace {
 
-constexpr std::size_t piece_size = 16 * 1024 * 16;
-constexpr std::size_t half = piece_size / 2;
+using lt::aux::posix_storage;
+
+constexpr int piece_size = 16 * 1024 * 16;
+constexpr int half = piece_size / 2;
+
+void delete_dirs(std::string path)
+{
+	path = complete(path);
+	error_code ec;
+	remove_all(path, ec);
+	if (ec && ec != boost::system::errc::no_such_file_or_directory)
+	{
+		std::printf("remove_all \"%s\": %s\n"
+			, path.c_str(), ec.message().c_str());
+	}
+	TEST_CHECK(!exists(path));
+}
 
 void on_check_resume_data(status_t const status, storage_error const& error, bool* done)
 {
@@ -102,23 +130,15 @@ void print_error(char const* call, int ret, storage_error const& ec)
 		, static_cast<int>(ec.file()), operation_name(ec.operation));
 }
 
-void run_until(io_service& ios, bool const& done)
+void run_until(io_context& ios, bool const& done)
 {
 	while (!done)
 	{
-		ios.reset();
-		error_code ec;
-		ios.run_one(ec);
-		if (ec)
-		{
-			std::cout << "run_one: " << ec.message().c_str() << std::endl;
-			return;
-		}
+		ios.restart();
+		ios.run_one();
 		std::cout << time_now_string() << " done: " << done << std::endl;
 	}
 }
-
-void nop() {}
 
 std::shared_ptr<torrent_info> setup_torrent_info(file_storage& fs
 	, std::vector<char>& buf)
@@ -148,8 +168,33 @@ std::shared_ptr<torrent_info> setup_torrent_info(file_storage& fs
 	return info;
 }
 
-std::shared_ptr<default_storage> setup_torrent(file_storage& fs
-	, file_pool& fp
+template <typename StorageType>
+std::shared_ptr<StorageType> make_storage(storage_params const& p
+	, aux::file_view_pool& fp);
+
+#if TORRENT_HAVE_MMAP
+template <>
+std::shared_ptr<default_storage> make_storage(storage_params const& p
+	, aux::file_view_pool& fp)
+{
+	return std::make_shared<default_storage>(p, fp);
+}
+#else
+template <>
+std::shared_ptr<default_storage> make_storage(storage_params const& p
+	, aux::file_view_pool& fp) = delete;
+#endif
+
+template <>
+std::shared_ptr<posix_storage> make_storage(storage_params const& p
+	, aux::file_view_pool&)
+{
+	return std::make_shared<posix_storage>(p);
+}
+
+template <typename StorageType>
+std::shared_ptr<StorageType> setup_torrent(file_storage& fs
+	, aux::file_view_pool& fp
 	, std::vector<char>& buf
 	, std::string const& test_path
 	, aux::session_settings& set)
@@ -166,12 +211,11 @@ std::shared_ptr<default_storage> setup_torrent(file_storage& fs
 		priorities,
 		info_hash
 	};
-	std::shared_ptr<default_storage> s(new default_storage(p, fp));
-	s->m_settings = &set;
+	auto s = make_storage<StorageType>(p, fp);
 
 	// allocate the files and create the directories
 	storage_error se;
-	s->initialize(se);
+	s->initialize(set, se);
 	if (se)
 	{
 		TEST_ERROR(se.ec.message().c_str());
@@ -182,155 +226,185 @@ std::shared_ptr<default_storage> setup_torrent(file_storage& fs
 	return s;
 }
 
+#if TORRENT_HAVE_MMAP
+int writev(std::shared_ptr<default_storage> s
+	, aux::session_settings const& sett
+	, span<iovec_t const> bufs
+	, piece_index_t const piece, int const offset
+	, aux::open_mode_t const mode
+	, storage_error& error)
+{
+	return s->writev(sett, bufs, piece, offset, mode, error);
+}
+
+int readv(std::shared_ptr<default_storage> s
+	, aux::session_settings const& sett
+	, span<iovec_t const> bufs
+	, piece_index_t piece
+	, int const offset
+	, aux::open_mode_t flags
+	, storage_error& ec)
+{
+	return s->readv(sett, bufs, piece, offset, flags, ec);
+}
+
+void release_files(std::shared_ptr<default_storage> s, storage_error& ec)
+{
+	s->release_files(ec);
+}
+#endif
+
+int writev(std::shared_ptr<posix_storage> s
+	, aux::session_settings const& sett
+	, span<iovec_t const> bufs
+	, piece_index_t const piece
+	, int const offset
+	, aux::open_mode_t
+	, storage_error& error)
+{
+	return s->writev(sett, bufs, piece, offset, error);
+}
+
+int readv(std::shared_ptr<posix_storage> s
+	, aux::session_settings const& sett
+	, span<iovec_t const> bufs
+	, piece_index_t piece
+	, int offset
+	, aux::open_mode_t
+	, storage_error& ec)
+{
+	return s->readv(sett, bufs, piece, offset, ec);
+}
+
+void release_files(std::shared_ptr<posix_storage>, storage_error&) {}
+
 std::vector<char> new_piece(std::size_t const size)
 {
 	std::vector<char> ret(size);
-	std::generate(ret.begin(), ret.end(), random_byte);
+	aux::random_bytes(ret);
 	return ret;
 }
 
+template <typename StorageType>
 void run_storage_tests(std::shared_ptr<torrent_info> info
 	, file_storage& fs
-	, std::string const& test_path
-	, lt::storage_mode_t storage_mode
-	, bool unbuffered)
+	, lt::storage_mode_t storage_mode)
 {
 	TORRENT_ASSERT(fs.num_files() > 0);
 	{
 	error_code ec;
-	create_directory(combine_path(test_path, "temp_storage"), ec);
-	if (ec) std::cout << "create_directory '" << combine_path(test_path, "temp_storage")
-		<< "': " << ec.message() << std::endl;
-	remove_all(combine_path(test_path, "temp_storage2"), ec);
-	if (ec && ec != boost::system::errc::no_such_file_or_directory)
-		std::cout << "remove_all '" << combine_path(test_path, "temp_storage2")
-		<< "': " << ec.message() << std::endl;
-	remove_all(combine_path(test_path, "part0"), ec);
-	if (ec && ec != boost::system::errc::no_such_file_or_directory)
-		std::cout << "remove_all '" << combine_path(test_path, "part0")
+	create_directory(complete("temp_storage"), ec);
+	if (ec) std::cout << "create_directory '" << complete("temp_storage")
 		<< "': " << ec.message() << std::endl;
 	}
-	int num_pieces = fs.num_pieces();
-	TEST_CHECK(info->num_pieces() == num_pieces);
+	int const num_pieces = fs.num_pieces();
+	TEST_EQUAL(info->num_pieces(), num_pieces);
 
 	std::vector<char> piece0 = new_piece(piece_size);
 	std::vector<char> piece1 = new_piece(piece_size);
 	std::vector<char> piece2 = new_piece(piece_size);
 
 	aux::session_settings set;
-	set.set_int(settings_pack::disk_io_write_mode
-		, unbuffered ? settings_pack::disable_os_cache
-		: settings_pack::enable_os_cache);
-	set.set_int(settings_pack::disk_io_read_mode
-		, unbuffered ? settings_pack::disable_os_cache
-		: settings_pack::enable_os_cache);
 
-	char* piece = static_cast<char*>(malloc(piece_size));
+	std::vector<char> piece(piece_size);
 
-	{ // avoid having two storages use the same files
-	file_pool fp;
-	boost::asio::io_service ios;
-	disk_buffer_pool dp(ios, std::bind(&nop));
-
+	{
+	// avoid having two storages use the same files
+	aux::file_view_pool fp;
+	boost::asio::io_context ios;
 	aux::vector<download_priority_t, file_index_t> priorities;
 	sha1_hash info_hash;
+	std::string const cwd = current_working_directory();
 	storage_params p{
 		fs,
 		nullptr,
-		test_path,
+		cwd,
 		storage_mode,
 		priorities,
 		info_hash
 	};
-	std::unique_ptr<storage_interface> s(new default_storage(p, fp));
-	s->m_settings = &set;
+	auto s = make_storage<StorageType>(p, fp);
 
 	storage_error ec;
-	s->initialize(ec);
+	s->initialize(set, ec);
 	TEST_CHECK(!ec);
 	if (ec) print_error("initialize", 0, ec);
 
 	int ret = 0;
 
 	// write piece 1 (in slot 0)
-	iovec_t iov = { piece1.data(), half};
-	ret = s->writev(iov, piece_index_t(0), 0, open_mode::read_write, ec);
-	if (ret != half) print_error("writev", ret, ec);
+	iovec_t iov = span<char>(piece1).first(half);
 
-	iov = { piece1.data() + half, half };
-	ret = s->writev(iov, piece_index_t(0), half, open_mode::read_write, ec);
-	if (ret != half) print_error("writev", ret, ec);
+	ret = writev(s, set, iov, piece_index_t(0), 0, aux::open_mode::write, ec);
+	TEST_EQUAL(ret, int(iov.size()));
+	if (ret != int(iov.size())) print_error("writev", ret, ec);
+
+	iov = span<char>(piece1).last(half);
+	ret = writev(s, set, iov, piece_index_t(0), half, aux::open_mode::write, ec);
+	TEST_EQUAL(ret, int(iov.size()));
+	if (ret != int(iov.size())) print_error("writev", ret, ec);
 
 	// test unaligned read (where the bytes are aligned)
-	iov = { piece + 3, piece_size - 9};
-	ret = s->readv(iov, piece_index_t(0), 3, open_mode::read_write, ec);
-	if (ret != piece_size - 9) print_error("readv",ret, ec);
-	TEST_CHECK(std::equal(piece+3, piece + piece_size-9, piece1.data()+3));
+	iov = span<char>(piece).subspan(3, piece_size - 9);
+	ret = readv(s, set, iov, piece_index_t(0), 3, aux::open_mode::write, ec);
+	TEST_EQUAL(ret, int(iov.size()));
+	if (ret != int(iov.size())) print_error("readv",ret, ec);
+	TEST_CHECK(iov == span<char>(piece1).subspan(3, piece_size - 9));
 
 	// test unaligned read (where the bytes are not aligned)
-	iov = { piece, piece_size - 9};
-	ret = s->readv(iov, piece_index_t(0), 3, open_mode::read_write, ec);
-	TEST_CHECK(ret == piece_size - 9);
-	if (ret != piece_size - 9) print_error("readv", ret, ec);
-	TEST_CHECK(std::equal(piece, piece + piece_size-9, piece1.data()+3));
+	iov = span<char>(piece).first(piece_size - 9);
+	ret = readv(s, set, iov, piece_index_t(0), 3, aux::open_mode::write, ec);
+	TEST_EQUAL(ret, int(iov.size()));
+	if (ret != int(iov.size())) print_error("readv", ret, ec);
+	TEST_CHECK(iov == span<char>(piece1).subspan(3, piece_size - 9));
 
 	// verify piece 1
-	iov = { piece, piece_size };
-	ret = s->readv(iov, piece_index_t(0), 0, open_mode::read_write, ec);
-	TEST_CHECK(ret == piece_size);
-	if (ret != piece_size) print_error("readv", ret, ec);
-	TEST_CHECK(std::equal(piece, piece + piece_size, piece1.data()));
+	iov = piece;
+	ret = readv(s, set, iov, piece_index_t(0), 0, aux::open_mode::write, ec);
+	TEST_EQUAL(ret, int(iov.size()));
+	if (ret != int(iov.size())) print_error("readv", ret, ec);
+	TEST_CHECK(piece == piece1);
 
 	// do the same with piece 0 and 2 (in slot 1 and 2)
-	iov = { piece0.data(), piece_size };
-	ret = s->writev(iov, piece_index_t(1), 0, open_mode::read_write, ec);
-	if (ret != piece_size) print_error("writev", ret, ec);
+	iov = piece0;
+	ret = writev(s, set, iov, piece_index_t(1), 0, aux::open_mode::write, ec);
+	TEST_EQUAL(ret, int(iov.size()));
+	if (ret != int(iov.size())) print_error("writev", ret, ec);
 
-	iov = { piece2.data(), piece_size };
-	ret = s->writev(iov, piece_index_t(2), 0, open_mode::read_write, ec);
-	if (ret != piece_size) print_error("writev", ret, ec);
+	iov = piece2;
+	ret = writev(s, set, iov, piece_index_t(2), 0, aux::open_mode::write, ec);
+	TEST_EQUAL(ret, int(iov.size()));
+	if (ret != int(iov.size())) print_error("writev", ret, ec);
 
 	// verify piece 0 and 2
-	iov = { piece, piece_size };
-	ret = s->readv(iov, piece_index_t(1), 0, open_mode::read_write, ec);
-	if (ret != piece_size) print_error("readv", ret, ec);
-	TEST_CHECK(std::equal(piece, piece + piece_size, piece0.data()));
+	iov = piece;
+	ret = readv(s, set, iov, piece_index_t(1), 0, aux::open_mode::write, ec);
+	TEST_EQUAL(ret, int(iov.size()));
+	if (ret != int(iov.size())) print_error("readv", ret, ec);
+	TEST_CHECK(piece == piece0);
 
-	iov = { piece, piece_size };
-	ret = s->readv(iov, piece_index_t(2), 0, open_mode::read_write, ec);
-	if (ret != piece_size) print_error("readv", ret, ec);
-	TEST_CHECK(std::equal(piece, piece + piece_size, piece2.data()));
+	iov = piece;
+	ret = readv(s, set, iov, piece_index_t(2), 0, aux::open_mode::write, ec);
+	TEST_EQUAL(ret, int(iov.size()));
+	if (ret != int(piece_size)) print_error("readv", ret, ec);
+	TEST_CHECK(piece == piece2);
 
-	s->release_files(ec);
+	release_files(s, ec);
 	}
-
-	free(piece);
 }
 
-void test_remove(std::string const& test_path, bool unbuffered)
+template <typename StorageType>
+void test_remove(std::string const& test_path)
 {
-	error_code ec;
-	remove_all(combine_path(test_path, "temp_storage"), ec);
-	if (ec && ec != boost::system::errc::no_such_file_or_directory)
-		std::cout << "remove_all '" << combine_path(test_path, "temp_storage")
-		<< "': " << ec.message() << std::endl;
-	TEST_CHECK(!exists(combine_path(test_path, "temp_storage")));
+	delete_dirs("temp_storage");
 
 	file_storage fs;
 	std::vector<char> buf;
-	file_pool fp;
-	io_service ios;
-	disk_buffer_pool dp(ios, std::bind(&nop));
+	aux::file_view_pool fp;
+	io_context ios;
 
 	aux::session_settings set;
-	set.set_int(settings_pack::disk_io_write_mode
-		, unbuffered ? settings_pack::disable_os_cache
-		: settings_pack::enable_os_cache);
-	set.set_int(settings_pack::disk_io_read_mode
-		, unbuffered ? settings_pack::disable_os_cache
-		: settings_pack::enable_os_cache);
-
-	std::shared_ptr<default_storage> s = setup_torrent(fs, fp, buf, test_path, set);
+	auto s = setup_torrent<StorageType>(fs, fp, buf, test_path, set);
 
 	// directories are not created up-front, unless they contain
 	// an empty file (all of which are created up-front, along with
@@ -349,24 +423,31 @@ void test_remove(std::string const& test_path, bool unbuffered)
 
 	iovec_t b = {&buf[0], 4};
 	storage_error se;
-	s->writev(b, piece_index_t(2), 0, open_mode::read_write, se);
+	writev(s, set, b, piece_index_t(2), 0, aux::open_mode::write, se);
 
 	TEST_CHECK(exists(combine_path(test_path, combine_path("temp_storage"
 		, combine_path("folder1", "test2.tmp")))));
 	TEST_CHECK(!exists(combine_path(test_path, combine_path("temp_storage"
 		, combine_path("_folder3", combine_path("subfolder", "test5.tmp"))))));
 	file_status st;
+	error_code ec;
 	stat_file(combine_path(test_path, combine_path("temp_storage"
 		, combine_path("folder1", "test2.tmp"))), &st, ec);
-	TEST_EQUAL(st.file_size, 8);
 
-	s->writev(b, piece_index_t(4), 0, open_mode::read_write, se);
+	// if the storage truncates the file to the full size, it's 8, otherwise it's
+	// 4
+	TEST_CHECK(st.file_size == 8 || st.file_size == 4);
+
+	writev(s, set, b, piece_index_t(4), 0, aux::open_mode::write, se);
 
 	TEST_CHECK(exists(combine_path(test_path, combine_path("temp_storage"
 		, combine_path("_folder3", combine_path("subfolder", "test5.tmp"))))));
 	stat_file(combine_path(test_path, combine_path("temp_storage"
 		, combine_path("_folder3", "test5.tmp"))), &st, ec);
-	TEST_EQUAL(st.file_size, 8);
+
+	// if the storage truncates the file to the full size, it's 8, otherwise it's
+	// 4
+	TEST_CHECK(st.file_size == 8 || st.file_size == 4);
 
 	s->delete_files(session::delete_files, se);
 	if (se) print_error("delete_files", 0, se);
@@ -381,24 +462,18 @@ void test_remove(std::string const& test_path, bool unbuffered)
 	TEST_CHECK(!exists(combine_path(test_path, "temp_storage")));
 }
 
+template <typename StorageType>
 void test_rename(std::string const& test_path)
 {
-	error_code ec;
-	remove_all(combine_path(test_path, "temp_storage"), ec);
-	if (ec && ec != boost::system::errc::no_such_file_or_directory)
-		std::cout << "remove_all '" << combine_path(test_path, "temp_storage")
-		<< "': " << ec.message() << std::endl;
-	TEST_CHECK(!exists(combine_path(test_path, "temp_storage")));
+	delete_dirs("temp_storage");
 
 	file_storage fs;
 	std::vector<char> buf;
-	file_pool fp;
-	io_service ios;
-	disk_buffer_pool dp(ios, std::bind(&nop));
+	aux::file_view_pool fp;
+	io_context ios;
 	aux::session_settings set;
 
-	std::shared_ptr<default_storage> s = setup_torrent(fs, fp, buf, test_path
-		, set);
+	auto s = setup_torrent<StorageType>(fs, fp, buf, test_path, set);
 
 	// directories are not created up-front, unless they contain
 	// an empty file
@@ -421,25 +496,6 @@ void test_rename(std::string const& test_path)
 	TEST_EQUAL(s->files().file_path(file_index_t(0)), "new_filename");
 }
 
-struct test_error_storage : default_storage
-{
-	explicit test_error_storage(storage_params const& params, file_pool& fp)
-		: default_storage(params, fp) {}
-
-	bool has_any_file(storage_error& ec) override
-	{
-		ec.ec = make_error_code(boost::system::errc::permission_denied);
-		ec.operation = operation_t::file_stat;
-		return false;
-	}
-};
-
-storage_interface* error_storage_constructor(
-	storage_params const& params, file_pool& fp)
-{
-	return new test_error_storage(params, fp);
-}
-
 void test_check_files(std::string const& test_path
 	, lt::storage_mode_t storage_mode)
 {
@@ -447,10 +503,8 @@ void test_check_files(std::string const& test_path
 
 	error_code ec;
 	constexpr int piece_size_check = 16 * 1024;
-	remove_all(combine_path(test_path, "temp_storage"), ec);
-	if (ec && ec != boost::system::errc::no_such_file_or_directory)
-		std::cout << "remove_all '" << combine_path(test_path, "temp_storage")
-		<< "': " << ec.message() << std::endl;
+	delete_dirs("temp_storage");
+
 	file_storage fs;
 	fs.add_file("temp_storage/test1.tmp", piece_size_check);
 	fs.add_file("temp_storage/test2.tmp", piece_size_check * 2);
@@ -482,16 +536,14 @@ void test_check_files(std::string const& test_path
 	bencode(std::back_inserter(buf), t.generate());
 	info = std::make_shared<torrent_info>(buf, ec, from_span);
 
-	file_pool fp;
-	boost::asio::io_service ios;
+	aux::session_settings set;
+	boost::asio::io_context ios;
 	counters cnt;
 
-	disk_io_thread io(ios, cnt);
+	std::unique_ptr<disk_interface> io = default_disk_io_constructor(ios, cnt);
 	settings_pack sett;
 	sett.set_int(settings_pack::aio_threads, 1);
-	io.set_settings(&sett);
-
-	disk_buffer_pool dp(ios, std::bind(&nop));
+	io->set_settings(&sett);
 
 	aux::vector<download_priority_t, file_index_t> priorities(
 		std::size_t(info->num_files()), download_priority_t{});
@@ -505,35 +557,35 @@ void test_check_files(std::string const& test_path
 		info_hash
 	};
 
-	auto st = io.new_torrent(error_storage_constructor, std::move(p)
-		, std::shared_ptr<void>());
+	auto st = io->new_torrent(std::move(p), std::shared_ptr<void>());
 
 	bool done = false;
 	add_torrent_params frd;
 	aux::vector<std::string, file_index_t> links;
-	io.async_check_files(st, &frd, links
+	io->async_check_files(st, &frd, links
 		, std::bind(&on_check_resume_data, _1, _2, &done));
-	io.submit_jobs();
-	ios.reset();
+	io->submit_jobs();
+	ios.restart();
 	run_until(ios, done);
 
 	for (auto const i : info->piece_range())
 	{
 		done = false;
-		io.async_hash(st, i, disk_interface::sequential_access | disk_interface::volatile_read
+		io->async_hash(st, i, disk_interface::sequential_access | disk_interface::volatile_read
 			, std::bind(&on_piece_checked, _1, _2, _3, &done));
-		io.submit_jobs();
-		ios.reset();
+		io->submit_jobs();
+		ios.restart();
 		run_until(ios, done);
 	}
 
-	io.abort(true);
+	io->abort(true);
 }
 
 // TODO: 2 split this test up into smaller parts
-void run_test(bool unbuffered)
+template <typename StorageType>
+void run_test()
 {
-	std::string test_path = current_working_directory();
+	std::string const test_path = current_working_directory();
 	std::cout << "\n=== " << test_path << " ===\n" << std::endl;
 
 	std::shared_ptr<torrent_info> info;
@@ -543,12 +595,8 @@ void run_test(bool unbuffered)
 	std::vector<char> piece2 = new_piece(piece_size);
 	std::vector<char> piece3 = new_piece(piece_size);
 
-	{
-	error_code ec;
-	remove_all(combine_path(test_path, "temp_storage"), ec);
-	if (ec && ec != boost::system::errc::no_such_file_or_directory)
-		std::cout << "remove_all '" << combine_path(test_path, "temp_storage")
-		<< "': " << ec.message() << std::endl;
+	delete_dirs("temp_storage");
+
 	file_storage fs;
 	fs.add_file("temp_storage/test1.tmp", 17);
 	fs.add_file("temp_storage/test2.tmp", 612);
@@ -576,14 +624,12 @@ void run_test(bool unbuffered)
 	std::vector<char> buf;
 	bencode(std::back_inserter(buf), t.generate());
 	info = std::make_shared<torrent_info>(buf, from_span);
-	std::cout << "=== test 1 === " << (unbuffered?"unbuffered":"buffered") << std::endl;
 
 	// run_storage_tests writes piece 0, 1 and 2. not 3
-	run_storage_tests(info, fs, test_path, storage_mode_sparse, unbuffered);
+	run_storage_tests<StorageType>(info, fs, storage_mode_sparse);
 
 	// make sure the files have the correct size
-	std::string base = combine_path(test_path, "temp_storage");
-	std::printf("base = \"%s\"\n", base.c_str());
+	std::string const base = complete("temp_storage");
 	TEST_EQUAL(file_size(combine_path(base, "test1.tmp")), 17);
 	TEST_EQUAL(file_size(combine_path(base, "test2.tmp")), 612);
 
@@ -595,70 +641,40 @@ void run_test(bool unbuffered)
 
 	TEST_EQUAL(file_size(combine_path(base, "test5.tmp")), 3253);
 	TEST_EQUAL(file_size(combine_path(base, "test6.tmp")), 841);
-	std::printf("file: %d expected: %d last_file_size: %d, piece_size: %d\n"
-		, int(file_size(combine_path(base, "test7.tmp")))
-		, last_file_size - int(piece_size), last_file_size, int(piece_size));
-	TEST_EQUAL(file_size(combine_path(base, "test7.tmp")), last_file_size - int(piece_size));
-	remove_all(combine_path(test_path, "temp_storage"), ec);
-	if (ec && ec != boost::system::errc::no_such_file_or_directory)
-		std::cout << "remove_all '" << combine_path(test_path, "temp_storage")
-		<< "': " << ec.message() << std::endl;
-	}
 
-// ==============================================
+	delete_dirs("temp_storage");
+}
 
-	{
-	error_code ec;
-	file_storage fs;
-	fs.add_file(combine_path("temp_storage", "test1.tmp"), 3 * piece_size);
-	lt::create_torrent t(fs, piece_size, -1, {});
-	TEST_CHECK(fs.file_path(file_index_t(0)) == combine_path("temp_storage", "test1.tmp"));
-	t.set_hash(piece_index_t(0), hasher(piece0).final());
-	t.set_hash(piece_index_t(1), hasher(piece1).final());
-	t.set_hash(piece_index_t(2), hasher(piece2).final());
+TORRENT_TEST(check_files_sparse)
+{
+	test_check_files(current_working_directory(), storage_mode_sparse);
+}
 
-	std::vector<char> buf;
-	bencode(std::back_inserter(buf), t.generate());
-	info = std::make_shared<torrent_info>(buf, ec, from_span);
+TORRENT_TEST(check_files_allocate)
+{
+	test_check_files(current_working_directory(), storage_mode_allocate);
+}
 
-	std::cout << "=== test 3 ===" << std::endl;
+#if TORRENT_HAVE_MMAP
+TORRENT_TEST(rename_mmap_disk_io)
+{
+	test_rename<default_storage>(current_working_directory());
+}
 
-	run_storage_tests(info, fs, test_path, storage_mode_sparse, unbuffered);
+TORRENT_TEST(remove_mmap_disk_io)
+{
+	test_remove<default_storage>(current_working_directory());
+}
+#endif
 
-	TEST_EQUAL(file_size(combine_path(test_path, combine_path("temp_storage", "test1.tmp"))), piece_size * 3);
-	remove_all(combine_path(test_path, "temp_storage"), ec);
-	if (ec && ec != boost::system::errc::no_such_file_or_directory)
-		std::cout << "remove_all '" << combine_path(test_path, "temp_storage")
-		<< "': " << ec.message() << std::endl;
+TORRENT_TEST(rename_posix_disk_io)
+{
+	test_rename<posix_storage>(current_working_directory());
+}
 
-// ==============================================
-
-	std::cout << "=== test 4 ===" << std::endl;
-
-	run_storage_tests(info, fs, test_path, storage_mode_allocate, unbuffered);
-
-	std::cout << file_size(combine_path(test_path, combine_path("temp_storage", "test1.tmp"))) << std::endl;
-	TEST_EQUAL(file_size(combine_path(test_path, combine_path("temp_storage", "test1.tmp"))), 3 * piece_size);
-
-	remove_all(combine_path(test_path, "temp_storage"), ec);
-	if (ec && ec != boost::system::errc::no_such_file_or_directory)
-		std::cout << "remove_all '" << combine_path(test_path, "temp_storage")
-		<< "': " << ec.message() << std::endl;
-
-	}
-
-// ==============================================
-
-	std::cout << "=== test 5 ===" << std::endl;
-	test_remove(test_path, unbuffered);
-
-// ==============================================
-
-	std::cout << "=== test 6 ===" << std::endl;
-	test_check_files(test_path, storage_mode_sparse);
-
-	std::cout << "=== test 7 ===" << std::endl;
-	test_rename(test_path);
+TORRENT_TEST(remove_posix_disk_io)
+{
+	test_remove<posix_storage>(current_working_directory());
 }
 
 void test_fastresume(bool const test_deprecated)
@@ -666,18 +682,16 @@ void test_fastresume(bool const test_deprecated)
 	std::string test_path = current_working_directory();
 	error_code ec;
 	std::cout << "\n\n=== test fastresume ===" << std::endl;
-	remove_all(combine_path(test_path, "tmp1"), ec);
-	if (ec && ec != boost::system::errc::no_such_file_or_directory)
-		std::cout << "remove_all '" << combine_path(test_path, "tmp1")
-		<< "': " << ec.message() << std::endl;
+	delete_dirs("tmp1");
+
 	create_directory(combine_path(test_path, "tmp1"), ec);
 	if (ec) std::cout << "create_directory '" << combine_path(test_path, "tmp1")
 		<< "': " << ec.message() << std::endl;
 	std::ofstream file(combine_path(test_path, "tmp1/temporary").c_str());
 	std::shared_ptr<torrent_info> t = ::create_torrent(&file);
 	file.close();
-	TEST_CHECK(exists(combine_path(test_path, "tmp1/temporary")));
-	if (!exists(combine_path(test_path, "tmp1/temporary")))
+	TEST_CHECK(exists(complete("tmp1/temporary")));
+	if (!exists(complete("tmp1/temporary")))
 		return;
 
 	entry resume;
@@ -747,8 +761,7 @@ void test_fastresume(bool const test_deprecated)
 		else
 #endif
 		{
-			p = read_resume_data(resume_data, ec);
-			TEST_CHECK(!ec);
+			p = read_resume_data(resume_data);
 		}
 
 		p.flags &= ~torrent_flags::paused;
@@ -764,10 +777,7 @@ void test_fastresume(bool const test_deprecated)
 		// we expect the fast resume to be rejected because the files were removed
 		TEST_CHECK(alert_cast<fastresume_rejected_alert>(a) != nullptr);
 	}
-	remove_all(combine_path(test_path, "tmp1"), ec);
-	if (ec && ec != boost::system::errc::no_such_file_or_directory)
-		std::cout << "remove_all '" << combine_path(test_path, "tmp1")
-		<< "': " << ec.message() << std::endl;
+	delete_dirs("tmp1");
 }
 
 } // anonymous namespace
@@ -800,12 +810,7 @@ TORRENT_TEST(rename_file)
 	file_storage fs;
 	std::shared_ptr<torrent_info> info = setup_torrent_info(fs, buf);
 
-	auto const mask = alert::all_categories
-		& ~(alert::performance_warning
-			| alert::stats_notification);
-
 	settings_pack pack = settings();
-	pack.set_int(settings_pack::alert_mask, mask);
 	pack.set_bool(settings_pack::disable_hash_checks, true);
 	lt::session ses(pack);
 
@@ -866,10 +871,7 @@ void test_rename_file_fastresume(bool test_deprecated)
 	std::string test_path = current_working_directory();
 	error_code ec;
 	std::cout << "\n\n=== test rename file in fastresume ===" << std::endl;
-	remove_all(combine_path(test_path, "tmp2"), ec);
-	if (ec && ec != boost::system::errc::no_such_file_or_directory)
-		std::cout << "remove_all '" << combine_path(test_path, "tmp2")
-		<< "': " << ec.message() << std::endl;
+	delete_dirs("tmp2");
 	create_directory(combine_path(test_path, "tmp2"), ec);
 	if (ec) std::cout << "create_directory: " << ec.message() << std::endl;
 	std::ofstream file(combine_path(test_path, "tmp2/temporary").c_str());
@@ -933,8 +935,7 @@ void test_rename_file_fastresume(bool test_deprecated)
 		else
 #endif
 		{
-			p = read_resume_data(resume_data, ec);
-			TEST_CHECK(!ec);
+			p = read_resume_data(resume_data);
 		}
 		p.ti = std::make_shared<torrent_info>(std::cref(*t));
 		p.save_path = combine_path(test_path, "tmp2");
@@ -989,8 +990,8 @@ void alloc_iov(iovec_t* iov, int num_bufs)
 {
 	for (int i = 0; i < num_bufs; ++i)
 	{
-		iov[i] = { new char[num_bufs * (i + 1)]
-			, static_cast<std::size_t>(num_bufs * (i + 1)) };
+		iov[i] = { new char[static_cast<std::size_t>(num_bufs * (i + 1))]
+			, num_bufs * (i + 1) };
 	}
 }
 
@@ -1088,7 +1089,7 @@ TORRENT_TEST(iovec_bufs_size)
 
 		int expected_size = 0;
 		for (int k = 0; k < i; ++k) expected_size += i * (k + 1);
-		TEST_EQUAL(bufs_size({iov, size_t(i)}), expected_size);
+		TEST_EQUAL(bufs_size({iov, i}), expected_size);
 
 		free_iov(iov, i);
 	}
@@ -1123,8 +1124,10 @@ TORRENT_TEST(iovec_advance_bufs)
 	free_iov(iov1, 10);
 }
 
-TORRENT_TEST(unbuffered) { run_test(true); }
-TORRENT_TEST(buffered) { run_test(false); }
+#if TORRENT_HAVE_MMAP
+TORRENT_TEST(mmap_disk_io) { run_test<default_storage>(); }
+#endif
+TORRENT_TEST(posix_disk_io) { run_test<posix_storage>(); }
 
 namespace {
 
@@ -1191,7 +1194,7 @@ struct test_read_fileop
 		while (local_size > 0)
 		{
 			int const len = std::min(int(bufs.front().size()), local_size);
-			auto local_buf = bufs.front().first(std::size_t(len));
+			auto local_buf = bufs.front().first(len);
 			for (char& v : local_buf)
 			{
 				v = char(m_counter & 0xff);
@@ -1257,14 +1260,14 @@ TORRENT_TEST(readwritev_stripe_1)
 	test_fileop fop(1);
 	storage_error ec;
 
-	TEST_CHECK(bufs_size({iov, size_t(num_bufs)}) >= fs.total_size());
+	TEST_CHECK(bufs_size({iov, num_bufs}) >= fs.total_size());
 
 	iovec_t iov2[num_bufs];
 	aux::copy_bufs(iov, int(fs.total_size()), iov2);
 	int num_bufs2 = count_bufs(iov2, int(fs.total_size()));
 	TEST_CHECK(num_bufs2 <= num_bufs);
 
-	int ret = readwritev(fs, {iov2, size_t(num_bufs2)}, piece_index_t(0), 0, ec
+	int ret = readwritev(fs, {iov2, num_bufs2}, piece_index_t(0), 0, ec
 		, std::ref(fop));
 
 	TEST_EQUAL(ret, fs.total_size());
@@ -1289,7 +1292,7 @@ TORRENT_TEST(readwritev_single_buffer)
 	storage_error ec;
 
 	std::vector<char> buf(size_t(fs.total_size()));
-	iovec_t iov = { &buf[0], buf.size() };
+	iovec_t iov = { &buf[0], int(buf.size()) };
 	fill_pattern(&iov, 1);
 
 	int ret = readwritev(fs, iov, piece_index_t(0), 0, ec, std::ref(fop));
@@ -1314,7 +1317,7 @@ TORRENT_TEST(readwritev_read)
 	storage_error ec;
 
 	std::vector<char> buf(size_t(fs.total_size()));
-	iovec_t iov = { &buf[0], buf.size() };
+	iovec_t iov = { &buf[0], int(buf.size()) };
 
 	// read everything
 	int ret = readwritev(fs, iov, piece_index_t(0), 0, ec, std::ref(fop));
@@ -1330,8 +1333,7 @@ TORRENT_TEST(readwritev_read_short)
 	storage_error ec;
 
 	std::vector<char> buf(size_t(fs.total_size()));
-	iovec_t iov = { &buf[0]
-		, static_cast<size_t>(fs.total_size()) };
+	iovec_t iov = { buf.data(), static_cast<std::ptrdiff_t>(fs.total_size()) };
 
 	// read everything
 	int ret = readwritev(fs, iov, piece_index_t(0), 0, ec, std::ref(fop));
@@ -1350,8 +1352,7 @@ TORRENT_TEST(readwritev_error)
 	storage_error ec;
 
 	std::vector<char> buf(size_t(fs.total_size()));
-	iovec_t iov = { &buf[0]
-		, static_cast<size_t>(fs.total_size()) };
+	iovec_t iov = { buf.data(), static_cast<std::ptrdiff_t>(fs.total_size()) };
 
 	// read everything
 	int ret = readwritev(fs, iov, piece_index_t(0), 0, ec, std::ref(fop));
@@ -1377,8 +1378,7 @@ TORRENT_TEST(readwritev_zero_size_files)
 	storage_error ec;
 
 	std::vector<char> buf(size_t(fs.total_size()));
-	iovec_t iov = { &buf[0]
-		, static_cast<size_t>(fs.total_size()) };
+	iovec_t iov = { buf.data(), static_cast<std::ptrdiff_t>(fs.total_size()) };
 
 	// read everything
 	int ret = readwritev(fs, iov, piece_index_t(0), 0, ec, std::ref(fop));
@@ -1387,40 +1387,24 @@ TORRENT_TEST(readwritev_zero_size_files)
 	TEST_CHECK(check_pattern(buf, 0));
 }
 
-namespace {
-
-void delete_dirs(std::string path)
-{
-	error_code ec;
-	remove_all(path, ec);
-	if (ec && ec != boost::system::errc::no_such_file_or_directory)
-	{
-		std::printf("remove_all \"%s\": %s\n"
-			, path.c_str(), ec.message().c_str());
-	}
-	TEST_CHECK(!exists(path));
-}
-
-} // anonymous namespace
-
-TORRENT_TEST(move_storage_to_self)
+template <typename StorageType>
+void test_move_storage_to_self()
 {
 	// call move_storage with the path to the exising storage. should be a no-op
 	std::string const save_path = current_working_directory();
-	std::string const test_path = combine_path(save_path, "temp_storage");
+	std::string const test_path = complete("temp_storage");
 	delete_dirs(test_path);
 
 	aux::session_settings set;
 	file_storage fs;
 	std::vector<char> buf;
-	file_pool fp;
-	io_service ios;
-	disk_buffer_pool dp(ios, std::bind(&nop));
-	std::shared_ptr<default_storage> s = setup_torrent(fs, fp, buf, save_path, set);
+	aux::file_view_pool fp;
+	io_context ios;
+	auto s = setup_torrent<StorageType>(fs, fp, buf, save_path, set);
 
 	iovec_t const b = {&buf[0], 4};
 	storage_error se;
-	s->writev(b, piece_index_t(1), 0, open_mode::read_write, se);
+	writev(s, set, b, piece_index_t(1), 0, aux::open_mode::write, se);
 
 	TEST_CHECK(exists(combine_path(test_path, combine_path("folder2", "test3.tmp"))));
 	TEST_CHECK(exists(combine_path(test_path, combine_path("_folder3", "test4.tmp"))));
@@ -1434,22 +1418,22 @@ TORRENT_TEST(move_storage_to_self)
 	TEST_CHECK(exists(combine_path(test_path, combine_path("_folder3", "test4.tmp"))));
 }
 
-TORRENT_TEST(move_storage_into_self)
+template <typename StorageType>
+void test_move_storage_into_self()
 {
 	std::string const save_path = current_working_directory();
-	delete_dirs(combine_path(save_path, "temp_storage"));
+	delete_dirs("temp_storage");
 
 	aux::session_settings set;
 	file_storage fs;
 	std::vector<char> buf;
-	file_pool fp;
-	io_service ios;
-	disk_buffer_pool dp(ios, std::bind(&nop));
-	std::shared_ptr<default_storage> s = setup_torrent(fs, fp, buf, save_path, set);
+	aux::file_view_pool fp;
+	io_context ios;
+	auto s = setup_torrent<StorageType>(fs, fp, buf, save_path, set);
 
 	iovec_t const b = {&buf[0], 4};
 	storage_error se;
-	s->writev(b, piece_index_t(2), 0, open_mode::read_write, se);
+	writev(s, set, b, piece_index_t(2), 0, aux::open_mode::write, se);
 
 	std::string const test_path = combine_path(save_path, combine_path("temp_storage", "folder1"));
 	s->move_storage(test_path, move_flags_t::always_replace_files, se);
@@ -1465,6 +1449,29 @@ TORRENT_TEST(move_storage_into_self)
 		, combine_path("_folder3", "test4.tmp")))));
 }
 
+#if TORRENT_HAVE_MMAP
+TORRENT_TEST(move_default_storage_to_self)
+{
+	test_move_storage_to_self<default_storage>();
+}
+
+TORRENT_TEST(move_default_storage_into_self)
+{
+	test_move_storage_into_self<default_storage>();
+}
+
+#endif
+
+TORRENT_TEST(move_posix_storage_to_self)
+{
+	test_move_storage_to_self<posix_storage>();
+}
+
+TORRENT_TEST(move_posix_storage_into_self)
+{
+	test_move_storage_into_self<posix_storage>();
+}
+
 TORRENT_TEST(storage_paths_string_pooling)
 {
 	file_storage file_storage;
@@ -1477,25 +1484,25 @@ TORRENT_TEST(storage_paths_string_pooling)
 	TEST_CHECK(file_storage.paths().size() <= 2);
 }
 
+#if TORRENT_HAVE_MMAP
 TORRENT_TEST(dont_move_intermingled_files)
 {
-	std::string const save_path = combine_path(current_working_directory(), "save_path_1");
+	std::string const save_path = complete("save_path_1");
 	delete_dirs(combine_path(save_path, "temp_storage"));
 
-	std::string test_path = combine_path(current_working_directory(), "save_path_2");
+	std::string const test_path = complete("save_path_2");
 	delete_dirs(combine_path(test_path, "temp_storage"));
 
 	aux::session_settings set;
 	file_storage fs;
 	std::vector<char> buf;
-	file_pool fp;
-	io_service ios;
-	disk_buffer_pool dp(ios, std::bind(&nop));
-	std::shared_ptr<default_storage> s = setup_torrent(fs, fp, buf, save_path, set);
+	aux::file_view_pool fp;
+	io_context ios;
+	auto s = setup_torrent<default_storage>(fs, fp, buf, save_path, set);
 
 	iovec_t b = {&buf[0], 4};
 	storage_error se;
-	s->writev(b, piece_index_t(2), 0, open_mode::read_write, se);
+	s->writev(set, b, piece_index_t(2), 0, aux::open_mode::write, se);
 
 	error_code ec;
 	create_directory(combine_path(save_path, combine_path("temp_storage"
@@ -1503,11 +1510,11 @@ TORRENT_TEST(dont_move_intermingled_files)
 	TEST_EQUAL(ec, boost::system::errc::success);
 	file f;
 	f.open(combine_path(save_path, combine_path("temp_storage", "alien1.tmp"))
-		, open_mode::write_only, ec);
+		, aux::open_mode::write, ec);
 	f.close();
 	TEST_EQUAL(ec, boost::system::errc::success);
 	f.open(combine_path(save_path, combine_path("temp_storage"
-		, combine_path("folder1", "alien2.tmp"))), open_mode::write_only, ec);
+		, combine_path("folder1", "alien2.tmp"))), aux::open_mode::write, ec);
 	f.close();
 	TEST_EQUAL(ec, boost::system::errc::success);
 
@@ -1537,3 +1544,4 @@ TORRENT_TEST(dont_move_intermingled_files)
 	TEST_CHECK(!exists(combine_path(test_path, combine_path("temp_storage"
 		, combine_path("_folder3", "alien_folder1")))));
 }
+#endif

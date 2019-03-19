@@ -54,7 +54,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/disk_observer.hpp"
 #include "libtorrent/peer_connection_interface.hpp"
 #include "libtorrent/socket.hpp" // for tcp::endpoint
-#include "libtorrent/io_service_fwd.hpp"
+#include "libtorrent/io_context.hpp"
 #include "libtorrent/receive_buffer.hpp"
 #include "libtorrent/aux_/allocating_handler.hpp"
 #include "libtorrent/aux_/time.hpp"
@@ -142,7 +142,7 @@ namespace aux {
 		aux::session_settings const* sett;
 		counters* stats_counters;
 		disk_interface* disk_thread;
-		io_service* ios;
+		io_context* ios;
 		std::weak_ptr<torrent> tor;
 		std::shared_ptr<aux::socket_type> s;
 		tcp::endpoint endp;
@@ -523,10 +523,6 @@ namespace aux {
 			, char const* event, char const* fmt, ...) const noexcept final TORRENT_FORMAT(4,5);
 		void peer_log(peer_log_alert::direction_t direction
 			, char const* event) const noexcept;
-
-		time_point m_connect_time;
-		time_point m_bitfield_time;
-		time_point m_unchoke_time;
 #endif
 
 		// the message handlers are called
@@ -739,7 +735,7 @@ namespace aux {
 
 		virtual int timeout() const;
 
-		io_service& get_io_service() { return m_ios; }
+		io_context& get_context() { return m_ios; }
 
 	private:
 
@@ -756,7 +752,7 @@ namespace aux {
 
 		void do_update_interest();
 		void fill_send_buffer();
-		void on_disk_read_complete(disk_buffer_holder disk_block, disk_job_flags_t flags
+		void on_disk_read_complete(disk_buffer_holder disk_block
 			, storage_error const& error, peer_request const& r, time_point issue_time);
 		void on_disk_write_complete(storage_error const& error
 			, peer_request const &r, std::shared_ptr<torrent> t);
@@ -830,7 +826,7 @@ namespace aux {
 		disk_interface& m_disk_thread;
 
 		// io service
-		io_service& m_ios;
+		io_context& m_ios;
 
 	protected:
 #ifndef TORRENT_DISABLE_EXTENSIONS
@@ -842,11 +838,11 @@ namespace aux {
 		// outstanding request, the time since the piece was requested. It
 		// is essentially an estimate of the time it will take to completely
 		// receive a payload message after it has been requested.
-		sliding_average<20> m_request_time;
+		sliding_average<int, 20> m_request_time;
 
-		// keep the io_service running as long as we
+		// keep the io_context running as long as we
 		// have peer connections
-		io_service::work m_work;
+		executor_work_guard<io_context::executor_type> m_work;
 
 		// the time when we last got a part of a
 		// piece packet from this peer
@@ -927,8 +923,8 @@ namespace aux {
 		// have sent to it
 		int m_outstanding_bytes = 0;
 
-		aux::handler_storage<TORRENT_READ_HANDLER_MAX_SIZE> m_read_handler_storage;
-		aux::handler_storage<TORRENT_WRITE_HANDLER_MAX_SIZE> m_write_handler_storage;
+		aux::handler_storage<aux::read_handler_max_size, aux::read_handler> m_read_handler_storage;
+		aux::handler_storage<aux::write_handler_max_size, aux::write_handler> m_write_handler_storage;
 
 		// these are pieces we have recently sent suggests for to this peer.
 		// it just serves as a queue to remember what we've sent, to avoid

@@ -42,6 +42,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "test.hpp"
 #include "test_utils.hpp"
 #include "setup_transfer.hpp"
+#include "settings.hpp"
 
 #include "libtorrent/aux_/disable_warnings_push.hpp"
 
@@ -62,10 +63,6 @@ using namespace lt;
 using std::ignore;
 
 namespace {
-
-auto const alert_mask = alert::all_categories
-	& ~alert::progress_notification
-	& ~alert::stats_notification;
 
 struct test_config_t
 {
@@ -144,8 +141,7 @@ void test_ssl(int const test_idx, bool const use_utp)
 	remove_all("tmp2_ssl", ec);
 
 	int port = 1024 + rand() % 50000;
-	settings_pack sett;
-	sett.set_int(settings_pack::alert_mask, alert_mask);
+	settings_pack sett = settings();
 	sett.set_int(settings_pack::max_retry_port_bind, 100);
 
 	char listen_iface[100];
@@ -235,7 +231,7 @@ void test_ssl(int const test_idx, bool const use_utp)
 	if (test.use_ssl_ports == false) port += 20;
 	std::printf("\n\n%s: ses1: connecting peer port: %d\n\n\n"
 		, time_now_string(), port);
-	tor1.connect_peer(tcp::endpoint(address::from_string("127.0.0.1", ec)
+	tor1.connect_peer(tcp::endpoint(make_address("127.0.0.1", ec)
 		, std::uint16_t(port)));
 
 	const int timeout = 40;
@@ -307,7 +303,7 @@ void test_ssl(int const test_idx, bool const use_utp)
 	p2 = ses2.abort();
 }
 
-std::string password_callback(int /*length*/, boost::asio::ssl::context::password_purpose p
+std::string password_callback(std::size_t /*length*/, boost::asio::ssl::context::password_purpose p
 	, std::string pw)
 {
 	if (p != boost::asio::ssl::context::for_reading) return "";
@@ -370,7 +366,7 @@ bool try_connect(lt::session& ses1, int port
 	std::printf(" port: %d\n", port);
 
 	error_code ec;
-	boost::asio::io_service ios;
+	boost::asio::io_context ios;
 
 	// create the SSL context for this torrent. We need to
 	// inject the root certificate, and no other, to
@@ -448,7 +444,7 @@ bool try_connect(lt::session& ses1, int port
 
 	std::printf("connecting 127.0.0.1:%d\n", port);
 	ssl_sock.lowest_layer().connect(tcp::endpoint(
-		address_v4::from_string("127.0.0.1"), std::uint16_t(port)), ec);
+		make_address_v4("127.0.0.1"), std::uint16_t(port)), ec);
 	print_alerts(ses1, "ses1", true, true, &on_alert);
 
 	if (ec)
@@ -553,8 +549,7 @@ void test_malicious_peer()
 
 	// set up session
 	int port = 1024 + rand() % 50000;
-	settings_pack sett;
-	sett.set_int(settings_pack::alert_mask, alert_mask);
+	settings_pack sett = settings();
 	sett.set_int(settings_pack::max_retry_port_bind, 100);
 
 	char listen_iface[100];

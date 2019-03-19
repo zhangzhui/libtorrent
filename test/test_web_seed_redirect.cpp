@@ -34,6 +34,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "setup_transfer.hpp"
 #include "web_seed_suite.hpp"
 #include "settings.hpp"
+#include "libtorrent/random.hpp"
 #include "libtorrent/create_torrent.hpp"
 #include "libtorrent/torrent_info.hpp"
 
@@ -48,9 +49,9 @@ TORRENT_TEST(web_seed_redirect)
 	file_storage fs;
 	int piece_size = 0x4000;
 
-	char random_data[16000];
-	std::generate(random_data, random_data + sizeof(random_data), random_byte);
-	file f("test_file", open_mode::write_only, ec);
+	std::array<char, 16000> random_data;
+	aux::random_bytes(random_data);
+	file f("test_file", aux::open_mode::write, ec);
 	if (ec)
 	{
 		std::printf("failed to create file \"test_file\": (%d) %s\n"
@@ -58,7 +59,7 @@ TORRENT_TEST(web_seed_redirect)
 		TEST_ERROR("failed to create file");
 		return;
 	}
-	iovec_t b = { random_data, size_t(16000)};
+	iovec_t b = random_data;
 	f.writev(0, b, ec);
 	fs.add_file("test_file", 16000);
 
@@ -88,16 +89,8 @@ TORRENT_TEST(web_seed_redirect)
 	auto torrent_file = std::make_shared<torrent_info>(buf, ec, from_span);
 
 	{
-		auto const mask = ~(
-				alert::performance_warning
-#if TORRENT_ABI_VERSION == 1
-				| alert::progress_notification
-#endif
-				| alert::stats_notification);
-
 		settings_pack p = settings();
 		p.set_int(settings_pack::max_queued_disk_bytes, 256 * 1024);
-		p.set_int(settings_pack::alert_mask, mask);
 		lt::session ses(p);
 
 		// disable keep-alive because otherwise the test will choke on seeing

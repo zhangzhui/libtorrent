@@ -80,8 +80,8 @@ void run_test(HandleAlerts const& on_alert, Test const& test)
 	// setup the simulation
 	sim::default_config network_cfg;
 	sim::simulation sim{network_cfg};
-	sim::asio::io_service ios0 { sim, peer0 };
-	sim::asio::io_service ios1 { sim, peer1 };
+	sim::asio::io_context ios0 { sim, peer0 };
+	sim::asio::io_context ios1 { sim, peer1 };
 
 	lt::session_proxy zombie[2];
 
@@ -129,7 +129,7 @@ void run_test(HandleAlerts const& on_alert, Test const& test)
 	params.save_path = save_path(1);
 	ses[1]->async_add_torrent(params);
 
-	sim::timer t(sim, lt::seconds(60), [&](boost::system::error_code const& ec)
+	sim::timer t(sim, lt::seconds(60), [&](boost::system::error_code const&)
 	{
 		test(ses);
 
@@ -180,6 +180,11 @@ void operator delete(void* ptr) noexcept
 	std::free(ptr);
 }
 
+void operator delete(void* ptr, std::size_t) noexcept
+{
+	std::free(ptr);
+}
+
 TORRENT_TEST(error_handling)
 {
 	for (int i = 0; i < 8000; ++i)
@@ -200,7 +205,7 @@ TORRENT_TEST(error_handling)
 			using namespace lt;
 			run_test(
 				[](lt::session&, lt::alert const*) {},
-				[](std::shared_ptr<lt::session> ses[2]) {}
+				[](std::shared_ptr<lt::session>[2]) {}
 			);
 		}
 		catch (std::bad_alloc const&)

@@ -1,13 +1,16 @@
-cmake_minimum_required(VERSION 3.11.0 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.12.0 FATAL_ERROR)
+
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules)
+include(LibtorrentMacros)
+
+read_version("${CMAKE_CURRENT_SOURCE_DIR}/include/libtorrent/version.hpp" VER_MAJOR VER_MINOR VER_TINY)
 
 project(libtorrent
 	DESCRIPTION "Bittorrent library"
-	VERSION 1.2.0
+	VERSION ${VER_MAJOR}.${VER_MINOR}.${VER_TINY}
 )
 set (SOVERSION "10")
 
-list(APPEND CMAKE_MODULE_PATH ${libtorrent_SOURCE_DIR}/cmake/Modules)
-include(FeatureSummary)
 include(GNUInstallDirs)
 include(GeneratePkgConfig)
 
@@ -17,7 +20,6 @@ set(libtorrent_include_files
 	alert
 	alert_manager
 	alert_types
-	allocator
 	announce_entry
 	assert
 	bandwidth_limit
@@ -27,7 +29,6 @@ set(libtorrent_include_files
 	bdecode
 	bencode
 	bitfield
-	block_cache
 	bloom_filter
 	broadcast_socket
 	bt_peer_connection
@@ -51,21 +52,18 @@ set(libtorrent_include_files
 	disk_job_pool
 	disk_observer
 	download_priority
-	ed25519
 	entry
 	enum_net
 	error
 	error_code
 	extensions
 	file
-	file_pool
 	file_storage
 	fingerprint
 	flags
 	fwd
 	gzip
 	hasher
-	hasher512
 	heterogeneous_queue
 	hex
 	http_connection
@@ -79,12 +77,10 @@ set(libtorrent_include_files
 	invariant_check
 	io
 	io_service
-	io_service_fwd
 	ip_filter
 	ip_voter
 	lazy_entry
 	link
-	linked_list
 	lsd
 	magnet_uri
 	natpmp
@@ -132,7 +128,6 @@ set(libtorrent_include_files
 	settings_pack
 	sha1
 	sha1_hash
-	sha512
 	sliding_average
 	socket
 	socket_io
@@ -212,7 +207,6 @@ set(libtorrent_aux_include_files
 	allocating_handler
 	array
 	bind_to_device
-	block_cache_reference
 	byteswap
 	cppint_import_export
 	cpuid
@@ -222,17 +216,18 @@ set(libtorrent_aux_include_files
 	disable_warnings_pop
 	disable_warnings_push
 	disk_job_fence
+	ed25519
 	escape_string
 	export
 	ffs
 	file_progress
+	file_view_pool
 	has_block
 	instantiate_connection
 	io
 	ip_notifier
 	listen_socket_handle
 	lsd
-	max_path
 	merkle
 	noexcept_movable
 	numeric_cast
@@ -250,24 +245,30 @@ set(libtorrent_aux_include_files
 	session_udp_sockets
 	set_socket_buffer
 	socket_type
-	storage_piece_set
 	storage_utils
 	string_ptr
+	strview_less
 	suggest_piece
 	throw
 	time
 	torrent_impl
-	typed_span
 	unique_ptr
 	vector
 	win_crypto_provider
 	win_util)
 
+set(try_signal_include_files
+	try_signal
+	signal_error_code
+	try_signal_mingw
+	try_signal_msvc
+	try_signal_posix
+)
+
 set(sources
 	web_connection_base
 	alert
 	alert_manager
-	allocator
 	announce_entry
 	assert
 	bandwidth_limit
@@ -275,7 +276,6 @@ set(sources
 	bandwidth_queue_entry
 	bdecode
 	bitfield
-	block_cache
 	bloom_filter
 	chained_buffer
 	choker
@@ -286,6 +286,7 @@ set(sources
 	disk_buffer_holder
 	entry
 	error_code
+	file_view_pool
 	file_storage
 	file_progress
 	generate_peer_id
@@ -297,6 +298,7 @@ set(sources
 	fingerprint
 	gzip
 	hasher
+	sha1
 	hex
 	http_connection
 	http_stream
@@ -348,7 +350,6 @@ set(sources
 	stat
 	stat_cache
 	storage
-	storage_piece_set
 	storage_utils
 	time
 	timestamp_history
@@ -366,14 +367,15 @@ set(sources
 	upnp
 	utp_socket_manager
 	utp_stream
-	file_pool
 	lsd
 	disk_io_job
 	disk_job_fence
 	disk_job_pool
 	disk_buffer_pool
+	disk_interface
 	disk_io_thread
 	disk_io_thread_pool
+	disabled_disk_io
 	enum_net
 	broadcast_socket
 	magnet_uri
@@ -385,6 +387,9 @@ set(sources
 	add_torrent_params
 	peer_info
 	stack_allocator
+	mmap
+	posix_disk_io
+	posix_storage
 
 # -- extensions --
 	ut_pex
@@ -426,47 +431,27 @@ set(ed25519_sources
 	sc
 	sign
 	verify
+	sha512
+	hasher512
 )
 
-function(target_optional_compile_definitions _target _scope)
-	set(options FEATURE)
-	set(oneValueArgs NAME DESCRIPTION DEFAULT)
-	set(multiValueArgs ENABLED DISABLED)
-	cmake_parse_arguments(TOCD ${options} "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-	option(${TOCD_NAME} "${TOCD_DESCRIPTION}" ${TOCD_DEFAULT})
-	if (${${TOCD_NAME}})
-		target_compile_definitions(${_target} ${_scope} ${TOCD_ENABLED})
-	else()
-		target_compile_definitions(${_target} ${_scope} ${TOCD_DISABLED})
-	endif()
-	if(${TOCD_FEATURE})
-		add_feature_info(${TOCD_NAME} ${TOCD_NAME} "${TOCD_DESCRIPTION}")
-	endif()
-endfunction()
+set(try_signal_sources
+	try_signal
+	signal_error_code
+)
 
-macro(feature_option _name _description _default)
-	option(${_name} "${_description}" ${_default})
-	add_feature_info(${_name} ${_name} "${_description}")
-endmacro()
+list(TRANSFORM sources PREPEND "src/")
+list(TRANSFORM kademlia_sources PREPEND "src/kademlia/")
+list(TRANSFORM ed25519_sources PREPEND "src/ed25519/")
+list(TRANSFORM libtorrent_include_files PREPEND "include/libtorrent/")
+list(TRANSFORM libtorrent_extensions_include_files PREPEND "include/libtorrent/extensions/")
+list(TRANSFORM libtorrent_aux_include_files PREPEND "include/libtorrent/aux_/")
+list(TRANSFORM libtorrent_kademlia_include_files PREPEND "include/libtorrent/kademlia/")
+list(TRANSFORM try_signal_sources PREPEND "deps/try_signal/")
 
 # these options control target creation and thus have to be declared before the add_library() call
 feature_option(BUILD_SHARED_LIBS "build libtorrent as a shared library" ON)
 feature_option(static_runtime "build libtorrent with static runtime" OFF)
-
-macro(find_public_dependency _name)
-	find_package(${_name} ${ARGN})
-	string(TOUPPER "${_name}" _name_uppercased)
-	if (${_name}_FOUND OR ${_name_uppercased}_FOUND)
-		# Dependencies to be used below for generating Config.cmake file
-		# We don't need the 'REQUIRED' argument there
-		set(_args "${_name}")
-		list(APPEND _args "${ARGN}")
-		list(REMOVE_ITEM _args "REQUIRED")
-		list(REMOVE_ITEM _args "") # just in case
-		string(REPLACE ";" " " _args "${_args}")
-		list(APPEND _package_dependencies "${_args}")
-	endif()
-endmacro()
 
 find_public_dependency(Threads REQUIRED)
 
@@ -522,11 +507,14 @@ if (NOT BUILD_SHARED_LIBS)
 endif()
 
 add_library(torrent-rasterbar
-	src/$<JOIN:${sources}, src/>
-	include/libtorrent/$<JOIN:${libtorrent_include_files}, include/libtorrent/>
-	include/libtorrent/extensions/$<JOIN:${libtorrent_extensions_include_files}, include/libtorrent/extensions/>
-	include/libtorrent/aux_/$<JOIN:${libtorrent_aux_include_files}, include/libtorrent/aux_/>
+	${sources}
+	${try_signal_sources}
+	${libtorrent_include_files}
+	${libtorrent_extensions_include_files}
+	${libtorrent_aux_include_files}
 )
+
+select_cxx_standard(torrent-rasterbar 14)
 
 if (BUILD_SHARED_LIBS)
 	target_compile_definitions(torrent-rasterbar
@@ -543,17 +531,10 @@ set_target_properties(torrent-rasterbar
 		SOVERSION ${SOVERSION}
 )
 
-if (cxx_std_14 IN_LIST CMAKE_CXX_COMPILE_FEATURES)
-	target_compile_features(torrent-rasterbar PUBLIC cxx_std_14)
-	message(STATUS "Building in C++14 mode")
-else()
-	target_compile_features(torrent-rasterbar PUBLIC cxx_std_11)
-	message(STATUS "Building in C++11 mode")
-endif()
-
 target_include_directories(torrent-rasterbar PUBLIC
 	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 	$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+	PRIVATE deps/try_signal
 )
 
 target_compile_definitions(torrent-rasterbar
@@ -580,10 +561,10 @@ if (WIN32)
 			debug dbghelp
 	)
 
+	add_definitions(-D_WIN32_WINNT=0x0600) # target Windows Vista or later
+
 	target_compile_definitions(torrent-rasterbar
-		PUBLIC
-			_WIN32_WINNT=0x0600 # target Windows Vista or later
-			WIN32_LEAN_AND_MEAN # prevent winsock1 to be included
+		PUBLIC WIN32_LEAN_AND_MEAN # prevent winsock1 to be included
 	)
 
 	if (MSVC)
@@ -682,10 +663,6 @@ else(OPENSSL_FOUND)
 	if (LibGcrypt_FOUND)
 		target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_USE_LIBGCRYPT)
 		target_link_libraries(torrent-rasterbar PRIVATE LibGcrypt::LibGcrypt)
-	else()
-		if (NOT WIN32 AND NOT APPLE)
-			target_sources(torrent-rasterbar PRIVATE src/sha1)
-		endif()
 	endif()
 endif(OPENSSL_FOUND)
 
@@ -697,16 +674,11 @@ endif()
 
 if (dht)
 	target_sources(torrent-rasterbar PRIVATE
-		src/kademlia/$<JOIN:${kademlia_sources}, src/kademlia/>
-		ed25519/src/$<JOIN:${ed25519_sources}, ed25519/src/>
-		include/libtorrent/kademlia/$<JOIN:${libtorrent_kademlia_include_files}, include/libtorrent/kademlia/>
-		src/hasher512
+		${kademlia_sources}
+		${ed25519_sources}
+		${libtorrent_kademlia_include_files}
 	)
 	target_include_directories(torrent-rasterbar PRIVATE ed25519/src)
-
-	if (NOT OpenSSL_FOUND AND NOT LibGcrypt_FOUND AND NOT WIN32 AND NOT APPLE)
-		target_sources(torrent-rasterbar PRIVATE src/sha512)
-	endif()
 else()
 	target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_DISABLE_DHT)
 endif()
@@ -774,7 +746,11 @@ if(developer-options)
 		ENABLED TORRENT_PROFILE_CALLS=1)
 endif()
 
-generate_and_install_pkg_config_file(torrent-rasterbar)
+# There is little to none support for using pkg-config with MSVC and most users won't bother with it.
+# However, msys is a linux-like platform on Windows that do support/prefer using pkg-config.
+if (NOT MSVC)
+	generate_and_install_pkg_config_file(torrent-rasterbar libtorrent-rasterbar)
+endif()
 
 include(CheckCXXCompilerFlag)
 
@@ -793,16 +769,10 @@ set(ConfigPackageLocation ${CMAKE_INSTALL_LIBDIR}/cmake/LibtorrentRasterbar)
 string(REGEX REPLACE "([^;]+)" "find_dependency(\\1)" _find_dependency_calls "${_package_dependencies}")
 string(REPLACE ";" "\n" _find_dependency_calls "${_find_dependency_calls}")
 
-if(CMAKE_VERSION VERSION_LESS "3.11.0")
-	set(_compatibility ExactVersion)
-else()
-	set(_compatibility SameMinorVersion)
-endif()
-
 write_basic_package_version_file(
 	"${CMAKE_CURRENT_BINARY_DIR}/LibtorrentRasterbar/LibtorrentRasterbarConfigVersion.cmake"
 	VERSION ${libtorrent_VERSION}
-	COMPATIBILITY ${_compatibility}
+	COMPATIBILITY SameMinorVersion
 )
 
 export(EXPORT LibtorrentRasterbarTargets

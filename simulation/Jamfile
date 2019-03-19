@@ -18,11 +18,13 @@ project
 	<source>utils.cpp
 	<toolset>msvc:<cflags>/wd4275
 	<toolset>msvc:<cflags>/wd4005
+	<toolset>msvc:<cflags>/wd4268
 	: default-build
 	<threading>multi
 	<invariant-checks>full
 	<asserts>on
 	<picker-debugging>on
+	<cxxstd>14
 	;
 
 alias libtorrent-sims :

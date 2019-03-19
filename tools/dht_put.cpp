@@ -63,6 +63,7 @@ int main(int argc, char* argv[])
 
 #else
 
+namespace {
 void usage()
 {
 	std::fprintf(stderr,
@@ -190,10 +191,10 @@ void load_dht_state(lt::session& s)
 	std::vector<char> state;
 	state.resize(static_cast<std::size_t>(size));
 
-	f.read(state.data(), state.size());
+	f.read(state.data(), size);
 	if (f.fail())
 	{
-		std::fprintf(stderr, "failed to read .dht");
+		std::fprintf(stderr, "failed to read .dht\n");
 		return;
 	}
 
@@ -210,7 +211,6 @@ void load_dht_state(lt::session& s)
 	}
 }
 
-
 int save_dht_state(lt::session& s)
 {
 	entry e;
@@ -219,9 +219,10 @@ int save_dht_state(lt::session& s)
 	bencode(std::back_inserter(state), e);
 
 	std::fstream f(".dht", std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
-	f.write(state.data(), state.size());
+	f.write(state.data(), static_cast<std::streamsize>(state.size()));
 	return 0;
 }
+} // anonymous namespace
 
 int main(int argc, char* argv[])
 {
@@ -251,7 +252,7 @@ int main(int argc, char* argv[])
 
 	settings_pack sett;
 	sett.set_bool(settings_pack::enable_dht, false);
-	sett.set_int(settings_pack::alert_mask, 0xffffffff);
+	sett.set_int(settings_pack::alert_mask, 0x7fffffff);
 	lt::session s(sett);
 
 	sett.set_bool(settings_pack::enable_dht, true);
@@ -272,7 +273,7 @@ int main(int argc, char* argv[])
 			usage();
 		}
 		sha1_hash target;
-		bool ret = from_hex({argv[0], 40}, (char*)&target[0]);
+		bool ret = from_hex({argv[0], 40}, target.data());
 		if (!ret)
 		{
 			std::fprintf(stderr, "invalid hex encoding of target hash\n");
@@ -289,7 +290,7 @@ int main(int argc, char* argv[])
 		dht_immutable_item_alert* item = alert_cast<dht_immutable_item_alert>(a);
 
 		std::string str = item->item.to_string();
-		std::printf("%s", str.c_str());
+		std::printf("%s\n", str.c_str());
 	}
 	else if (argv[0] == "put"_sv)
 	{
@@ -344,7 +345,7 @@ int main(int argc, char* argv[])
 		--argc;
 		if (argc < 1) usage();
 
-		size_t len = strlen(argv[0]);
+		auto const len = static_cast<std::ptrdiff_t>(strlen(argv[0]));
 		if (len != 64)
 		{
 			std::fprintf(stderr, "public key is expected to be 64 hex digits\n");
@@ -372,7 +373,7 @@ int main(int argc, char* argv[])
 
 			authoritative = item->authoritative;
 			std::string str = item->item.to_string();
-			std::printf("%s: %s", authoritative ? "auth" : "non-auth", str.c_str());
+			std::printf("%s: %s\n", authoritative ? "auth" : "non-auth", str.c_str());
 		}
 	}
 	else

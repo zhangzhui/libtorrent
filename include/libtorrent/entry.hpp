@@ -75,6 +75,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/span.hpp"
 #include "libtorrent/string_view.hpp"
 #include "libtorrent/aux_/aligned_union.hpp"
+#include "libtorrent/aux_/strview_less.hpp"
 
 namespace libtorrent {
 
@@ -84,39 +85,6 @@ namespace libtorrent {
 	using type_error = system_error;
 #endif
 	struct bdecode_node;
-
-namespace aux {
-
-#if (__cplusplus > 201103) || (defined _MSC_VER && _MSC_VER >= 1900)
-		// this enables us to compare a string_view against the std::string that's
-		// held by the std::map
-		struct strview_less
-		{
-			using is_transparent = std::true_type;
-			template <typename T1, typename T2>
-			bool operator()(T1 const& rhs, T2 const& lhs) const
-			{ return rhs < lhs; }
-		};
-
-		template<class T> using map_string = std::map<std::string, T, aux::strview_less>;
-#else
-		template<class T>
-		struct map_string : std::map<std::string, T>
-		{
-			using base = std::map<std::string, T>;
-
-			typename base::iterator find(const string_view& key)
-			{
-				return this->base::find(key.to_string());
-			}
-
-			typename base::const_iterator find(const string_view& key) const
-			{
-				return this->base::find(key.to_string());
-			}
-		};
-#endif
-	}
 
 	// The ``entry`` class represents one node in a bencoded hierarchy. It works as a
 	// variant type, it can be either a list, a dictionary (``std::map``), an integer
@@ -128,7 +96,7 @@ namespace aux {
 		// the key is always a string. If a generic entry would be allowed
 		// as a key, sorting would become a problem (e.g. to compare a string
 		// to a list). The definition doesn't mention such a limit though.
-		using dictionary_type = aux::map_string<entry>;
+		using dictionary_type = std::map<std::string, entry, aux::strview_less>;
 		using string_type = std::string;
 		using list_type = std::vector<entry>;
 		using integer_type = std::int64_t;
@@ -178,15 +146,14 @@ namespace aux {
 		entry(entry const& e);
 		entry(entry&& e) noexcept;
 
+		// construct from bdecode_node parsed form (see bdecode())
+		entry(bdecode_node const& n); // NOLINT
+
 		// hidden
 		entry();
 
 		// hidden
 		~entry();
-
-		// hidden
-		bool operator==(entry const& e) const;
-		bool operator!=(entry const& e) const { return !(*this == e); }
 
 		// copies the structure of the right hand side into this
 		// entry.
@@ -311,8 +278,6 @@ namespace aux {
 
 	private:
 
-		void to_string_impl(std::string& out, int indent, bool single_line) const;
-
 		aux::aligned_union<1
 #if TORRENT_COMPLETE_TYPES_REQUIRED
 			// for implementations that require complete types, use char and hope
@@ -342,11 +307,15 @@ namespace aux {
 		mutable std::uint8_t m_type_queried:1;
 	};
 
+	TORRENT_EXPORT bool operator==(entry const& lhs, entry const& rhs);
+	inline bool operator!=(entry const& lhs, entry const& rhs) { return !(lhs == rhs); }
+
 namespace detail {
 
-		TORRENT_EXPORT char const* integer_to_str(char* buf, int size
-			, entry::integer_type val);
-	}
+	// internal
+	TORRENT_EXPORT string_view integer_to_str(span<char> buf
+		, entry::integer_type val);
+}
 
 #if TORRENT_USE_IOSTREAM
 	// prints the bencoded structure to the ostream as a JSON-style structure.

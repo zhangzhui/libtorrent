@@ -110,6 +110,7 @@ TORRENT_TEST(parse_peers4)
 	}
 }
 
+#if TORRENT_USE_I2P
 TORRENT_TEST(parse_i2p_peers)
 {
 	// d8:completei8e10:incompletei4e8:intervali3600e5:peers352: ...
@@ -171,6 +172,7 @@ TORRENT_TEST(parse_i2p_peers)
 			, "ufunemgwuun5t2sn3oay4zv7jvwdezwcrirgwr6b2fjgczvaowvq.b32.i2p");
 	}
 }
+#endif // TORRENT_USE_I2P
 
 TORRENT_TEST(parse_interval)
 {
@@ -345,7 +347,7 @@ void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint c
 	pack.set_bool(settings_pack::announce_to_all_tiers, true);
 	pack.set_str(settings_pack::listen_interfaces, iface + ":48875");
 
-	std::unique_ptr<lt::session> s(new lt::session(pack));
+	auto s = std::make_unique<lt::session>(pack);
 
 	error_code ec;
 	remove_all("tmp1_tracker", ec);
@@ -433,7 +435,7 @@ TORRENT_TEST(http_peers)
 	pack.set_int(settings_pack::tracker_receive_timeout, 1);
 	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:39775");
 
-	std::unique_ptr<lt::session> s(new lt::session(pack));
+	auto s = std::make_unique<lt::session>(pack);
 
 	error_code ec;
 	remove_all("tmp2_tracker", ec);
@@ -506,9 +508,8 @@ TORRENT_TEST(current_tracker)
 	pack.set_int(settings_pack::tracker_completion_timeout, 2);
 	pack.set_int(settings_pack::tracker_receive_timeout, 1);
 	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:39775");
-	//pack.set_int(settings_pack::alert_mask, alert::tracker_notification);
 
-	std::unique_ptr<lt::session> s(new lt::session(pack));
+	auto s = std::make_unique<lt::session>(pack);
 
 	error_code ec;
 	remove_all("tmp3_tracker", ec);
@@ -568,7 +569,7 @@ void test_proxy(bool proxy_trackers)
 	pack.set_int(settings_pack::proxy_port, 4444);
 	pack.set_bool(settings_pack::proxy_tracker_connections, proxy_trackers);
 
-	std::unique_ptr<lt::session> s(new lt::session(pack));
+	auto s = std::make_unique<lt::session>(pack);
 
 	error_code ec;
 	remove_all("tmp2_tracker", ec);
@@ -665,7 +666,6 @@ void test_stop_tracker_timeout(int const timeout)
 	settings_pack p = settings();
 	p.set_bool(settings_pack::announce_to_all_trackers, true);
 	p.set_bool(settings_pack::announce_to_all_tiers, true);
-	p.set_int(settings_pack::alert_mask, alert::all_categories);
 	p.set_str(settings_pack::listen_interfaces, "0.0.0.0:6881");
 	p.set_int(settings_pack::stop_tracker_timeout, timeout);
 

@@ -34,10 +34,13 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "setup_transfer.hpp"
 #include "test_utils.hpp"
 
+#include "libtorrent/file.hpp"
 #include "libtorrent/socket.hpp"
 #include "libtorrent/socket_io.hpp" // print_endpoint
 #include "libtorrent/http_connection.hpp"
 #include "libtorrent/resolver.hpp"
+#include "libtorrent/file.hpp"
+#include "libtorrent/aux_/storage_utils.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -47,7 +50,7 @@ using namespace lt;
 
 namespace {
 
-io_service ios;
+io_context ios;
 resolver res(ios);
 
 int connect_handler_called = 0;
@@ -75,7 +78,7 @@ void http_connect_handler_test(http_connection& c)
 	std::cout << time_now_string() << " connected to: "
 		<< print_endpoint(c.socket().remote_endpoint(ec)) << std::endl;
 // this is not necessarily true when using a proxy and proxying hostnames
-//	TEST_CHECK(c.socket().remote_endpoint(ec).address() == address::from_string("127.0.0.1", ec));
+//	TEST_CHECK(c.socket().remote_endpoint(ec).address() == make_address("127.0.0.1", ec));
 }
 
 void http_handler_test(error_code const& ec, http_parser const& parser
@@ -91,7 +94,7 @@ void http_handler_test(error_code const& ec, http_parser const& parser
 		http_status = parser.status_code();
 		if (http_status == 200)
 		{
-			TEST_CHECK(memcmp(data.data(), data_buffer, data.size()) == 0);
+			TEST_CHECK(span<char>(data_buffer, data.size()) == data);
 		}
 	}
 	print_http_header(parser);
@@ -123,10 +126,8 @@ void run_test(std::string const& url, int size, int status, int connected
 	std::shared_ptr<http_connection> h = std::make_shared<http_connection>(ios
 		, res, &::http_handler_test, true, 1024*1024, &::http_connect_handler_test);
 	h->get(url, seconds(5), 0, &ps, 5, "test/user-agent", boost::none, resolver_flags{}, auth);
-	ios.reset();
-	error_code e;
-	ios.run(e);
-	if (e) std::cout << time_now_string() << " run failed: " << e.message() << std::endl;
+	ios.restart();
+	ios.run();
 
 	std::string const n = time_now_string();
 	std::cout << n << " connect_handler_called: " << connect_handler_called << std::endl;
@@ -147,10 +148,10 @@ void write_test_file()
 	std::srand(unsigned(std::time(nullptr)));
 	std::generate(data_buffer, data_buffer + sizeof(data_buffer), &std::rand);
 	error_code ec;
-	file test_file("test_file", open_mode::write_only, ec);
+	file test_file("test_file", aux::open_mode::write, ec);
 	TEST_CHECK(!ec);
 	if (ec) std::printf("file error: %s\n", ec.message().c_str());
-	iovec_t b = { data_buffer, 3216};
+	iovec_t const b = { data_buffer, 3216};
 	test_file.writev(0, b, ec);
 	TEST_CHECK(!ec);
 	if (ec) std::printf("file error: %s\n", ec.message().c_str());

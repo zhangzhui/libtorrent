@@ -39,6 +39,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/extensions.hpp"
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/bdecode.hpp"
+#include "setup_transfer.hpp"
 
 using namespace lt;
 
@@ -91,6 +92,8 @@ dht_direct_response_alert* get_direct_response(lt::session& ses)
 TORRENT_TEST(direct_dht_request)
 {
 #if !defined TORRENT_DISABLE_EXTENSIONS && !defined TORRENT_DISABLE_DHT
+
+	std::vector<lt::session_proxy> abort;
 	settings_pack sp;
 	sp.set_bool(settings_pack::enable_lsd, false);
 	sp.set_bool(settings_pack::enable_natpmp, false);
@@ -108,15 +111,15 @@ TORRENT_TEST(direct_dht_request)
 
 	entry r;
 	r["q"] = "test_good";
-	requester.dht_direct_request(udp::endpoint(address::from_string("127.0.0.1")
-		, responder.listen_port()), r, reinterpret_cast<void*>(12345));
+	requester.dht_direct_request(uep("127.0.0.1", responder.listen_port())
+		, r, reinterpret_cast<void*>(12345));
 
 	dht_direct_response_alert* ra = get_direct_response(requester);
 	TEST_CHECK(ra);
 	if (ra)
 	{
 		bdecode_node response = ra->response();
-		TEST_EQUAL(ra->endpoint.address(), address::from_string("127.0.0.1"));
+		TEST_EQUAL(ra->endpoint.address(), make_address("127.0.0.1"));
 		TEST_EQUAL(ra->endpoint.port(), responder.listen_port());
 		TEST_EQUAL(response.type(), bdecode_node::dict_t);
 		TEST_EQUAL(response.dict_find_dict("r").dict_find_int_value("good"), 1);
@@ -125,17 +128,20 @@ TORRENT_TEST(direct_dht_request)
 
 	// failed request
 
-	requester.dht_direct_request(udp::endpoint(address::from_string("127.0.0.1"), 53545)
+	requester.dht_direct_request(uep("127.0.0.1", 53545)
 		, r, reinterpret_cast<void*>(123456));
 
 	ra = get_direct_response(requester);
 	TEST_CHECK(ra);
 	if (ra)
 	{
-		TEST_EQUAL(ra->endpoint.address(), address::from_string("127.0.0.1"));
+		TEST_EQUAL(ra->endpoint.address(), make_address("127.0.0.1"));
 		TEST_EQUAL(ra->endpoint.port(), 53545);
 		TEST_EQUAL(ra->response().type(), bdecode_node::none_t);
 		TEST_EQUAL(ra->userdata, reinterpret_cast<void*>(123456));
 	}
+
+	abort.emplace_back(responder.abort());
+	abort.emplace_back(requester.abort());
 #endif // #if !defined TORRENT_DISABLE_EXTENSIONS && !defined TORRENT_DISABLE_DHT
 }

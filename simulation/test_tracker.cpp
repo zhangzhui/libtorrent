@@ -76,7 +76,7 @@ void test_interval(int interval)
 
 	bool ran_to_completion = false;
 
-	sim::asio::io_service web_server(sim, address_v4::from_string("2.2.2.2"));
+	sim::asio::io_context web_server(sim, make_address_v4("2.2.2.2"));
 	// listen on port 8080
 	sim::http_server http(web_server, 8080);
 
@@ -124,7 +124,7 @@ void test_interval(int interval)
 			}
 		}
 		// terminate
-		, [&](int const ticks, lt::session& ses) -> bool {
+		, [&](int const ticks, lt::session&) -> bool {
 			if (ticks > duration + 1)
 			{
 				ran_to_completion = true;
@@ -157,7 +157,7 @@ TORRENT_TEST(event_completed)
 	sim::default_config network_cfg;
 	sim::simulation sim{network_cfg};
 
-	sim::asio::io_service web_server(sim, address_v4::from_string("2.2.2.2"));
+	sim::asio::io_context web_server(sim, make_address_v4("2.2.2.2"));
 	// listen on port 8080
 	sim::http_server http(web_server, 8080);
 
@@ -285,9 +285,9 @@ struct sim_config : sim::default_config
 	{
 		if (hostname == "tracker.com")
 		{
-			result.push_back(address_v4::from_string("10.0.0.2"));
+			result.push_back(make_address_v4("123.0.0.2"));
 			if (ipv6)
-				result.push_back(address_v6::from_string("ff::dead:beef"));
+				result.push_back(make_address_v6("ff::dead:beef"));
 			return duration_cast<chrono::high_resolution_clock::duration>(chrono::milliseconds(100));
 		}
 
@@ -299,7 +299,7 @@ struct sim_config : sim::default_config
 
 void on_alert_notify(lt::session* ses)
 {
-	ses->get_io_service().post([ses] {
+	post(ses->get_context(), [ses] {
 		std::vector<lt::alert*> alerts;
 		ses->pop_alerts(&alerts);
 
@@ -323,8 +323,8 @@ void test_ipv6_support(char const* listen_interfaces
 	sim_config network_cfg;
 	sim::simulation sim{network_cfg};
 
-	sim::asio::io_service web_server_v4(sim, address_v4::from_string("10.0.0.2"));
-	sim::asio::io_service web_server_v6(sim, address_v6::from_string("ff::dead:beef"));
+	sim::asio::io_context web_server_v4(sim, make_address_v4("123.0.0.2"));
+	sim::asio::io_context web_server_v6(sim, make_address_v6("ff::dead:beef"));
 
 	// listen on port 8080
 	sim::http_server http_v4(web_server_v4, 8080);
@@ -370,19 +370,19 @@ void test_ipv6_support(char const* listen_interfaces
 		for (int i = 0; i < num_interfaces; i++)
 		{
 			char ep[30];
-			std::snprintf(ep, sizeof(ep), "10.0.0.%d", i + 1);
-			ips.push_back(address::from_string(ep));
+			std::snprintf(ep, sizeof(ep), "123.0.0.%d", i + 1);
+			ips.push_back(make_address(ep));
 			std::snprintf(ep, sizeof(ep), "ffff::1337:%d", i + 1);
-			ips.push_back(address::from_string(ep));
+			ips.push_back(make_address(ep));
 		}
 
-		asio::io_service ios(sim, ips);
+		asio::io_context ios(sim, ips);
 		lt::settings_pack sett = settings();
 		if (listen_interfaces)
 		{
 			sett.set_str(settings_pack::listen_interfaces, listen_interfaces);
 		}
-		std::unique_ptr<lt::session> ses(new lt::session(sett, ios));
+		auto ses = std::make_unique<lt::session>(sett, ios);
 
 		ses->set_alert_notify(std::bind(&on_alert_notify, ses.get()));
 
@@ -428,8 +428,8 @@ void test_udpv6_support(char const* listen_interfaces
 	sim_config network_cfg;
 	sim::simulation sim{network_cfg};
 
-	sim::asio::io_service web_server_v4(sim, address_v4::from_string("10.0.0.2"));
-	sim::asio::io_service web_server_v6(sim, address_v6::from_string("ff::dead:beef"));
+	sim::asio::io_context web_server_v4(sim, make_address_v4("123.0.0.2"));
+	sim::asio::io_context web_server_v6(sim, make_address_v6("ff::dead:beef"));
 
 	int v4_announces = 0;
 	int v6_announces = 0;
@@ -442,24 +442,24 @@ void test_udpv6_support(char const* listen_interfaces
 		for (int i = 0; i < num_interfaces; i++)
 		{
 			char ep[30];
-			std::snprintf(ep, sizeof(ep), "10.0.0.%d", i + 1);
-			ips.push_back(address::from_string(ep));
+			std::snprintf(ep, sizeof(ep), "123.0.0.%d", i + 1);
+			ips.push_back(make_address(ep));
 			std::snprintf(ep, sizeof(ep), "ffff::1337:%d", i + 1);
-			ips.push_back(address::from_string(ep));
+			ips.push_back(make_address(ep));
 		}
 
-		asio::io_service ios(sim, ips);
+		asio::io_context ios(sim, ips);
 		lt::settings_pack sett = settings();
 		if (listen_interfaces)
 		{
 			sett.set_str(settings_pack::listen_interfaces, listen_interfaces);
 		}
-		std::unique_ptr<lt::session> ses(new lt::session(sett, ios));
+		auto ses = std::make_unique<lt::session>(sett, ios);
 
 		// since we don't have a udp tracker to run in the sim, looking for the
 		// alerts is the closest proxy
 		ses->set_alert_notify([&]{
-			ses->get_io_service().post([&] {
+			post(ses->get_context(), [&] {
 				std::vector<lt::alert*> alerts;
 				ses->pop_alerts(&alerts);
 
@@ -479,7 +479,7 @@ void test_udpv6_support(char const* listen_interfaces
 					}
 					else if (alert_cast<tracker_error_alert>(a))
 					{
-						TEST_CHECK(false && "unexpected tracker error");
+						TEST_ERROR("unexpected tracker error");
 					}
 				}
 			});
@@ -555,7 +555,7 @@ TORRENT_TEST(ipv6_support_bind_v6_any)
 
 TORRENT_TEST(ipv6_support_bind_v4)
 {
-	test_ipv6_support("10.0.0.3:6881", 2, 0);
+	test_ipv6_support("123.0.0.3:6881", 2, 0);
 }
 
 TORRENT_TEST(ipv6_support_bind_v6)
@@ -570,12 +570,12 @@ TORRENT_TEST(ipv6_support_bind_v6_3interfaces)
 
 TORRENT_TEST(ipv6_support_bind_v4_v6)
 {
-	test_ipv6_support("10.0.0.3:6881,[ffff::1337:1]:6881", 2, 2);
+	test_ipv6_support("123.0.0.3:6881,[ffff::1337:1]:6881", 2, 2);
 }
 
 TORRENT_TEST(ipv6_support_bind_v6_v4)
 {
-	test_ipv6_support("[ffff::1337:1]:6881,10.0.0.3:6881", 2, 2);
+	test_ipv6_support("[ffff::1337:1]:6881,123.0.0.3:6881", 2, 2);
 }
 
 // this runs a simulation of a torrent with tracker(s), making sure the request
@@ -584,7 +584,7 @@ TORRENT_TEST(ipv6_support_bind_v6_v4)
 // trackers to the torrent. It's expected to return the number of seconds to
 // wait until test2 is called.
 // The Announce function is called on http requests. Test1 is run on the session
-// 5 seconds after startup. The tracker is running at 10.0.0.2 (or tracker.com)
+// 5 seconds after startup. The tracker is running at 123.0.0.2 (or tracker.com)
 // port 8080.
 template <typename Setup, typename Announce, typename Test1, typename Test2>
 void tracker_test(Setup setup, Announce a, Test1 test1, Test2 test2
@@ -594,8 +594,8 @@ void tracker_test(Setup setup, Announce a, Test1 test1, Test2 test2
 	sim_config network_cfg;
 	sim::simulation sim{network_cfg};
 
-	sim::asio::io_service tracker_ios(sim, address_v4::from_string("10.0.0.2"));
-	sim::asio::io_service tracker_ios6(sim, address_v6::from_string("ff::dead:beef"));
+	sim::asio::io_context tracker_ios(sim, make_address_v4("123.0.0.2"));
+	sim::asio::io_context tracker_ios6(sim, make_address_v6("ff::dead:beef"));
 
 	// listen on port 8080
 	sim::http_server http(tracker_ios, 8080);
@@ -606,10 +606,10 @@ void tracker_test(Setup setup, Announce a, Test1 test1, Test2 test2
 
 	lt::session_proxy zombie;
 
-	asio::io_service ios(sim, { address_v4::from_string("10.0.0.3")
-		, address_v6::from_string("ffff::1337") });
+	asio::io_context ios(sim, { make_address_v4("123.0.0.3")
+		, make_address_v6("ffff::1337") });
 	lt::settings_pack sett = settings();
-	std::unique_ptr<lt::session> ses(new lt::session(sett, ios));
+	auto ses = std::make_unique<lt::session>(sett, ios);
 
 	ses->set_alert_notify(std::bind(&on_alert_notify, ses.get()));
 
@@ -970,11 +970,13 @@ TORRENT_TEST(tracker_ipv6_argument)
 {
 	bool got_announce = false;
 	bool got_ipv6 = false;
+	bool got_ipv4 = false;
 	tracker_test(
 		[](lt::add_torrent_params& p, lt::session& ses)
 		{
 			settings_pack pack;
 			pack.set_bool(settings_pack::anonymous_mode, false);
+			pack.set_str(settings_pack::listen_interfaces, "123.0.0.3:0,[ffff::1337]:0");
 			ses.apply_settings(pack);
 			p.ti = make_torrent(true);
 			return 60;
@@ -984,13 +986,22 @@ TORRENT_TEST(tracker_ipv6_argument)
 		{
 			got_announce = true;
 			bool const stop_event = req.find("&event=stopped") != std::string::npos;
-			// stop events don't need to advertise the IPv6 address
-			std::string::size_type pos = req.find("&ipv6=");
-			TEST_CHECK(pos != std::string::npos || stop_event);
-			got_ipv6 |= pos != std::string::npos;
-			// make sure the IPv6 argument is url encoded
-			TEST_CHECK(req.substr(pos + 6, req.substr(pos + 6).find_first_of('&'))
-				== "ffff%3a%3a1337");
+			// stop events don't need to advertise the IPv6/IPv4 address
+			{
+				std::string::size_type const pos = req.find("&ipv6=");
+				TEST_CHECK(pos != std::string::npos || stop_event);
+				got_ipv6 |= pos != std::string::npos;
+				// make sure the IPv6 argument is url encoded
+				TEST_EQUAL(req.substr(pos + 6, req.substr(pos + 6).find_first_of('&'))
+					, "ffff%3a%3a1337");
+			}
+
+			{
+				std::string::size_type const pos = req.find("&ipv4=");
+				TEST_CHECK(pos != std::string::npos || stop_event);
+				got_ipv4 |= pos != std::string::npos;
+				TEST_EQUAL(req.substr(pos + 6, req.substr(pos + 6).find_first_of('&')), "123.0.0.3");
+			}
 			return sim::send_response(200, "OK", 11) + "d5:peers0:e";
 		}
 		, [](torrent_handle) {}
@@ -1003,13 +1014,13 @@ TORRENT_TEST(tracker_key_argument)
 {
 	std::set<std::string> keys;
 	tracker_test(
-		[](lt::add_torrent_params& p, lt::session& ses)
+		[](lt::add_torrent_params& p, lt::session&)
 		{
 			p.ti = make_torrent(true);
 			return 60;
 		},
-		[&](std::string method, std::string req
-			, std::map<std::string, std::string>& headers)
+		[&](std::string, std::string req
+			, std::map<std::string, std::string>&)
 		{
 			auto const pos = req.find("&key=");
 			TEST_CHECK(pos != std::string::npos);
@@ -1158,11 +1169,11 @@ TORRENT_TEST(tracker_tiers)
 	// setup the simulation
 	sim::default_config network_cfg;
 	sim::simulation sim{network_cfg};
-	sim::asio::io_service ios0 { sim, peer0 };
-	sim::asio::io_service ios1 { sim, peer1 };
+	sim::asio::io_context ios0 { sim, peer0 };
+	sim::asio::io_context ios1 { sim, peer1 };
 
-	sim::asio::io_service tracker1(sim, address_v4::from_string("3.0.0.1"));
-	sim::asio::io_service tracker2(sim, address_v4::from_string("3.0.0.2"));
+	sim::asio::io_context tracker1(sim, make_address_v4("3.0.0.1"));
+	sim::asio::io_context tracker2(sim, make_address_v4("3.0.0.2"));
 	sim::http_server http1(tracker1, 8080);
 	sim::http_server http2(tracker2, 8080);
 
@@ -1198,7 +1209,7 @@ TORRENT_TEST(tracker_tiers)
 	ses[1] = std::make_shared<lt::session>(pack, ios1);
 
 	// only monitor alerts for session 0 (the downloader)
-	print_alerts(*ses[0], [=](lt::session& ses, lt::alert const* a) {
+	print_alerts(*ses[0], [=](lt::session&, lt::alert const* a) {
 		if (auto ta = alert_cast<lt::add_torrent_alert>(a))
 		{
 			ta->handle.connect_peer(lt::tcp::endpoint(peer1, 6881));
@@ -1224,7 +1235,7 @@ TORRENT_TEST(tracker_tiers)
 	params.save_path = save_path(1);
 	ses[1]->async_add_torrent(params);
 
-	sim::timer t(sim, lt::minutes(30), [&](boost::system::error_code const& ec)
+	sim::timer t(sim, lt::minutes(30), [&](boost::system::error_code const&)
 	{
 		TEST_CHECK(received_announce[0] != received_announce[1]);
 		TEST_CHECK(ses[0]->get_torrents()[0].status().is_seeding);

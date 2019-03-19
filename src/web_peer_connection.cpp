@@ -245,8 +245,8 @@ void web_peer_connection::disconnect(error_code const& ec
 	{
 		// if the web server doesn't support keepalive and we were
 		// disconnected as a graceful EOF, reconnect right away
-		if (t) get_io_service().post(
-			std::bind(&torrent::maybe_connect_web_seeds, t));
+		if (t) post(get_context()
+			, std::bind(&torrent::maybe_connect_web_seeds, t));
 	}
 	peer_connection::disconnect(ec, op, error);
 	if (t) t->disconnect_web_seed(this);
@@ -453,7 +453,7 @@ void web_peer_connection::write_request(peer_request const& r)
 
 	if (num_pad_files == int(m_file_requests.size()))
 	{
-		get_io_service().post(std::bind(
+		post(get_context(), std::bind(
 			&web_peer_connection::on_receive_padfile,
 			std::static_pointer_cast<web_peer_connection>(self())));
 		return;
@@ -790,7 +790,7 @@ void web_peer_connection::on_receive(error_code const& error
 			{
 				peer_log(peer_log_alert::info, "STATUS"
 					, "%d %s", m_parser.status_code(), m_parser.message().c_str());
-				std::multimap<std::string, std::string> const& headers = m_parser.headers();
+				auto const& headers = m_parser.headers();
 				for (auto const &i : headers)
 					peer_log(peer_log_alert::info, "STATUS", "   %s: %s", i.first.c_str(), i.second.c_str());
 			}
@@ -817,7 +817,7 @@ void web_peer_connection::on_receive(error_code const& error
 
 			m_server_string = get_peer_name(m_parser, m_host);
 
-			recv_buffer = recv_buffer.subspan(aux::numeric_cast<std::size_t>(m_body_start));
+			recv_buffer = recv_buffer.subspan(m_body_start);
 
 			m_body_start = m_parser.body_start();
 			m_received_body = 0;
@@ -899,7 +899,7 @@ void web_peer_connection::on_receive(error_code const& error
 					}
 					incoming_payload(recv_buffer.data(), copy_size);
 
-					recv_buffer = recv_buffer.subspan(aux::numeric_cast<std::size_t>(copy_size));
+					recv_buffer = recv_buffer.subspan(copy_size);
 					m_chunk_pos -= copy_size;
 
 					if (recv_buffer.empty()) goto done;
@@ -909,7 +909,7 @@ void web_peer_connection::on_receive(error_code const& error
 
 				int header_size = 0;
 				std::int64_t chunk_size = 0;
-				span<char const> chunk_start = recv_buffer.subspan(aux::numeric_cast<std::size_t>(m_chunk_pos));
+				span<char const> chunk_start = recv_buffer.subspan(m_chunk_pos);
 				TORRENT_ASSERT(chunk_start[0] == '\r'
 					|| aux::is_hex({chunk_start.data(), 1}));
 				bool const ret = m_parser.parse_chunk_header(chunk_start, &chunk_size, &header_size);
@@ -927,10 +927,10 @@ void web_peer_connection::on_receive(error_code const& error
 				received_bytes(0, header_size - m_partial_chunk_header);
 				m_partial_chunk_header = 0;
 				TORRENT_ASSERT(chunk_size != 0
-					|| int(chunk_start.size()) <= header_size || chunk_start[std::size_t(header_size)] == 'H');
+					|| int(chunk_start.size()) <= header_size || chunk_start[header_size] == 'H');
 				TORRENT_ASSERT(m_body_start + m_chunk_pos < INT_MAX);
 				m_chunk_pos += int(chunk_size);
-				recv_buffer = recv_buffer.subspan(aux::numeric_cast<std::size_t>(header_size));
+				recv_buffer = recv_buffer.subspan(header_size);
 
 				// a chunk size of zero means the request is complete. Make sure the
 				// number of payload bytes we've received matches the number we
@@ -940,7 +940,7 @@ void web_peer_connection::on_receive(error_code const& error
 					TORRENT_ASSERT_VAL(m_chunk_pos == 0, m_chunk_pos);
 
 #if TORRENT_USE_ASSERTS
-					span<char const> chunk = recv_buffer.subspan(aux::numeric_cast<std::size_t>(m_chunk_pos));
+					span<char const> chunk = recv_buffer.subspan(m_chunk_pos);
 					TORRENT_ASSERT(chunk.size() == 0 || chunk[0] == 'H');
 #endif
 					m_chunk_pos = -1;
@@ -985,7 +985,7 @@ void web_peer_connection::on_receive(error_code const& error
 			int const copy_size = std::min(file_req.length - m_received_body
 				, int(recv_buffer.size()));
 			incoming_payload(recv_buffer.data(), copy_size);
-			recv_buffer = recv_buffer.subspan(aux::numeric_cast<std::size_t>(copy_size));
+			recv_buffer = recv_buffer.subspan(copy_size);
 
 			TORRENT_ASSERT(m_received_body <= file_req.length);
 			if (m_received_body == file_req.length)

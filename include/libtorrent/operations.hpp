@@ -134,6 +134,8 @@ namespace libtorrent {
 		partfile_read,
 		partfile_write,
 		hostname_lookup,
+		file_seek,
+		symlink,
 	};
 
 	// maps an operation id (from peer_error_alert and peer_disconnected_alert)

@@ -173,9 +173,7 @@ bool node::verify_token(string_view token, sha1_hash const& info_hash
 	}
 
 	hasher h1;
-	error_code ec;
-	std::string const address = addr.address().to_string(ec);
-	if (ec) return false;
+	std::string const address = addr.address().to_string();
 	h1.update(address);
 	h1.update(reinterpret_cast<char const*>(&m_secret[0]), sizeof(m_secret[0]));
 	h1.update(info_hash);
@@ -198,9 +196,7 @@ std::string node::generate_token(udp::endpoint const& addr
 	std::string token;
 	token.resize(write_token_size);
 	hasher h;
-	error_code ec;
-	std::string const address = addr.address().to_string(ec);
-	TORRENT_ASSERT(!ec);
+	std::string const address = addr.address().to_string();
 	h.update(address);
 	h.update(reinterpret_cast<char*>(&m_secret[0]), sizeof(m_secret[0]));
 	h.update(info_hash);
@@ -451,7 +447,7 @@ void node::announce(sha1_hash const& info_hash, int listen_port, announce_flags_
 	if (listen_port == 0 && m_observer != nullptr)
 	{
 		listen_port = m_observer->get_listen_port(
-			flags & announce::ssl_torrent ? aux::transport::ssl : aux::transport::plaintext
+			(flags & announce::ssl_torrent) ? aux::transport::ssl : aux::transport::plaintext
 			, m_sock);
 	}
 
@@ -516,15 +512,16 @@ void put(std::vector<std::pair<node_entry, std::string>> const& nodes
 	ta->start();
 }
 
-void put_data_cb(item i, bool auth
+void put_data_cb(item const& i, bool auth
 	, std::shared_ptr<put_data> const& ta
 	, std::function<void(item&)> const& f)
 {
 	// call data_callback only when we got authoritative data.
 	if (auth)
 	{
-		f(i);
-		ta->set_data(i);
+		item copy(i);
+		f(copy);
+		ta->set_data(std::move(copy));
 	}
 }
 
@@ -543,7 +540,7 @@ void node::put_item(sha1_hash const& target, entry const& data, std::function<vo
 	item i;
 	i.assign(data);
 	auto put_ta = std::make_shared<dht::put_data>(*this, std::bind(f, _2));
-	put_ta->set_data(i);
+	put_ta->set_data(std::move(i));
 
 	auto ta = std::make_shared<dht::get_item>(*this, target
 		, get_item::data_callback(), std::bind(&put, _1, put_ta));
@@ -686,7 +683,6 @@ void node::send_single_refresh(udp::endpoint const& ep, int const bucket
 #endif
 	entry e;
 	e["y"] = "q";
-	entry& a = e["a"];
 
 	if (m_table.is_full(bucket))
 	{
@@ -699,7 +695,7 @@ void node::send_single_refresh(udp::endpoint const& ep, int const bucket
 		// use get_peers instead of find_node. We'll get nodes in the response
 		// either way.
 		e["q"] = "get_peers";
-		a["info_hash"] = target.to_string();
+		e["a"]["info_hash"] = target.to_string();
 		m_counters.inc_stats_counter(counters::dht_get_peers_out);
 	}
 
@@ -1006,7 +1002,7 @@ void node::incoming_request(msg const& m, entry& e)
 
 		span<char const> salt;
 		if (msg_keys[6])
-			salt = {msg_keys[6].string_ptr(), std::size_t(msg_keys[6].string_length())};
+			salt = {msg_keys[6].string_ptr(), msg_keys[6].string_length()};
 		if (salt.size() > 64)
 		{
 			m_counters.inc_stats_counter(counters::dht_invalid_put);
@@ -1221,7 +1217,7 @@ void node::write_nodes_entries(sha1_hash const& info_hash
 	}
 }
 
-node::protocol_descriptor const& node::map_protocol_to_descriptor(udp protocol)
+node::protocol_descriptor const& node::map_protocol_to_descriptor(udp const protocol)
 {
 	static std::array<protocol_descriptor, 2> const descriptors =
 	{{
@@ -1229,14 +1225,16 @@ node::protocol_descriptor const& node::map_protocol_to_descriptor(udp protocol)
 		{udp::v6(), "n6", "nodes6"}
 	}};
 
-	for (auto const& d : descriptors)
+	auto const iter = std::find_if(descriptors.begin(), descriptors.end()
+		, [&protocol](protocol_descriptor const& d) { return d.protocol == protocol; });
+
+	if (iter == descriptors.end())
 	{
-		if (d.protocol == protocol)
-			return d;
+		TORRENT_ASSERT_FAIL();
+		aux::throw_ex<std::out_of_range>("unknown protocol");
 	}
 
-	TORRENT_ASSERT_FAIL();
-	aux::throw_ex<std::out_of_range>("unknown protocol");
+	return *iter;
 }
 
 } } // namespace libtorrent::dht

@@ -88,7 +88,7 @@ TORRENT_TEST(seed_mode_disable_hash_checks)
 			params.flags |= torrent_flags::seed_mode;
 			// just to make sure the disable_hash_checks really work, we
 			// shouldn't be verifying anything from the storage
-			params.storage = disabled_storage_constructor;
+//			params.storage = disabled_storage_constructor;
 		}
 		// on alert
 		, [](lt::alert const*, lt::session&) {}
@@ -103,16 +103,18 @@ TORRENT_TEST(seed_mode_suggest)
 		// add session
 		, [](lt::settings_pack& pack) {
 			pack.set_int(settings_pack::suggest_mode, settings_pack::suggest_read_cache);
+#if TORRENT_ABI_VERSION == 1
 			pack.set_int(settings_pack::cache_size, 2);
+#endif
 		}
 		// add torrent
 		, [](lt::add_torrent_params& params) {
 			params.flags |= torrent_flags::seed_mode;
 		}
 		// on alert
-		, [](lt::alert const* a, lt::session& ses) {}
+		, [](lt::alert const*, lt::session&) {}
 		// terminate
-		, [](int ticks, lt::session& ses) -> bool
+		, [](int, lt::session&) -> bool
 		{ return true; });
 }
 
@@ -187,7 +189,9 @@ TORRENT_TEST(suggest)
 		, [](lt::settings_pack& pack) {
 			pack.set_int(settings_pack::suggest_mode, settings_pack::suggest_read_cache);
 			pack.set_int(settings_pack::max_suggest_pieces, 10);
+#if TORRENT_ABI_VERSION == 1
 			pack.set_int(settings_pack::cache_size, 2);
+#endif
 		}
 		// add torrent
 		, [](lt::add_torrent_params&) {}
@@ -300,7 +304,7 @@ void test_stop_start_download(swarm_test type, bool graceful)
 
 			std::printf("tick: %d\n", ticks);
 
-			const int timeout = type == swarm_test::download ? 21 : 100;
+			const int timeout = type == swarm_test::download ? 22 : 100;
 			if (ticks > timeout)
 			{
 				TEST_ERROR("timeout");
@@ -408,7 +412,7 @@ struct timeout_config : sim::default_config
 		auto it = m_incoming.find(ip);
 		if (it != m_incoming.end()) return sim::route().append(it->second);
 		it = m_incoming.insert(it, std::make_pair(ip, std::make_shared<queue>(
-			std::ref(m_sim->get_io_service())
+			std::ref(m_sim->get_io_context())
 			, 1000
 			, lt::duration_cast<lt::time_duration>(seconds(10))
 			, 1000, "packet-loss modem in")));
@@ -420,7 +424,7 @@ struct timeout_config : sim::default_config
 		auto it = m_outgoing.find(ip);
 		if (it != m_outgoing.end()) return sim::route().append(it->second);
 		it = m_outgoing.insert(it, std::make_pair(ip, std::make_shared<queue>(
-			std::ref(m_sim->get_io_service()), 1000
+			std::ref(m_sim->get_io_context()), 1000
 			, lt::duration_cast<lt::time_duration>(seconds(5)), 200 * 1000, "packet-loss out")));
 		return sim::route().append(it->second);
 	}
@@ -559,7 +563,7 @@ TORRENT_TEST(delete_partfile)
 		// add torrent
 		, [](lt::add_torrent_params&) {}
 		// on alert
-		, [](lt::alert const* a, lt::session&) {}
+		, [](lt::alert const*, lt::session&) {}
 		// terminate
 		, [&save_path](int, lt::session& ses) -> bool
 		{
@@ -637,10 +641,10 @@ TORRENT_TEST(block_uploaded_alert)
 				int blocks_per_piece = at->handle.torrent_file()->piece_length() / 0x4000;
 				blocks.resize(at->handle.torrent_file()->num_pieces(), std::vector<bool>(blocks_per_piece, false));
 			}
-			else if (auto at = lt::alert_cast<lt::block_uploaded_alert>(a))
+			else if (auto ua = lt::alert_cast<lt::block_uploaded_alert>(a))
 			{
-				TEST_EQUAL(blocks[static_cast<int>(at->piece_index)][at->block_index], false);
-				blocks[static_cast<int>(at->piece_index)][at->block_index] = true;
+				TEST_EQUAL(blocks[static_cast<int>(ua->piece_index)][ua->block_index], false);
+				blocks[static_cast<int>(ua->piece_index)][ua->block_index] = true;
 			}
 		}
 		// terminate
@@ -667,9 +671,9 @@ void test_settings(SettingsFun fun)
 		// add session
 		, fun
 		// add torrent
-		, [](lt::add_torrent_params& params) {}
+		, [](lt::add_torrent_params&) {}
 		// on alert
-		, [](lt::alert const* a, lt::session& ses) {}
+		, [](lt::alert const*, lt::session&) {}
 		// terminate
 		, [](int ticks, lt::session& ses) -> bool
 		{
@@ -812,6 +816,6 @@ TORRENT_TEST(unchoke_slots_limit_negative)
 // TODO: add test that makes sure a torrent in graceful pause mode won't accept
 // incoming connections
 // TODO: test the different storage allocation modes
-// TODO: test contiguous buffers
+// TODO: test contiguous buffer
 
 

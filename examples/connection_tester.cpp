@@ -31,7 +31,7 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "libtorrent/peer_id.hpp"
-#include "libtorrent/io_service.hpp"
+#include "libtorrent/io_context.hpp"
 #include "libtorrent/socket.hpp"
 #include "libtorrent/address.hpp"
 #include "libtorrent/error_code.hpp"
@@ -40,8 +40,10 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/create_torrent.hpp"
 #include "libtorrent/hasher.hpp"
 #include "libtorrent/socket_io.hpp"
-#include "libtorrent/file_pool.hpp"
 #include "libtorrent/string_view.hpp"
+#include "libtorrent/session.hpp" // for default_disk_io_constructor
+#include "libtorrent/disk_interface.hpp"
+#include "libtorrent/performance_counters.hpp"
 #include <random>
 #include <cstring>
 #include <thread>
@@ -52,15 +54,12 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <chrono>
 
 #if BOOST_ASIO_DYN_LINK
-#if BOOST_VERSION >= 104500
 #include <boost/asio/impl/src.hpp>
-#elif BOOST_VERSION >= 104400
-#include <boost/asio/impl/src.cpp>
-#endif
 #endif
 
 using namespace lt;
 using namespace lt::detail; // for write_* and read_*
+using lt::make_address_v4;
 
 using namespace std::placeholders;
 
@@ -144,7 +143,7 @@ std::mt19937 rng(dev());
 
 struct peer_conn
 {
-	peer_conn(io_service& ios, int num_pieces, int blocks_pp, tcp::endpoint const& ep
+	peer_conn(io_context& ios, int num_pieces, int blocks_pp, tcp::endpoint const& ep
 		, char const* ih, bool seed_, int churn_, bool corrupt_)
 		: s(ios)
 		, read_pos(0)
@@ -306,7 +305,6 @@ struct peer_conn
 			// unchoke
 			write_uint32(1, ptr);
 			write_uint8(1, ptr);
-			error_code ec;
 			boost::asio::async_write(s, boost::asio::buffer(write_buf_proto, ptr - write_buf_proto)
 				, std::bind(&peer_conn::on_have_all_sent, this, _1, _2));
 		}
@@ -322,7 +320,6 @@ struct peer_conn
 			// unchoke
 			write_uint32(1, ptr);
 			write_uint8(1, ptr);
-			error_code ec;
 			boost::asio::async_write(s, boost::asio::buffer((char*)buffer, len + 10)
 				, std::bind(&peer_conn::on_have_all_sent, this, _1, _2));
 		}
@@ -390,7 +387,6 @@ struct peer_conn
 		write_uint32(static_cast<int>(current_piece), ptr);
 		write_uint32(block * 16 * 1024, ptr);
 		write_uint32(16 * 1024, ptr);
-		error_code ec;
 		boost::asio::async_write(s, boost::asio::buffer(m, sizeof(msg) - 1)
 			, std::bind(&peer_conn::on_req_sent, this, m, _1, _2));
 
@@ -431,10 +427,10 @@ struct peer_conn
 		char ep_str[200];
 		address const& addr = s.local_endpoint(e).address();
 		if (addr.is_v6())
-			std::snprintf(ep_str, sizeof(ep_str), "[%s]:%d", addr.to_string(e).c_str()
+			std::snprintf(ep_str, sizeof(ep_str), "[%s]:%d", addr.to_string().c_str()
 				, s.local_endpoint(e).port());
 		else
-			std::snprintf(ep_str, sizeof(ep_str), "%s:%d", addr.to_string(e).c_str()
+			std::snprintf(ep_str, sizeof(ep_str), "%s:%d", addr.to_string().c_str()
 				, s.local_endpoint(e).port());
 		std::printf("%s ep: %s sent: %d received: %d duration: %d ms up: %.1fMB/s down: %.1fMB/s\n"
 			, tmp, ep_str, blocks_sent, blocks_received, time, up, down);
@@ -679,7 +675,7 @@ struct peer_conn
 
 	void write_piece(piece_index_t const piece, int start, int length)
 	{
-		generate_block({write_buffer, static_cast<std::size_t>(length / 4)}
+		generate_block({write_buffer, length / 4}
 			, piece, start);
 
 		if (corrupt)
@@ -793,13 +789,13 @@ void generate_torrent(std::vector<char>& buf, int num_pieces, int num_files
 	const std::int64_t total_size = std::int64_t(piece_size) * num_pieces;
 
 	std::int64_t s = total_size;
-	int i = 0;
+	int file_index = 0;
 	std::int64_t file_size = total_size / num_files;
 	while (s > 0)
 	{
 		char b[100];
-		std::snprintf(b, sizeof(b), "%s/stress_test%d", torrent_name, i);
-		++i;
+		std::snprintf(b, sizeof(b), "%s/stress_test%d", torrent_name, file_index);
+		++file_index;
 		fs.add_file(b, std::min(s, file_size));
 		s -= file_size;
 		file_size += 200;
@@ -831,11 +827,50 @@ void generate_torrent(std::vector<char>& buf, int num_pieces, int num_files
 	bencode(out, t.generate());
 }
 
+void write_handler(file_storage const& fs
+	, disk_interface& disk, storage_holder& st
+	, piece_index_t& piece, int& offset
+	, lt::storage_error const& error)
+{
+	if (error)
+	{
+		std::fprintf(stderr, "storage error: %s\n", error.ec.message().c_str());
+		return;
+	}
+
+	if (piece >= fs.end_piece()) return;
+	offset += 0x4000;
+	if (offset >= fs.piece_size(piece))
+	{
+		offset = 0;
+		++piece;
+	}
+	if (piece >= fs.end_piece()) return;
+
+	if (static_cast<int>(piece) & 1)
+	{
+		std::fprintf(stderr, "\r%.1f %% "
+			, float(static_cast<int>(piece) * 100) / float(fs.num_pieces()));
+	}
+	std::uint32_t buffer[0x4000 / 4];
+	generate_block(buffer, piece, offset);
+
+	int const left_in_piece = fs.piece_size(piece) - offset;
+
+	disk.async_write(st, { piece, offset, std::min(left_in_piece, 0x4000)}
+		, reinterpret_cast<char const*>(buffer)
+		, std::shared_ptr<disk_observer>()
+		, [&](lt::storage_error const& error)
+		{ write_handler(fs, disk, st, piece, offset, error); });
+}
+
 void generate_data(char const* path, torrent_info const& ti)
 {
-	file_storage const& fs = ti.files();
+	io_context ios;
+	counters stats_counters;
+	std::unique_ptr<lt::disk_interface> disk = default_disk_io_constructor(ios, stats_counters);
 
-	file_pool fp;
+	file_storage const& fs = ti.files();
 
 	aux::vector<download_priority_t, file_index_t> priorities;
 	sha1_hash info_hash;
@@ -848,39 +883,36 @@ void generate_data(char const* path, torrent_info const& ti)
 		info_hash
 	};
 
-	std::unique_ptr<storage_interface> st(default_storage_constructor(params, fp));
+	storage_holder st = disk->new_torrent(params, std::shared_ptr<void>());
 
+	piece_index_t piece(0);
+	int offset = 0;
+
+	std::uint32_t buffer[0x4000 / 4];
+	generate_block(buffer, piece, offset);
+
+	disk->async_write(st, { piece, offset, std::min(fs.piece_size(piece), 0x4000)}
+		, reinterpret_cast<char const*>(buffer)
+		, std::shared_ptr<disk_observer>()
+		, [&](lt::storage_error const& error)
+		{ write_handler(fs, *disk, st, piece, offset, error); });
+
+	// keep 10 writes in flight at all times
+	for (int i = 0; i < 10; ++i)
 	{
-		storage_error error;
-		st->initialize(error);
+		write_handler(fs, *disk, st, piece, offset, lt::storage_error());
 	}
 
-	std::uint32_t piece[0x4000 / 4];
-	for (piece_index_t i(0); i < piece_index_t(ti.num_pieces()); ++i)
-	{
-		for (int j = 0; j < ti.piece_size(i); j += 0x4000)
-		{
-			generate_block(piece, i, j);
-			int const left_in_piece = ti.piece_size(i) - j;
-			iovec_t const b = { reinterpret_cast<char*>(piece)
-				, size_t(std::min(left_in_piece, 0x4000))};
-			storage_error error;
-			st->writev(b, i, j, open_mode::write_only, error);
-			if (error)
-				std::fprintf(stderr, "storage error: %s\n", error.ec.message().c_str());
-		}
-		if (static_cast<int>(i) & 1)
-		{
-			std::fprintf(stderr, "\r%.1f %% ", float(static_cast<int>(i) * 100) / float(ti.num_pieces()));
-		}
-	}
+	ios.run();
 }
 
-void io_thread(io_service* ios)
+void io_thread(io_context* ios) try
 {
-	error_code ec;
-	ios->run(ec);
-	if (ec) std::fprintf(stderr, "ERROR: %s\n", ec.message().c_str());
+	ios->run();
+}
+catch (std::exception const& e)
+{
+	std::fprintf(stderr, "ERROR: %s\n", e.what());
 }
 
 int main(int argc, char* argv[])
@@ -1047,7 +1079,7 @@ int main(int argc, char* argv[])
 	}
 
 	error_code ec;
-	address_v4 addr = address_v4::from_string(destination_ip, ec);
+	address_v4 addr = make_address_v4(destination_ip, ec);
 	if (ec)
 	{
 		std::fprintf(stderr, "ERROR RESOLVING %s: %s\n", destination_ip, ec.message().c_str());
@@ -1058,7 +1090,7 @@ int main(int argc, char* argv[])
 #if !defined __APPLE__
 	// apparently darwin doesn't seems to let you bind to
 	// loopback on any other IP than 127.0.0.1
-	std::uint32_t const ip = addr.to_ulong();
+	std::uint32_t const ip = addr.to_uint();
 	if ((ip & 0xff000000) == 0x7f000000)
 	{
 		local_bind = true;
@@ -1075,7 +1107,7 @@ int main(int argc, char* argv[])
 	std::vector<peer_conn*> conns;
 	conns.reserve(num_connections);
 	int const num_threads = 2;
-	io_service ios[num_threads];
+	io_context ios[num_threads];
 	for (int i = 0; i < num_connections; ++i)
 	{
 		bool corrupt = test_corruption && (i & 1) == 0;
@@ -1085,12 +1117,7 @@ int main(int argc, char* argv[])
 		conns.push_back(new peer_conn(ios[i % num_threads], ti.num_pieces(), ti.piece_length() / 16 / 1024
 			, ep, (char const*)&ti.info_hash()[0], seed, churn, corrupt));
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
-		ios[i % num_threads].poll_one(ec);
-		if (ec)
-		{
-			std::fprintf(stderr, "ERROR: %s\n", ec.message().c_str());
-			break;
-		}
+		ios[i % num_threads].poll_one();
 	}
 
 	std::thread t1(&io_thread, &ios[0]);
@@ -1104,10 +1131,8 @@ int main(int argc, char* argv[])
 	std::uint64_t total_sent = 0;
 	std::uint64_t total_received = 0;
 
-	for (std::vector<peer_conn*>::iterator i = conns.begin()
-		, end(conns.end()); i != end; ++i)
+	for (peer_conn* p : conns)
 	{
-		peer_conn* p = *i;
 		int time = int(total_milliseconds(p->end_time - p->start_time));
 		if (time == 0) time = 1;
 		total_sent += p->blocks_sent;

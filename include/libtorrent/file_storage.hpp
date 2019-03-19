@@ -61,7 +61,7 @@ namespace libtorrent {
 		file_entry(file_entry const&) = default;
 		file_entry& operator=(file_entry const&) & = default;
 		file_entry(file_entry&&) noexcept = default;
-		file_entry& operator=(file_entry&&) & noexcept = default;
+		file_entry& operator=(file_entry&&) & = default;
 
 		// the full path of this file. The paths are unicode strings
 		// encoded in UTF-8.
@@ -104,6 +104,7 @@ namespace libtorrent {
 		// where the data for this file was found.
 		bool symlink_attribute:1;
 	};
+
 #endif // TORRENT_ABI_VERSION
 
 	// internal
@@ -589,7 +590,7 @@ namespace libtorrent {
 		std::int64_t m_total_size;
 	};
 
-	namespace aux {
+namespace aux {
 
 	// returns the piece range that entirely falls within the specified file. the
 	// end piece is one-past the last piece that entirely falls within the file.

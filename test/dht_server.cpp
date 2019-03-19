@@ -33,10 +33,11 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/bencode.hpp"
 #include "libtorrent/entry.hpp"
 #include "libtorrent/address.hpp"
-#include "libtorrent/io_service.hpp"
+#include "libtorrent/io_context.hpp"
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/socket.hpp"
 #include "libtorrent/aux_/time.hpp"
+#include "libtorrent/bdecode.hpp"
 #include "dht_server.hpp"
 #include "test_utils.hpp"
 
@@ -55,7 +56,7 @@ using namespace std::placeholders;
 struct dht_server
 {
 
-	lt::io_service m_ios;
+	lt::io_context m_ios;
 	std::atomic<int> m_dht_requests;
 	udp::socket m_socket;
 	int m_port;
@@ -114,7 +115,7 @@ struct dht_server
 
 	void thread_fun()
 	{
-		char buffer[2000];
+		std::array<char, 2000> buffer;
 
 		for (;;)
 		{
@@ -123,12 +124,12 @@ struct dht_server
 			size_t bytes_transferred;
 			bool done = false;
 			m_socket.async_receive_from(
-				boost::asio::buffer(buffer, sizeof(buffer)), from, 0
+				boost::asio::buffer(buffer.data(), buffer.size()), from, 0
 				, std::bind(&incoming_packet, _1, _2, &bytes_transferred, &ec, &done));
 			while (!done)
 			{
 				m_ios.poll_one();
-				m_ios.reset();
+				m_ios.restart();
 			}
 
 			if (ec == boost::asio::error::operation_aborted
@@ -142,7 +143,7 @@ struct dht_server
 
 			try
 			{
-				entry msg = bdecode(buffer, buffer + bytes_transferred);
+				entry msg = bdecode(span<char const>(buffer).first(int(bytes_transferred)));
 
 #if TORRENT_USE_IOSTREAM
 				std::cout << msg << std::endl;

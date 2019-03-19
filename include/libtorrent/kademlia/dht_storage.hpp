@@ -48,7 +48,8 @@ namespace libtorrent {
 	class entry;
 }
 
-namespace libtorrent { namespace dht {
+namespace libtorrent {
+namespace dht {
 	struct dht_settings;
 
 	// This structure hold the relevant counters for the storage
@@ -236,9 +237,10 @@ namespace libtorrent { namespace dht {
 	using dht_storage_constructor_type
 		= std::function<std::unique_ptr<dht_storage_interface>(dht_settings const& settings)>;
 
-	TORRENT_EXPORT std::unique_ptr<dht_storage_interface>
-		dht_default_storage_constructor(dht_settings const& settings);
+	TORRENT_EXPORT std::unique_ptr<dht_storage_interface> dht_default_storage_constructor(
+		dht_settings const& settings);
 
-} } // namespace libtorrent::dht
+} // namespace dht
+} // namespace libtorrent
 
 #endif //TORRENT_DHT_STORAGE_HPP

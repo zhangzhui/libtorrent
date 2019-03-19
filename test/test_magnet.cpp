@@ -88,11 +88,10 @@ TORRENT_TEST(magnet)
 	pack.set_int(settings_pack::urlseed_wait_retry, 74);
 	pack.set_int(settings_pack::initial_picker_threshold, 351);
 	pack.set_bool(settings_pack::upnp_ignore_nonrouters, true);
-	pack.set_bool(settings_pack::coalesce_writes, true);
 	pack.set_bool(settings_pack::close_redundant_connections, false);
 	pack.set_int(settings_pack::auto_scrape_interval, 235);
 	pack.set_int(settings_pack::auto_scrape_min_interval, 62);
-	std::unique_ptr<lt::session> s(new lt::session(pack));
+	auto s = std::make_unique<lt::session>(pack);
 
 	TEST_EQUAL(pack.get_str(settings_pack::user_agent), "test");
 	TEST_EQUAL(pack.get_int(settings_pack::tracker_receive_timeout), 1234);
@@ -145,6 +144,7 @@ TORRENT_TEST(magnet)
 		"&tr=http://2"
 		"&dn=foo"
 		"&dht=127.0.0.1:43"
+		"&xt=urn:ed2k:a0a9277894123b27945224fbac8366c9"
 		"&xt=urn:btih:c352cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
 	p.flags &= ~torrent_flags::paused;
 	p.flags &= ~torrent_flags::auto_managed;
@@ -481,51 +481,79 @@ TORRENT_TEST(parse_magnet_select_only_multiple)
 		, {no, yes, yes, yes, yes});
 }
 
-TORRENT_TEST(parse_magnet_select_only_invalid_index_and_range)
+TORRENT_TEST(parse_magnet_select_only_inverted_range)
 {
 	test_select_only("magnet:?xt=urn:btih:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
-		"&dn=foo&so=-4,3-,7-4,a,100000000&dht=10.0.0.1:1337&so=10"
+		"&dn=foo&so=7-4,100000000&dht=10.0.0.1:1337&so=10"
+		, {no, no, no, no, no, no, no, no, no, no, yes});
+}
+
+TORRENT_TEST(parse_magnet_select_only_index_bounds)
+{
+	test_select_only("magnet:?xt=urn:btih:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+		"&dn=foo&so=100000000&dht=10.0.0.1:1337&so=10"
 		, {no, no, no, no, no, no, no, no, no, no, yes});
 }
 
 TORRENT_TEST(parse_magnet_select_only_invalid_range1)
 {
 	test_select_only("magnet:?xt=urn:btih:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
-		"&dn=foo&so=-4", {});
+		"&dn=foo&so=-4&so=1", {no, yes});
 }
 
 TORRENT_TEST(parse_magnet_select_only_invalid_range2)
 {
 	test_select_only("magnet:?xt=urn:btih:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
-		"&dn=foo&so=3-", {});
-}
-
-TORRENT_TEST(parse_magnet_select_only_invalid_range3)
-{
-	test_select_only("magnet:?xt=urn:btih:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
-		"&dn=foo&so=7-4", {});
+		"&dn=foo&so=3-&so=1", {no, yes});
 }
 
 TORRENT_TEST(parse_magnet_select_only_invalid_index_character)
 {
 	test_select_only("magnet:?xt=urn:btih:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
-		"&dn=foo&so=a", {});
+		"&dn=foo&so=a&so=1", {no, yes});
 }
 
 TORRENT_TEST(parse_magnet_select_only_invalid_index_value)
 {
 	test_select_only("magnet:?xt=urn:btih:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
-		"&dn=foo&so=100000000", {});
+		"&dn=foo&so=100000000&so=1", {no, yes});
 }
 
-TORRENT_TEST(parse_magnet_select_only_invalid_no_values)
+TORRENT_TEST(parse_magnet_select_only_invalid_no_value)
 {
 	test_select_only("magnet:?xt=urn:btih:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
 		"&dn=foo&so=&dht=10.0.0.1:1337&so=", {});
 }
 
+TORRENT_TEST(parse_magnet_select_only_invalid_no_values)
+{
+	test_select_only("magnet:?xt=urn:btih:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+		"&dn=foo&so=&dht=10.0.0.1:1337&so=,,1", {no, yes});
+}
+
+
 TORRENT_TEST(parse_magnet_select_only_invalid_quotes)
 {
 	test_select_only("magnet:?xt=urn:btih:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
 		"&dn=foo&so=\"1,2\"", {});
+}
+
+TORRENT_TEST(magnet_tr_x_uri)
+{
+	add_torrent_params p = parse_magnet_uri("magnet:"
+		"?tr.0=udp://1"
+		"&tr.1=http://2"
+		"&tr=http://3"
+		"&xt=urn:btih:c352cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
+	TEST_CHECK((p.trackers == std::vector<std::string>{
+		"udp://1", "http://2", "http://3"}));
+
+	TEST_CHECK((p.tracker_tiers == std::vector<int>{0, 1, 2 }));
+
+	p = parse_magnet_uri("magnet:"
+		"?tr.a=udp://1"
+		"&tr.1=http://2"
+		"&xt=urn:btih:c352cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
+	TEST_CHECK((p.trackers == std::vector<std::string>{"http://2" }));
+	TEST_CHECK((p.tracker_tiers == std::vector<int>{0}));
 }

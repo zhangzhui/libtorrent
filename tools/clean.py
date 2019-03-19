@@ -18,7 +18,7 @@ def clean():
         'build-aux',
         '.deps',
         'test_tmp_*',
-        'bjam_build.*.xml'
+        'bjam_build.*.xml',
         '*.exe',
         '*.pdb',
         '*.pyd',
@@ -31,8 +31,6 @@ def clean():
         '*.hpp.rej',
         '*.hpp.gcov',
         '*.cpp.gcov',
-        'Makefile.in',
-        'Makefile',
         'lib*.a',
         'Jamfile.rej',
         'Jamfile.orig',
@@ -71,7 +69,7 @@ def clean():
                 try:
                     shutil.rmtree(p)
                     print(p)
-                except Exception as e:
+                except Exception:
                     try:
                         os.remove(p)
                         print(p)

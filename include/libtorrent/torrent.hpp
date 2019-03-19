@@ -57,7 +57,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/bandwidth_limit.hpp"
 #include "libtorrent/bandwidth_queue_entry.hpp"
 #include "libtorrent/storage_defs.hpp"
-#include "libtorrent/hasher.hpp"
 #include "libtorrent/assert.hpp"
 #include "libtorrent/aux_/session_interface.hpp"
 #include "libtorrent/aux_/time.hpp"
@@ -65,10 +64,9 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/peer_class_set.hpp"
 #include "libtorrent/link.hpp"
 #include "libtorrent/vector_utils.hpp"
-#include "libtorrent/linked_list.hpp"
 #include "libtorrent/debug.hpp"
 #include "libtorrent/piece_block.hpp"
-#include "libtorrent/disk_interface.hpp" // for status_t
+#include "libtorrent/disk_interface.hpp"
 #include "libtorrent/aux_/file_progress.hpp"
 #include "libtorrent/aux_/suggest_piece.hpp"
 #include "libtorrent/units.hpp"
@@ -435,7 +433,7 @@ namespace libtorrent {
 			error_code error;
 		};
 		void read_piece(piece_index_t piece);
-		void on_disk_read_complete(disk_buffer_holder block, disk_job_flags_t, storage_error const& se
+		void on_disk_read_complete(disk_buffer_holder block, storage_error const& se
 			, peer_request const& r, std::shared_ptr<read_piece_struct> rp);
 
 		storage_mode_t storage_mode() const;
@@ -985,7 +983,6 @@ namespace libtorrent {
 
 		bool has_storage() const { return bool(m_storage); }
 		storage_index_t storage() const { return m_storage; }
-		storage_interface* get_storage_impl() const;
 
 		torrent_info const& torrent_file() const
 		{ return *m_torrent_file; }
@@ -1345,8 +1342,6 @@ namespace libtorrent {
 		// longer be used and will be reset
 		std::unique_ptr<std::string> m_name;
 
-		storage_constructor_type m_storage_constructor;
-
 		// the posix time this torrent was added and when
 		// it was completed. If the torrent isn't yet
 		// completed, m_completed_time is 0
@@ -1421,7 +1416,7 @@ namespace libtorrent {
 		// the number of bytes that has been
 		// downloaded that failed the hash-test
 		std::int32_t m_total_failed_bytes = 0;
-		std::int32_t m_total_redundant_bytes = 0;
+		std::int64_t m_total_redundant_bytes = 0;
 
 		// the sequence number for this torrent, this is a
 		// monotonically increasing number for each added torrent
@@ -1430,11 +1425,7 @@ namespace libtorrent {
 		// used to post a message to defer disconnecting peers
 		std::vector<std::shared_ptr<peer_connection>> m_peers_to_disconnect;
 		aux::deferred_handler m_deferred_disconnect;
-#ifdef _M_AMD64
-		aux::handler_storage<96> m_deferred_handler_storage;
-#else
-		aux::handler_storage<64> m_deferred_handler_storage;
-#endif
+		aux::handler_storage<aux::deferred_handler_max_size, aux::defer_handler> m_deferred_handler_storage;
 
 		// these are the peer IDs we've used for our outgoing peer connections for
 		// this torrent. If we get an incoming peer claiming to have one of these,

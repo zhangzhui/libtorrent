@@ -35,12 +35,9 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/hasher.hpp"
 #include "libtorrent/pe_crypto.hpp"
-#include "libtorrent/session.hpp"
 #include "libtorrent/random.hpp"
 #include "libtorrent/span.hpp"
-#include "libtorrent/buffer.hpp"
 
-#include "setup_transfer.hpp"
 #include "test.hpp"
 
 #if !defined TORRENT_DISABLE_ENCRYPTION
@@ -52,17 +49,17 @@ void test_enc_handler(lt::crypto_plugin& a, lt::crypto_plugin& b)
 	int const repcount = 128;
 	for (int rep = 0; rep < repcount; ++rep)
 	{
-		std::size_t const buf_len = rand() % (512 * 1024);
-		std::vector<char> buf(buf_len);
-		std::vector<char> cmp_buf(buf_len);
+		std::ptrdiff_t const buf_len = lt::random(512 * 1024);
+		std::vector<char> buf(static_cast<std::size_t>(buf_len));
+		std::vector<char> cmp_buf(static_cast<std::size_t>(buf_len));
 
-		std::generate(buf.begin(), buf.end(), &std::rand);
+		lt::aux::random_bytes(buf);
 		std::copy(buf.begin(), buf.end(), cmp_buf.begin());
 
 		using namespace lt::aux;
 
 		{
-			lt::span<char> iovec(&buf[0], buf_len);
+			lt::span<char> iovec(buf.data(), buf_len);
 			int next_barrier;
 			lt::span<lt::span<char const>> iovec_out;
 			std::tie(next_barrier, iovec_out) = a.encrypt(iovec);
@@ -75,7 +72,7 @@ void test_enc_handler(lt::crypto_plugin& a, lt::crypto_plugin& b)
 			int consume = 0;
 			int produce = 0;
 			int packet_size = 0;
-			lt::span<char> iovec(&buf[0], buf_len);
+			lt::span<char> iovec(buf.data(), buf_len);
 			std::tie(consume, produce, packet_size) = b.decrypt(iovec);
 			TEST_CHECK(buf == cmp_buf);
 			TEST_EQUAL(consume, 0);
@@ -84,7 +81,7 @@ void test_enc_handler(lt::crypto_plugin& a, lt::crypto_plugin& b)
 		}
 
 		{
-			lt::span<char> iovec(&buf[0], buf_len);
+			lt::span<char> iovec(buf.data(), buf_len);
 			int next_barrier;
 			lt::span<lt::span<char const>> iovec_out;
 			std::tie(next_barrier, iovec_out) = b.encrypt(iovec);
@@ -95,7 +92,7 @@ void test_enc_handler(lt::crypto_plugin& a, lt::crypto_plugin& b)
 			int consume = 0;
 			int produce = 0;
 			int packet_size = 0;
-			lt::span<char> iovec2(&buf[0], buf_len);
+			lt::span<char> iovec2(buf.data(), buf_len);
 			std::tie(consume, produce, packet_size) = a.decrypt(iovec2);
 			TEST_CHECK(buf == cmp_buf);
 			TEST_EQUAL(consume, 0);

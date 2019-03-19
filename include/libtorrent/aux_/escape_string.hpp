@@ -64,7 +64,8 @@ namespace libtorrent {
 	TORRENT_EXTRA_EXPORT std::string maybe_url_encode(std::string const& url);
 
 	TORRENT_EXTRA_EXPORT string_view trim(string_view);
-	TORRENT_EXTRA_EXPORT string_view::size_type find(string_view haystack, string_view needle, string_view::size_type pos);
+	TORRENT_EXTRA_EXPORT string_view::size_type find(string_view haystack
+		, string_view needle, string_view::size_type pos);
 
 #if TORRENT_ABI_VERSION == 1
 	// deprecated in 1.2
@@ -83,9 +84,6 @@ namespace libtorrent {
 	TORRENT_EXTRA_EXPORT std::string base32encode(string_view s, encode_string_flags_t flags = {});
 #endif
 	TORRENT_EXTRA_EXPORT std::string base32decode(string_view s);
-
-	TORRENT_EXTRA_EXPORT string_view url_has_argument(
-		string_view url, std::string argument, std::string::size_type* out_pos = nullptr);
 
 	// replaces \ with /
 	TORRENT_EXTRA_EXPORT void convert_path_to_posix(std::string& path);

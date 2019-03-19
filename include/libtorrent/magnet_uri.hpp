@@ -60,19 +60,18 @@ namespace libtorrent {
 		, std::string const& save_path
 		, storage_mode_t storage_mode = storage_mode_sparse
 		, bool paused = false
-		, storage_constructor_type sc = default_storage_constructor
 		, void* userdata = nullptr);
 
 	// deprecated in 0.16. Instead, pass in the magnet link as add_torrent_params::url
 	TORRENT_DEPRECATED_EXPORT
 	torrent_handle add_magnet_uri(session& ses, std::string const& uri
-		, add_torrent_params p);
+		, add_torrent_params const& p);
 #endif
 
 	// deprecated in 0.16. Instead, pass in the magnet link as add_torrent_params::url
 	TORRENT_DEPRECATED_EXPORT
 	torrent_handle add_magnet_uri(session& ses, std::string const& uri
-		, add_torrent_params p, error_code& ec);
+		, add_torrent_params const& p, error_code& ec);
 #endif // TORRENT_ABI_VERSION
 
 

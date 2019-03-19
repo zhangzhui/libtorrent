@@ -30,13 +30,18 @@ POSSIBILITY OF SUCH DAMAGE.
 
 */
 
+#ifndef TORRENT_CHOKER_HPP_INCLUDED
+#define TORRENT_CHOKER_HPP_INCLUDED
+
 #include "libtorrent/config.hpp"
 #include "libtorrent/time.hpp" // for time_duration
 #include <vector>
 
 namespace libtorrent {
 
-	namespace aux { struct session_settings; }
+namespace aux {
+	struct session_settings;
+}
 	class peer_connection;
 
 	// sorts the vector of peers in-place. When returning, the top unchoke slots
@@ -50,3 +55,5 @@ namespace libtorrent {
 		, aux::session_settings const& sett);
 
 }
+
+#endif // TORRENT_CHOKER_INCLUDED

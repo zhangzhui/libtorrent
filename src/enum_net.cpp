@@ -70,10 +70,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #endif // TORRENT_USE_SYSCTL
 
 #if TORRENT_USE_GETIPFORWARDTABLE || TORRENT_USE_GETADAPTERSADDRESSES
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
+#include "libtorrent/aux_/windows.hpp"
 #include <iphlpapi.h>
 #endif
 
@@ -220,8 +217,8 @@ namespace {
 
 		for (;;)
 		{
-			auto next_msg = buf.subspan(std::size_t(msg_len));
-			int read_len = int(recv(sock, next_msg.data(), next_msg.size(), 0));
+			auto next_msg = buf.subspan(msg_len);
+			int const read_len = int(recv(sock, next_msg.data(), static_cast<std::size_t>(next_msg.size()), 0));
 			if (read_len < 0) return -1;
 
 			nl_hdr = reinterpret_cast<nlmsghdr*>(next_msg.data());
@@ -527,11 +524,11 @@ int _System __libsocket_sysctl(int* mib, u_int namelen, void *oldp, size_t *oldl
 			}
 			return b1 == b2;
 		}
-		return (a1.to_v4().to_ulong() & mask.to_v4().to_ulong())
-			== (a2.to_v4().to_ulong() & mask.to_v4().to_ulong());
+		return (a1.to_v4().to_uint() & mask.to_v4().to_uint())
+			== (a2.to_v4().to_uint() & mask.to_v4().to_uint());
 	}
 
-	bool in_local_network(io_service& ios, address const& addr, error_code& ec)
+	bool in_local_network(io_context& ios, address const& addr, error_code& ec)
 	{
 		std::vector<ip_interface> net = enum_net_interfaces(ios, ec);
 		if (ec) return false;
@@ -540,15 +537,11 @@ int _System __libsocket_sysctl(int* mib, u_int namelen, void *oldp, size_t *oldl
 
 	bool in_local_network(std::vector<ip_interface> const& net, address const& addr)
 	{
-		for (auto const& i : net)
-		{
-			if (match_addr_mask(addr, i.interface_address, i.netmask))
-				return true;
-		}
-		return false;
+		return std::any_of(net.begin(), net.end(), [&addr](ip_interface const& i)
+			{ return match_addr_mask(addr, i.interface_address, i.netmask); });
 	}
 
-	std::vector<ip_interface> enum_net_interfaces(io_service& ios, error_code& ec)
+	std::vector<ip_interface> enum_net_interfaces(io_context& ios, error_code& ec)
 	{
 		TORRENT_UNUSED(ios); // this may be unused depending on configuration
 		std::vector<ip_interface> ret;
@@ -561,7 +554,7 @@ int _System __libsocket_sysctl(int* mib, u_int namelen, void *oldp, size_t *oldl
 		{
 			ip_interface wan;
 			wan.interface_address = ip;
-			wan.netmask = address_v4::from_string("255.255.255.255");
+			wan.netmask = make_address_v4("255.255.255.255");
 			std::strcpy(wan.name, "eth0");
 			std::strcpy(wan.friendly_name, "Ethernet");
 			std::strcpy(wan.description, "Simulator Ethernet Adapter");
@@ -813,15 +806,15 @@ int _System __libsocket_sysctl(int* mib, u_int namelen, void *oldp, size_t *oldl
 			iface.name[0] = 0;
 			iface.friendly_name[0] = 0;
 			iface.description[0] = 0;
-			if (iface.interface_address.is_v4())
-				iface.netmask = address_v4::netmask(iface.interface_address.to_v4());
+//			if (iface.interface_address.is_v4())
+//				iface.netmask = address_v4::netmask(iface.interface_address.to_v4());
 			ret.push_back(iface);
 		}
 #endif
 		return ret;
 	}
 
-	boost::optional<ip_route> get_default_route(io_service& ios
+	boost::optional<ip_route> get_default_route(io_context& ios
 		, string_view const device, bool const v6, error_code& ec)
 	{
 		std::vector<ip_route> const ret = enum_routes(ios, ec);
@@ -836,14 +829,14 @@ int _System __libsocket_sysctl(int* mib, u_int namelen, void *oldp, size_t *oldl
 		return *i;
 	}
 
-	address get_default_gateway(io_service& ios
+	address get_default_gateway(io_context& ios
 		, string_view const device, bool const v6, error_code& ec)
 	{
 		auto const default_route = get_default_route(ios, device, v6, ec);
 		return default_route ? default_route->gateway : address();
 	}
 
-	std::vector<ip_route> enum_routes(io_service& ios, error_code& ec)
+	std::vector<ip_route> enum_routes(io_context& ios, error_code& ec)
 	{
 		std::vector<ip_route> ret;
 		TORRENT_UNUSED(ios);
@@ -861,7 +854,7 @@ int _System __libsocket_sysctl(int* mib, u_int namelen, void *oldp, size_t *oldl
 			if (ip.is_v4())
 			{
 				r.destination = address_v4();
-				r.netmask = address_v4::from_string("255.255.255.0");
+				r.netmask = make_address_v4("255.255.255.0");
 				address_v4::bytes_type b = ip.to_v4().to_bytes();
 				b[3] = 1;
 				r.gateway = address_v4(b);
@@ -869,7 +862,7 @@ int _System __libsocket_sysctl(int* mib, u_int namelen, void *oldp, size_t *oldl
 			else
 			{
 				r.destination = address_v6();
-				r.netmask = address_v6::from_string("FFFF:FFFF:FFFF:FFFF::0");
+				r.netmask = make_address_v6("FFFF:FFFF:FFFF:FFFF::0");
 				address_v6::bytes_type b = ip.to_v6().to_bytes();
 				b[14] = 1;
 				r.gateway = address_v6(b);
@@ -993,7 +986,7 @@ int _System __libsocket_sysctl(int* mib, u_int namelen, void *oldp, size_t *oldl
 		return std::vector<ip_route>();
 	}
 
-	if (needed <= 0)
+	if (needed == 0)
 	{
 		return std::vector<ip_route>();
 	}
@@ -1073,9 +1066,9 @@ int _System __libsocket_sysctl(int* mib, u_int namelen, void *oldp, size_t *oldl
 			{
 
 				ip_route r;
-				r.destination = address::from_string(adapter->IpAddressList.IpAddress.String, ec);
-				r.gateway = address::from_string(adapter->GatewayList.IpAddress.String, ec);
-				r.netmask = address::from_string(adapter->IpAddressList.IpMask.String, ec);
+				r.destination = make_address(adapter->IpAddressList.IpAddress.String, ec);
+				r.gateway = make_address(adapter->GatewayList.IpAddress.String, ec);
+				r.netmask = make_address(adapter->IpAddressList.IpMask.String, ec);
 				strncpy(r.name, adapter->AdapterName, sizeof(r.name));
 
 				if (ec)
@@ -1248,13 +1241,14 @@ int _System __libsocket_sysctl(int* mib, u_int namelen, void *oldp, size_t *oldl
 
 	// returns the device name whose local address is ``addr``. If
 	// no such device is found, an empty string is returned.
-	std::string device_for_address(address addr, io_service& ios, error_code& ec)
+	std::string device_for_address(address addr, io_context& ios, error_code& ec)
 	{
 		std::vector<ip_interface> ifs = enum_net_interfaces(ios, ec);
-		if (ec) return std::string();
+		if (ec) return {};
 
-		for (auto const& iface : ifs)
-			if (iface.interface_address == addr) return iface.name;
-		return std::string();
+		auto const iter = std::find_if(ifs.begin(), ifs.end()
+			, [&addr](ip_interface const& iface)
+			{ return iface.interface_address == addr; });
+		return (iter == ifs.end()) ? std::string() : iter->name;
 	}
 }

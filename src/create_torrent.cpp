@@ -32,7 +32,6 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/create_torrent.hpp"
 #include "libtorrent/utf8.hpp"
-#include "libtorrent/aux_/escape_string.hpp" // for convert_to_wstring
 #include "libtorrent/disk_io_thread.hpp"
 #include "libtorrent/aux_/merkle.hpp" // for merkle_*()
 #include "libtorrent/torrent_info.hpp"
@@ -40,6 +39,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/performance_counters.hpp" // for counters
 #include "libtorrent/alert_manager.hpp"
 #include "libtorrent/aux_/path.hpp"
+#include "libtorrent/session.hpp" // for default_disk_io_constructor
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -67,51 +67,20 @@ namespace {
 	bool ignore_subdir(std::string const& leaf)
 	{ return leaf == ".." || leaf == "."; }
 
-	file_flags_t get_file_attributes(std::string const& p)
-	{
-#ifdef TORRENT_WINDOWS
-		WIN32_FILE_ATTRIBUTE_DATA attr;
-		std::wstring path = convert_to_wstring(p);
-		GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attr);
-		if (attr.dwFileAttributes == INVALID_FILE_ATTRIBUTES) return {};
-		if (attr.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) return file_storage::flag_hidden;
-		return {};
-#else
-		struct ::stat s;
-		if (::lstat(convert_to_native(p).c_str(), &s) < 0) return {};
-		file_flags_t file_attr = {};
-		if (s.st_mode & S_IXUSR)
-			file_attr |= file_storage::flag_executable;
-		if (S_ISLNK(s.st_mode))
-			file_attr |= file_storage::flag_symlink;
-		return file_attr;
-#endif
-	}
-
 #ifndef TORRENT_WINDOWS
 	std::string get_symlink_path_impl(char const* path)
 	{
 		constexpr int MAX_SYMLINK_PATH = 200;
 
 		char buf[MAX_SYMLINK_PATH];
-		std::string f = convert_to_native(path);
+		std::string f = convert_to_native_path_string(path);
 		int char_read = int(readlink(f.c_str(), buf, MAX_SYMLINK_PATH));
 		if (char_read < 0) return "";
 		if (char_read < MAX_SYMLINK_PATH) buf[char_read] = 0;
 		else buf[0] = 0;
-		return convert_from_native(buf);
+		return convert_from_native_path(buf);
 	}
 #endif
-
-	std::string get_symlink_path(std::string const& p)
-	{
-#if defined TORRENT_WINDOWS
-		TORRENT_UNUSED(p);
-		return "";
-#else
-		return get_symlink_path_impl(p.c_str());
-#endif
-	}
 
 	void add_files_impl(file_storage& fs, std::string const& p
 		, std::string const& l, std::function<bool(std::string)> const& pred
@@ -146,13 +115,13 @@ namespace {
 		else
 		{
 			// #error use the fields from s
-			file_flags_t const file_flags = get_file_attributes(f);
+			file_flags_t const file_flags = aux::get_file_attributes(f);
 
 			// mask all bits to check if the file is a symlink
 			if ((file_flags & file_storage::flag_symlink)
 				&& (flags & create_torrent::symlinks))
 			{
-				std::string sym_path = get_symlink_path(f);
+				std::string sym_path = aux::get_symlink_path(f);
 				fs.add_file(l, 0, file_flags, std::time_t(s.mtime), sym_path);
 			}
 			else
@@ -166,7 +135,7 @@ namespace {
 	{
 		create_torrent& ct;
 		storage_holder storage;
-		disk_io_thread& iothread;
+		disk_interface& iothread;
 		piece_index_t piece_counter;
 		piece_index_t completed_piece;
 		std::function<void(piece_index_t)> const& f;
@@ -201,6 +170,42 @@ namespace {
 	}
 
 } // anonymous namespace
+
+namespace aux {
+
+	file_flags_t get_file_attributes(std::string const& p)
+	{
+		auto const path = convert_to_native_path_string(p);
+
+#ifdef TORRENT_WINDOWS
+		WIN32_FILE_ATTRIBUTE_DATA attr;
+		GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attr);
+		if (attr.dwFileAttributes == INVALID_FILE_ATTRIBUTES) return {};
+		if (attr.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) return file_storage::flag_hidden;
+		return {};
+#else
+		struct ::stat s{};
+		if (::lstat(path.c_str(), &s) < 0) return {};
+		file_flags_t file_attr = {};
+		if (s.st_mode & S_IXUSR)
+			file_attr |= file_storage::flag_executable;
+		if (S_ISLNK(s.st_mode))
+			file_attr |= file_storage::flag_symlink;
+		return file_attr;
+#endif
+	}
+
+	std::string get_symlink_path(std::string const& p)
+	{
+#if defined TORRENT_WINDOWS
+		TORRENT_UNUSED(p);
+		return "";
+#else
+		return get_symlink_path_impl(p.c_str());
+#endif
+	}
+
+} // anonymous aux
 
 #if TORRENT_ABI_VERSION == 1
 
@@ -247,6 +252,18 @@ namespace {
 			, default_pred, flags);
 	}
 
+namespace {
+	struct disk_aborter
+	{
+		explicit disk_aborter(disk_interface& dio) : m_dio(dio) {}
+		~disk_aborter() { m_dio.abort(true); }
+		disk_aborter(disk_aborter const&) = delete;
+		disk_aborter& operator=(disk_aborter const&) = delete;
+	private:
+		disk_interface& m_dio;
+	};
+}
+
 	void set_piece_hashes(create_torrent& t, std::string const& p
 		, std::function<void(piece_index_t)> const& f, error_code& ec)
 	{
@@ -254,9 +271,9 @@ namespace {
 #ifdef TORRENT_BUILD_SIMULATOR
 		sim::default_config conf;
 		sim::simulation sim{conf};
-		io_service ios{sim};
+		io_context ios{sim};
 #else
-		io_service ios;
+		io_context ios;
 #endif
 
 #if TORRENT_USE_UNC_PATHS
@@ -278,7 +295,8 @@ namespace {
 		}
 
 		counters cnt;
-		disk_io_thread disk_thread(ios, cnt);
+		std::unique_ptr<disk_interface> disk_thread = default_disk_io_constructor(ios, cnt);
+		disk_aborter da(*disk_thread.get());
 
 		aux::vector<download_priority_t, file_index_t> priorities;
 		sha1_hash info_hash;
@@ -291,36 +309,34 @@ namespace {
 			info_hash
 		};
 
-		storage_holder storage = disk_thread.new_torrent(default_storage_constructor
-			, params, std::shared_ptr<void>());
+		storage_holder storage = disk_thread->new_torrent(std::move(params)
+			, std::shared_ptr<void>());
 
 		settings_pack sett;
-		sett.set_int(settings_pack::cache_size, 0);
-		int const num_threads = disk_io_thread::hasher_thread_divisor - 1;
+		int const num_threads = hasher_thread_divisor - 1;
 		int const jobs_per_thread = 4;
 		sett.set_int(settings_pack::aio_threads, num_threads);
 
-		disk_thread.set_settings(&sett);
+		disk_thread->set_settings(&sett);
 
 		int const piece_read_ahead = std::max(num_threads * jobs_per_thread
 			, default_block_size / t.piece_length());
 
-		hash_state st = { t, std::move(storage), disk_thread, piece_index_t(0), piece_index_t(0), f, ec };
+		hash_state st = { t, std::move(storage), *disk_thread.get(), piece_index_t(0), piece_index_t(0), f, ec };
 		for (piece_index_t i(0); i < piece_index_t(piece_read_ahead); ++i)
 		{
-			disk_thread.async_hash(st.storage, i, disk_interface::sequential_access
+			disk_thread->async_hash(st.storage, i, disk_interface::sequential_access
 				, std::bind(&on_hash, _1, _2, _3, &st));
 			++st.piece_counter;
 			if (st.piece_counter >= t.files().end_piece()) break;
 		}
-		disk_thread.submit_jobs();
+		disk_thread->submit_jobs();
 
 #ifdef TORRENT_BUILD_SIMULATOR
 		sim.run();
 #else
-		ios.run(ec);
+		ios.run();
 #endif
-		disk_thread.abort(true);
 	}
 
 	create_torrent::~create_torrent() = default;
@@ -381,8 +397,8 @@ namespace {
 			alignment = piece_size;
 
 		// make sure the size is an even power of 2
-#ifndef NDEBUG
-		for (int i = 0; i < 32; ++i)
+#if TORRENT_USE_ASSERTS
+		for (int i = 0; i < 31; ++i)
 		{
 			if (piece_size & (1 << i))
 			{
@@ -581,7 +597,7 @@ namespace {
 			{
 				entry& sympath_e = info["symlink path"];
 
-				std::string split = split_path(m_files.symlink(first));
+				std::string const split = split_path(m_files.symlink(first));
 				for (char const* e = split.c_str(); e != nullptr; e = next_path_element(e))
 					sympath_e.list().emplace_back(e);
 			}
@@ -602,12 +618,12 @@ namespace {
 					entry& file_e = files.list().back();
 					if (m_include_mtime && m_files.mtime(i)) file_e["mtime"] = m_files.mtime(i);
 					file_e["length"] = m_files.file_size(i);
-					entry& path_e = file_e["path"];
 
 					TORRENT_ASSERT(has_parent_path(m_files.file_path(i)));
 
 					{
-						std::string split = split_path(m_files.file_path(i));
+						entry& path_e = file_e["path"];
+						std::string const split = split_path(m_files.file_path(i));
 						TORRENT_ASSERT(split.c_str() == m_files.name());
 
 						for (char const* e = next_path_element(split.c_str());
@@ -630,7 +646,7 @@ namespace {
 					{
 						entry& sympath_e = file_e["symlink path"];
 
-						std::string split = split_path(m_files.symlink(i));
+						std::string const split = split_path(m_files.symlink(i));
 						for (char const* e = split.c_str(); e != nullptr; e = next_path_element(e))
 							sympath_e.list().emplace_back(e);
 					}

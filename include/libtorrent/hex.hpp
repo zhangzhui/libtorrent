@@ -41,7 +41,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	namespace aux {
+namespace aux {
 
 	TORRENT_EXTRA_EXPORT int hex_to_int(char in);
 	TORRENT_EXTRA_EXPORT bool is_hex(span<char const> in);
@@ -54,7 +54,7 @@ namespace libtorrent {
 	// by ``out`` is large enough, i.e. has at least len * 2 bytes of space.
 	TORRENT_DEPRECATED_EXPORT std::string to_hex(span<char const> s);
 	TORRENT_DEPRECATED_EXPORT void to_hex(span<char const> in, char* out);
-	TORRENT_DEPRECATED_EXPORT void to_hex(char const* in, size_t const len, char* out);
+	TORRENT_DEPRECATED_EXPORT void to_hex(char const* in, int const len, char* out);
 
 	// converts the buffer [``in``, ``in`` + len) from hexadecimal to
 	// binary. The binary output is written to the buffer pointed to
@@ -63,20 +63,20 @@ namespace libtorrent {
 	// (len + 1) / 2 bytes.
 	TORRENT_DEPRECATED_EXPORT bool from_hex(span<char const> in, char* out);
 
-	}
+} // namespace aux
 
 #if TORRENT_ABI_VERSION == 1
 	// deprecated in 1.2
 	TORRENT_DEPRECATED
 	inline void to_hex(char const* in, int len, char* out)
-	{ aux::to_hex({in, static_cast<size_t>(len)}, out); }
+	{ aux::to_hex({in, len}, out); }
 	TORRENT_DEPRECATED
 	inline std::string to_hex(std::string const& s)
 	{ return aux::to_hex(s); }
 	TORRENT_DEPRECATED
 	inline bool from_hex(char const *in, int len, char* out)
-	{ return aux::from_hex({in, static_cast<size_t>(len)}, out); }
+	{ return aux::from_hex({in, len}, out); }
 #endif
-}
+} // namespace libtorrent
 
 #endif // TORRENT_HEX_HPP_INCLUDED

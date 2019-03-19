@@ -72,7 +72,7 @@ namespace aux {
 	class torrent;
 
 #ifndef BOOST_NO_EXCEPTIONS
-	void TORRENT_NO_RETURN throw_invalid_handle();
+	[[noreturn]] void throw_invalid_handle();
 #endif
 
 	using status_flags_t = flags::bitfield_flag<std::uint32_t, struct status_flags_tag>;
@@ -426,7 +426,7 @@ namespace aux {
 			piece_granularity = 1
 		};
 
-		// This function fills in the supplied vector with the the number of
+		// This function fills in the supplied vector with the number of
 		// bytes downloaded of each file in this torrent. The progress values are
 		// ordered the same as the files in the torrent_info. This operation is
 		// not very cheap. Its complexity is *O(n + mj)*. Where *n* is the number
@@ -524,7 +524,7 @@ namespace aux {
 #if TORRENT_ABI_VERSION == 1
 		TORRENT_DEPRECATED
 		bool set_metadata(char const* metadata, int size) const
-		{ return set_metadata({metadata, size_t(size)}); }
+		{ return set_metadata({metadata, size}); }
 #endif
 
 		// Returns true if this handle refers to a valid torrent and false if it
@@ -574,6 +574,9 @@ namespace aux {
 		// the specified flags and leave any other flags unchanged.
 		// ``unset_flags`` clears the specified flags, while leaving
 		// any other flags unchanged.
+		//
+		// The `seed_mode` flag is special, it can only be cleared by the
+		// `set_flags()` function, not set.
 		torrent_flags_t flags() const;
 		void set_flags(torrent_flags_t flags, torrent_flags_t mask) const;
 		void set_flags(torrent_flags_t flags) const;
@@ -818,10 +821,6 @@ namespace aux {
 		void set_ssl_certificate_buffer(std::string const& certificate
 			, std::string const& private_key
 			, std::string const& dh_params);
-
-		// Returns the storage implementation for this torrent. This depends on the
-		// storage constructor function that was passed to add_torrent.
-		storage_interface* get_storage_impl() const;
 
 		// Returns a pointer to the torrent_info object associated with this
 		// torrent. The torrent_info object may be a copy of the internal object.
@@ -1268,8 +1267,7 @@ namespace aux {
 	};
 }
 
-namespace std
-{
+namespace std {
 	template <>
 	struct hash<libtorrent::torrent_handle>
 	{

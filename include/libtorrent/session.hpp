@@ -36,7 +36,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <thread>
 
 #include "libtorrent/config.hpp"
-#include "libtorrent/io_service.hpp"
+#include "libtorrent/io_context.hpp"
 #include "libtorrent/settings_pack.hpp"
 #include "libtorrent/session_handle.hpp"
 #include "libtorrent/kademlia/dht_settings.hpp"
@@ -94,6 +94,12 @@ namespace aux {
 	struct disk_interface;
 	struct counters;
 
+	// the constructor function for the default storage. On systems that support
+	// memory mapped files (and a 64 bit address space) the memory mapped storage
+	// will be constructed, otherwise the portable posix storage.
+	TORRENT_EXPORT std::unique_ptr<disk_interface> default_disk_io_constructor(
+		io_context& ios, counters& cnt);
+
 	// this is a holder for the internal session implementation object. Once the
 	// session destruction is explicitly initiated, this holder is used to
 	// synchronize the completion of the shutdown. The lifetime of this object
@@ -114,14 +120,17 @@ namespace aux {
 		session_proxy& operator=(session_proxy&&) noexcept;
 	private:
 		session_proxy(
-			std::shared_ptr<io_service> ios
+			std::shared_ptr<io_context> ios
 			, std::shared_ptr<std::thread> t
 			, std::shared_ptr<aux::session_impl> impl);
 
-		std::shared_ptr<io_service> m_io_service;
+		std::shared_ptr<io_context> m_io_service;
 		std::shared_ptr<std::thread> m_thread;
 		std::shared_ptr<aux::session_impl> m_impl;
 	};
+
+	using disk_io_constructor_type = std::function<std::unique_ptr<disk_interface>(
+		io_context&, counters&)>;
 
 	// The session_params is a parameters pack for configuring the session
 	// before it's started.
@@ -131,10 +140,15 @@ namespace aux {
 		// (ut_metadata, ut_pex and smart_ban). The default values in the
 		// settings is to start the default features like upnp, NAT-PMP,
 		// and dht for example.
-		explicit session_params(settings_pack sp = settings_pack());
+		explicit session_params(settings_pack&& sp);
+		explicit session_params(settings_pack const& sp);
+		session_params();
+
 		// This constructor helps to configure the set of initial plugins
 		// to be added to the session before it's started.
-		session_params(settings_pack sp
+		session_params(settings_pack&& sp
+			, std::vector<std::shared_ptr<plugin>> exts);
+		session_params(settings_pack const& sp
 			, std::vector<std::shared_ptr<plugin>> exts);
 
 		session_params(session_params const&) = default;
@@ -151,6 +165,8 @@ namespace aux {
 		dht::dht_state dht_state;
 
 		dht::dht_storage_constructor_type dht_storage_constructor;
+
+		disk_io_constructor_type disk_io_constructor;
 	};
 
 	// This function helps to construct a ``session_params`` from a
@@ -178,28 +194,33 @@ namespace aux {
 		// In order to avoid a race condition between starting the session and
 		// configuring it, you can pass in a session_params object. Its settings
 		// will take effect before the session starts up.
-		explicit session(session_params params = session_params())
+		explicit session(session_params const& params)
+		{ start(session_params(params), nullptr); }
+		explicit session(session_params&& params)
+		{ start(std::move(params), nullptr); }
+		session()
 		{
+			session_params params;
 			start(std::move(params), nullptr);
 		}
 
-		// Overload of the constructor that takes an external io_service to run
+		// Overload of the constructor that takes an external io_context to run
 		// the session object on. This is primarily useful for tests that may want
-		// to run multiple sessions on a single io_service, or low resource
+		// to run multiple sessions on a single io_context, or low resource
 		// systems where additional threads are expensive and sharing an
-		// io_service with other events is fine.
+		// io_context with other events is fine.
 		//
 		// .. warning::
 		// 	The session object does not cleanly terminate with an external
-		// 	``io_service``. The ``io_service::run()`` call _must_ have returned
+		// 	``io_context``. The ``io_context::run()`` call _must_ have returned
 		// 	before it's safe to destruct the session. Which means you *MUST*
 		// 	call session::abort() and save the session_proxy first, then
-		// 	destruct the session object, then sync with the io_service, then
+		// 	destruct the session object, then sync with the io_context, then
 		// 	destruct the session_proxy object.
-		session(session_params params, io_service& ios)
-		{
-			start(std::move(params), &ios);
-		}
+		session(session_params&& params, io_context& ios)
+		{ start(std::move(params), &ios); }
+		session(session_params const& params, io_context& ios)
+		{ start(session_params(params), &ios); }
 
 		// Constructs the session objects which acts as the container of torrents.
 		// It provides configuration options across torrents (such as rate limits,
@@ -212,11 +233,12 @@ namespace aux {
 		// NAT-PMP) and default plugins (ut_metadata, ut_pex and smart_ban). The
 		// default is to start those features. If you do not want them to start,
 		// pass 0 as the flags parameter.
-		session(settings_pack pack
-			, session_flags_t const flags = start_default_features | add_default_plugins)
-		{
-			start(flags, std::move(pack), nullptr);
-		}
+		session(settings_pack&& pack
+			, session_flags_t const flags = add_default_plugins)
+		{ start(flags, std::move(pack), nullptr); }
+		session(settings_pack const& pack
+			, session_flags_t const flags = add_default_plugins)
+		{ start(flags, settings_pack(pack), nullptr); }
 
 		// movable
 		session(session&&) = default;
@@ -226,25 +248,27 @@ namespace aux {
 		session(session const&) = delete;
 		session& operator=(session const&) = delete;
 
-		// overload of the constructor that takes an external io_service to run
+		// overload of the constructor that takes an external io_context to run
 		// the session object on. This is primarily useful for tests that may want
-		// to run multiple sessions on a single io_service, or low resource
+		// to run multiple sessions on a single io_context, or low resource
 		// systems where additional threads are expensive and sharing an
-		// io_service with other events is fine.
+		// io_context with other events is fine.
 		//
 		// .. warning::
 		// 	The session object does not cleanly terminate with an external
-		// 	``io_service``. The ``io_service::run()`` call _must_ have returned
+		// 	``io_context``. The ``io_context::run()`` call _must_ have returned
 		// 	before it's safe to destruct the session. Which means you *MUST*
 		// 	call session::abort() and save the session_proxy first, then
-		// 	destruct the session object, then sync with the io_service, then
+		// 	destruct the session object, then sync with the io_context, then
 		// 	destruct the session_proxy object.
-		session(settings_pack pack
-			, io_service& ios
-			, session_flags_t const flags = start_default_features | add_default_plugins)
-		{
-			start(flags, std::move(pack), &ios);
-		}
+		session(settings_pack&& pack
+			, io_context& ios
+			, session_flags_t const flags = add_default_plugins)
+		{ start(flags, std::move(pack), &ios); }
+		session(settings_pack const& pack
+			, io_context& ios
+			, session_flags_t const flags = add_default_plugins)
+		{ start(flags, settings_pack(pack), &ios); }
 
 #if TORRENT_ABI_VERSION == 1
 #ifdef __GNUC__
@@ -348,12 +372,15 @@ namespace aux {
 
 	private:
 
-		void start(session_params params, io_service* ios);
-		void start(session_flags_t flags, settings_pack sp, io_service* ios);
+		void start(session_params&& params, io_context* ios);
+		void start(session_flags_t flags, settings_pack&& sp, io_context* ios);
+
+		void start(session_params const& params, io_context* ios) = delete;
+		void start(session_flags_t flags, settings_pack const& sp, io_context* ios) = delete;
 
 		// data shared between the main thread
 		// and the working thread
-		std::shared_ptr<io_service> m_io_service;
+		std::shared_ptr<io_context> m_io_service;
 		std::shared_ptr<std::thread> m_thread;
 		std::shared_ptr<aux::session_impl> m_impl;
 	};

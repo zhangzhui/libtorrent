@@ -36,7 +36,6 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/session.hpp"
 #include "libtorrent/session_settings.hpp"
-#include "libtorrent/hasher.hpp"
 #include "libtorrent/extensions/ut_pex.hpp"
 #include "libtorrent/ip_filter.hpp"
 #include "libtorrent/torrent_status.hpp"
@@ -44,6 +43,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <tuple>
 
 #include "setup_transfer.hpp"
+#include "settings.hpp"
 #include <iostream>
 
 namespace {
@@ -59,18 +59,10 @@ void test_pex()
 	session_proxy p2;
 	session_proxy p3;
 
-	auto const mask = ~(
-			alert::performance_warning
-#if TORRENT_ABI_VERSION == 1
-			| alert::progress_notification
-#endif
-			| alert::stats_notification);
-
 	// this is to avoid everything finish from a single peer
 	// immediately. To make the swarm actually connect all
 	// three peers before finishing.
-	settings_pack pack;
-	pack.set_int(settings_pack::alert_mask, mask);
+	settings_pack pack = settings();
 	pack.set_int(settings_pack::download_rate_limit, 2000);
 	pack.set_int(settings_pack::upload_rate_limit, 2000);
 	pack.set_int(settings_pack::max_retry_port_bind, 800);
@@ -113,8 +105,8 @@ void test_pex()
 	// in this test, ses1 is a seed, ses2 is connected to ses1 and ses3.
 	// the expected behavior is that ses2 will introduce ses1 and ses3 to each other
 	error_code ec;
-	tor2.connect_peer(tcp::endpoint(address::from_string("127.0.0.1", ec), ses1.listen_port()));
-	tor2.connect_peer(tcp::endpoint(address::from_string("127.0.0.1", ec), ses3.listen_port()));
+	tor2.connect_peer(tcp::endpoint(make_address("127.0.0.1", ec), ses1.listen_port()));
+	tor2.connect_peer(tcp::endpoint(make_address("127.0.0.1", ec), ses3.listen_port()));
 
 	torrent_status st1;
 	torrent_status st2;

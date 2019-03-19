@@ -40,13 +40,13 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/random.hpp"
 #include "libtorrent/invariant_check.hpp"
 #include "libtorrent/performance_counters.hpp"
-#include "libtorrent/io_service.hpp"
+#include "libtorrent/io_context.hpp"
 #include <cstdint>
 #include <limits>
 
-// the behavior of the sequence numbers as implemented by uTorrent is not
-// particularly regular. This switch indicates the odd parts.
-#define TORRENT_UT_SEQ 1
+#if TORRENT_USE_INVARIANT_CHECKS
+#include <numeric> // for accumulate
+#endif
 
 #if TORRENT_UTP_LOG
 #include <cstdarg>
@@ -119,17 +119,8 @@ void set_utp_stream_logging(bool enable) {
 
 #else
 
-#if __cplusplus >= 201103L || defined __clang__
-
 #define UTP_LOG(...) do {} while(false)
 #define UTP_LOGV(...) do {} while(false)
-
-#else
-
-#define UTP_LOG TORRENT_WHILE_0 printf
-#define UTP_LOGV TORRENT_WHILE_0 printf
-
-#endif // cplusplus
 
 #endif
 
@@ -139,16 +130,7 @@ enum
 
 	// if a packet receives more than this number of
 	// duplicate acks, we'll trigger a fast re-send
-	dup_ack_limit = 3,
-
-	// the max number of packets to fast-resend per
-	// selective ack message
-	// only re-sending a single packet per sack
-	// appears to improve performance by making it
-	// less likely to loose the re-sent packet. Because
-	// when that happens, we must time-out in order
-	// to continue, which takes a long time.
-	sack_resend_limit = 1
+	dup_ack_limit = 3
 };
 
 // compare if lhs is less than rhs, taking wrapping
@@ -285,7 +267,7 @@ struct utp_socket_impl
 	void parse_close_reason(std::uint8_t const* ptr, int size);
 	void write_payload(std::uint8_t* ptr, int size);
 	void maybe_inc_acked_seq_nr();
-	std::uint32_t ack_packet(packet_ptr p, time_point const& receive_time
+	std::uint32_t ack_packet(packet_ptr p, time_point receive_time
 		, std::uint16_t seq_nr);
 	void write_sack(std::uint8_t* buf, int size) const;
 	void incoming(std::uint8_t const* buf, int size, packet_ptr p, time_point now);
@@ -298,7 +280,7 @@ struct utp_socket_impl
 	bool consume_incoming_data(
 		utp_header const* ph, std::uint8_t const* ptr, int payload_size, time_point now);
 	void update_mtu_limits();
-	void experienced_loss(std::uint32_t seq_nr);
+	void experienced_loss(std::uint32_t seq_nr, time_point now);
 
 	void set_state(int s);
 
@@ -311,9 +293,8 @@ struct utp_socket_impl
 
 	// TODO: 2 it would be nice if not everything would have to be public here
 
-	void check_receive_buffers() const;
-
 #if TORRENT_USE_INVARIANT_CHECKS
+	void check_receive_buffers() const;
 	void check_invariant() const;
 #endif
 
@@ -404,6 +385,10 @@ struct utp_socket_impl
 	// the last time we stepped the timestamp history
 	time_point m_last_history_step = clock_type::now();
 
+	// the next time we allow a lost packet to halve cwnd. We only do this once every
+	// 100 ms
+	time_point m_next_loss;
+
 	// the max number of bytes in-flight. This is a fixed point
 	// value, to get the true number of bytes, shift right 16 bits
 	// the value is always >= 0, but the calculations performed on
@@ -472,7 +457,7 @@ struct utp_socket_impl
 	std::int32_t m_recv_delay = 0;
 
 	// average RTT
-	sliding_average<16> m_rtt;
+	sliding_average<int, 16> m_rtt;
 
 	// if this is != 0, it means the upper layer provided a reason for why
 	// the connection is being closed. The reason is indicated by this
@@ -772,8 +757,8 @@ int utp_stream::recv_delay() const
 	return m_impl ? m_impl->m_recv_delay : 0;
 }
 
-utp_stream::utp_stream(io_service& io_service)
-	: m_io_service(io_service)
+utp_stream::utp_stream(io_context& io_context)
+	: m_io_service(io_context)
 	, m_impl(nullptr)
 	, m_open(false)
 {
@@ -886,7 +871,7 @@ void utp_stream::on_read(void* self, std::size_t const bytes_transferred
 
 	TORRENT_ASSERT(s->m_read_handler);
 	TORRENT_ASSERT(bytes_transferred > 0 || ec || s->m_impl->m_null_buffers);
-	s->m_io_service.post(std::bind<void>(std::move(s->m_read_handler), ec, bytes_transferred));
+	post(s->m_io_service, std::bind<void>(std::move(s->m_read_handler), ec, bytes_transferred));
 	s->m_read_handler = nullptr;
 	if (shutdown && s->m_impl)
 	{
@@ -907,7 +892,7 @@ void utp_stream::on_write(void* self, std::size_t const bytes_transferred
 
 	TORRENT_ASSERT(s->m_write_handler);
 	TORRENT_ASSERT(bytes_transferred > 0 || ec);
-	s->m_io_service.post(std::bind<void>(std::move(s->m_write_handler), ec, bytes_transferred));
+	post(s->m_io_service, std::bind<void>(std::move(s->m_write_handler), ec, bytes_transferred));
 	s->m_write_handler = nullptr;
 	if (shutdown && s->m_impl)
 	{
@@ -926,7 +911,7 @@ void utp_stream::on_connect(void* self, error_code const& ec, bool const shutdow
 		, static_cast<void*>(s->m_impl), ec.message().c_str(), shutdown);
 
 	TORRENT_ASSERT(s->m_connect_handler);
-	s->m_io_service.post(std::bind<void>(std::move(s->m_connect_handler), ec));
+	post(s->m_io_service, std::bind<void>(std::move(s->m_connect_handler), ec));
 	s->m_connect_handler = nullptr;
 	if (shutdown && s->m_impl)
 	{
@@ -1038,7 +1023,9 @@ std::size_t utp_stream::read_some(bool const clear_buffers)
 			break;
 		}
 
+#if TORRENT_USE_INVARIANT_CHECKS
 		m_impl->check_receive_buffers();
+#endif
 
 		packet* p = i->get();
 		int to_copy = std::min(p->size - p->header_size, aux::numeric_cast<int>(target->len));
@@ -1054,7 +1041,9 @@ std::size_t utp_stream::read_some(bool const clear_buffers)
 		p->header_size += std::uint16_t(to_copy);
 		if (target->len == 0) target = m_impl->m_read_buffer.erase(target);
 
+#if TORRENT_USE_INVARIANT_CHECKS
 		m_impl->check_receive_buffers();
+#endif
 
 		TORRENT_ASSERT(m_impl->m_receive_buffer_size >= 0);
 
@@ -1069,8 +1058,8 @@ std::size_t utp_stream::read_some(bool const clear_buffers)
 
 		if (m_impl->m_receive_buffer_size == 0)
 		{
-			UTP_LOGV("  Didn't fill entire target: %d bytes left in buffer\n"
-				, m_impl->m_receive_buffer_size);
+			UTP_LOGV("%8p: Didn't fill entire target: %d bytes left in buffer\n"
+				, static_cast<void*>(m_impl), m_impl->m_receive_buffer_size);
 			break;
 		}
 	}
@@ -1447,21 +1436,21 @@ void utp_socket_impl::parse_close_reason(std::uint8_t const* ptr, int const size
 	UTP_LOGV("%8p: incoming close_reason: %d\n"
 		, static_cast<void*>(this), int(incoming_close_reason));
 
-	if (m_userdata == nullptr) return;
+	if (m_userdata == nullptr || !m_attached) return;
 
 	utp_stream::on_close_reason(m_userdata, incoming_close_reason);
 }
 
 // returns (rtt, acked_bytes)
 std::pair<std::uint32_t, int> utp_socket_impl::parse_sack(std::uint16_t const packet_ack
-	, std::uint8_t const* ptr, int size, time_point const now)
+	, std::uint8_t const* ptr, int const size, time_point const now)
 {
 	INVARIANT_CHECK;
 
 	if (size == 0) return { 0u, 0 };
 
 	// this is the sequence number the current bit represents
-	std::uint32_t ack_nr = (packet_ack + 2) & ACK_MASK;
+	std::uint16_t ack_nr = (packet_ack + 2) & ACK_MASK;
 
 #if TORRENT_VERBOSE_UTP_LOG
 	std::string bitmask;
@@ -1477,35 +1466,34 @@ std::pair<std::uint32_t, int> utp_socket_impl::parse_sack(std::uint16_t const pa
 			mask <<= 1;
 		}
 	}
-	UTP_LOGV("%8p: got SACK first:%d %s our_seq_nr:%u\n"
-		, static_cast<void*>(this), ack_nr, bitmask.c_str(), m_seq_nr);
+	UTP_LOGV("%8p: got SACK first:%d %s our_seq_nr:%u fast_resend_seq_nr:%d\n"
+		, static_cast<void*>(this), ack_nr, bitmask.c_str(), m_seq_nr, m_fast_resend_seq_nr);
 #endif
 
-	// the number of acked packets past the fast re-send sequence number
-	// this is used to determine if we should trigger more fast re-sends
-	int dups = 0;
-
-	// the sequence number of the last ACKed packet
-	std::uint32_t last_ack = packet_ack;
+	aux::array<std::uint16_t, 5> resend;
+	int num_to_resend = 0;
 
 	int acked_bytes = 0;
 	std::uint32_t min_rtt = std::numeric_limits<std::uint32_t>::max();
 
+	// this was implicitly lost
+	if (!compare_less_wrap((packet_ack + 1) & ACK_MASK, m_fast_resend_seq_nr, ACK_MASK))
+	{
+		resend[num_to_resend++] = (packet_ack + 1) & ACK_MASK;
+	}
+
 	// for each byte
-	for (std::uint8_t const* end = ptr + size; ptr != end; ++ptr)
+	std::uint8_t const* const start = ptr;
+	std::uint8_t const* const end = ptr + size;
+	for (; ptr != end; ++ptr)
 	{
 		std::uint8_t bitfield = *ptr;
-		unsigned char mask = 1;
+		std::uint8_t mask = 1;
 		// for each bit
 		for (int i = 0; i < 8; ++i)
 		{
 			if (mask & bitfield)
 			{
-				last_ack = ack_nr;
-				if (m_fast_resend_seq_nr == ack_nr)
-					m_fast_resend_seq_nr = (m_fast_resend_seq_nr + 1) & ACK_MASK;
-
-				if (compare_less_wrap(m_fast_resend_seq_nr, ack_nr, ACK_MASK)) ++dups;
 				// this bit was set, ack_nr was received
 				packet_ptr p = m_outbuf.remove(aux::numeric_cast<packet_buffer::index_type>(ack_nr));
 				if (p)
@@ -1523,6 +1511,11 @@ std::pair<std::uint32_t, int> utp_socket_impl::parse_sack(std::uint16_t const pa
 					maybe_inc_acked_seq_nr();
 				}
 			}
+			else if (!compare_less_wrap(ack_nr, m_fast_resend_seq_nr, ACK_MASK)
+				&& num_to_resend < int(resend.size()))
+			{
+				resend[num_to_resend++] = ack_nr;
+			}
 
 			mask <<= 1;
 			ack_nr = (ack_nr + 1) & ACK_MASK;
@@ -1535,23 +1528,76 @@ std::pair<std::uint32_t, int> utp_socket_impl::parse_sack(std::uint16_t const pa
 		if (ack_nr == m_seq_nr) break;
 	}
 
+	if (m_outbuf.empty()) m_duplicate_acks = 0;
+
+	// now, scan the bits in reverse, and count the number of ACKed packets. Only
+	// lost packets followed by 'dup_ack_limit' packets may be resent
+	// start with the sequence number represented by the last bit in the SACK
+	// bitmask
+	std::uint16_t last_resend = (packet_ack + 1 + size * 8) & ACK_MASK;
+
+	// the number of acked packets past the fast re-send sequence number
+	// this is used to determine if we should trigger more fast re-sends
+	int dups = 0;
+
+	for (std::uint8_t const* i = end; i != start; --i)
+	{
+		std::uint8_t const bitfield = i[-1];
+		std::uint8_t mask = 0x80;
+		// for each bit
+		for (int k = 0; k < 8; ++k)
+		{
+			if (mask & bitfield) ++dups;
+			if (dups > dup_ack_limit) break;
+			last_resend = (last_resend - 1) & ACK_MASK;
+			mask >>= 1;
+		}
+		if (dups > dup_ack_limit) break;
+	}
+
+	// we did not get enough packets acked in this message to warrant a resend
+	if (dups <= dup_ack_limit)
+	{
+		UTP_LOGV("%8p: only %d ACKs in SACK, requires more than %d to trigger fast retransmit\n"
+			, static_cast<void*>(this), dups, dup_ack_limit);
+		num_to_resend = 0;
+	}
+
+	// now we need to (likely) prune the tail of the resend list, since all
+	// "unacked" packets that weren't followed by an acked one, don't count
+	while (num_to_resend > 0 && !compare_less_wrap(resend[num_to_resend - 1], last_resend, ACK_MASK))
+	{
+		--num_to_resend;
+	}
+
 	TORRENT_ASSERT(m_outbuf.at((m_acked_seq_nr + 1) & ACK_MASK) || ((m_seq_nr - m_acked_seq_nr) & ACK_MASK) <= 1);
 
+	bool cut_cwnd = true;
+
 	// we received more than dup_ack_limit ACKs in this SACK message.
-	// trigger fast re-send
-	if (dups >= dup_ack_limit && compare_less_wrap(m_fast_resend_seq_nr, last_ack, ACK_MASK))
+	// trigger fast re-send. This is not an equal check because 3 identical ACKS
+	// are only 2 duplicates
+	for (int i = 0; i < num_to_resend; ++i)
 	{
-		experienced_loss(m_fast_resend_seq_nr);
-		int num_resent = 0;
-		while (m_fast_resend_seq_nr != last_ack)
+		std::uint16_t const pkt_seq = resend[i];
+
+		packet* p = m_outbuf.at(pkt_seq);
+		UTP_LOGV("%8p: Packet %d lost. (fast_resend_seq_nr:%d trigger fast-resend)\n"
+			, static_cast<void*>(this), pkt_seq, m_fast_resend_seq_nr);
+		if (!p) continue;
+
+		// don't cut cwnd if the packet we lost was the MTU probe
+		// the logic to handle a lost MTU probe is in resend_packet()
+		if (cut_cwnd && (pkt_seq != m_mtu_seq || m_mtu_seq == 0))
 		{
-			packet* p = m_outbuf.at(m_fast_resend_seq_nr);
-			m_fast_resend_seq_nr = (m_fast_resend_seq_nr + 1) & ACK_MASK;
-			if (!p) continue;
-			++num_resent;
-			if (!resend_packet(p, true)) break;
+			experienced_loss(pkt_seq, now);
+			cut_cwnd = false;
+		}
+
+		if (resend_packet(p, true))
+		{
 			m_duplicate_acks = 0;
-			if (num_resent >= sack_resend_limit) break;
+			m_fast_resend_seq_nr = (pkt_seq + 1) & ACK_MASK;
 		}
 	}
 
@@ -1758,7 +1804,7 @@ bool utp_socket_impl::send_pkt(int const flags)
 		m_cwnd_full = true;
 
 		UTP_LOGV("%8p: no space in window send_buffer_size:%d cwnd:%d "
-			"adv_wnd:%d in-flight:%d mtu:%d\n"
+			"adv_wnd:%u in-flight:%d mtu:%u\n"
 			, static_cast<void*>(this), m_write_buffer_size, int(m_cwnd >> 16)
 			, m_adv_wnd, m_bytes_in_flight, m_mtu);
 
@@ -1767,7 +1813,7 @@ bool utp_socket_impl::send_pkt(int const flags)
 #if TORRENT_UTP_LOG
 			UTP_LOGV("%8p: skipping send seq_nr:%d ack_nr:%d "
 				"id:%d target:%s header_size:%d error:%s send_buffer_size:%d cwnd:%d "
-				"adv_wnd:%d in-flight:%d mtu:%d effective-mtu:%d\n"
+				"adv_wnd:%d in-flight:%d mtu:%u effective-mtu:%d\n"
 				, static_cast<void*>(this), int(m_seq_nr), int(m_ack_nr)
 				, m_send_id, print_endpoint(udp::endpoint(m_remote_address, m_port)).c_str()
 				, header_size, m_error.message().c_str(), m_write_buffer_size, int(m_cwnd >> 16)
@@ -1784,7 +1830,7 @@ bool utp_socket_impl::send_pkt(int const flags)
 #if TORRENT_UTP_LOG
 		UTP_LOGV("%8p: skipping send (no payload and no force) seq_nr:%d ack_nr:%d "
 			"id:%d target:%s header_size:%d error:%s send_buffer_size:%d cwnd:%d "
-			"adv_wnd:%d in-flight:%d mtu:%d\n"
+			"adv_wnd:%u in-flight:%d mtu:%u\n"
 			, static_cast<void*>(this), int(m_seq_nr), int(m_ack_nr)
 			, m_send_id, print_endpoint(udp::endpoint(m_remote_address, m_port)).c_str()
 			, header_size, m_error.message().c_str(), m_write_buffer_size, int(m_cwnd >> 16)
@@ -1865,8 +1911,11 @@ bool utp_socket_impl::send_pkt(int const flags)
 		write_payload(p->buf + p->size, size_left);
 		p->size += std::uint16_t(size_left);
 
-		UTP_LOGV("%8p: NAGLE appending %d bytes to nagle packet. new size: %d allocated: %d\n"
-			, static_cast<void*>(this), size_left, p->size, p->allocated);
+		if (size_left > 0)
+		{
+			UTP_LOGV("%8p: NAGLE appending %d bytes to nagle packet. new size: %d allocated: %d\n"
+				, static_cast<void*>(this), size_left, p->size, p->allocated);
+		}
 
 		// did we fill up the whole mtu?
 		// if we didn't, we may still send it if there's
@@ -1912,7 +1961,7 @@ bool utp_socket_impl::send_pkt(int const flags)
 		// outstanding packet is acked, we'll send this
 		// payload
 		UTP_LOGV("%8p: NAGLE not enough payload send_buffer_size:%d cwnd:%d "
-			"adv_wnd:%d in-flight:%d mtu:%d effective_mtu:%d\n"
+			"adv_wnd:%u in-flight:%d mtu:%d effective_mtu:%d\n"
 			, static_cast<void*>(this), m_write_buffer_size, int(m_cwnd >> 16)
 			, m_adv_wnd, m_bytes_in_flight, m_mtu, effective_mtu);
 		TORRENT_ASSERT(!m_nagle_packet);
@@ -1952,7 +2001,7 @@ bool utp_socket_impl::send_pkt(int const flags)
 #if TORRENT_UTP_LOG
 	UTP_LOG("%8p: sending packet seq_nr:%d ack_nr:%d type:%s "
 		"id:%d target:%s size:%d error:%s send_buffer_size:%d cwnd:%d "
-		"adv_wnd:%d in-flight:%d mtu:%d timestamp:%u time_diff:%u "
+		"adv_wnd:%d in-flight:%d mtu:%d timestamp:%u time_diff:%d "
 		"mtu_probe:%d extension:%d\n"
 		, static_cast<void*>(this), int(h->seq_nr), int(h->ack_nr), packet_type_names[h->get_type()]
 		, m_send_id, print_endpoint(udp::endpoint(m_remote_address, m_port)).c_str()
@@ -2027,12 +2076,6 @@ bool utp_socket_impl::send_pkt(int const flags)
 		// be a nagle packet waiting for more data
 		TORRENT_ASSERT(!m_nagle_packet);
 
-#if !TORRENT_UT_SEQ
-		// if the other end closed the connection immediately
-		// our FIN packet will end up having the same sequence
-		// number as the SYN, so this assert is invalid
-		TORRENT_ASSERT(!m_outbuf.at(m_seq_nr));
-#endif
 		TORRENT_ASSERT(h->seq_nr == m_seq_nr);
 
 		// 0 is a special sequence number, since it's also used as "uninitialized".
@@ -2173,7 +2216,7 @@ bool utp_socket_impl::resend_packet(packet* p, bool fast_resend)
 #if TORRENT_UTP_LOG
 	UTP_LOGV("%8p: re-sending packet seq_nr:%d ack_nr:%d type:%s "
 		"id:%d target:%s size:%d error:%s send_buffer_size:%d cwnd:%d "
-		"adv_wnd:%d in-flight:%d mtu:%d timestamp:%u time_diff:%u\n"
+		"adv_wnd:%d in-flight:%d mtu:%d timestamp:%u time_diff:%d\n"
 		, static_cast<void*>(this), int(h->seq_nr), int(h->ack_nr), packet_type_names[h->get_type()]
 		, m_send_id, print_endpoint(udp::endpoint(m_remote_address, m_port)).c_str()
 		, p->size, ec.message().c_str(), m_write_buffer_size, int(m_cwnd >> 16)
@@ -2206,7 +2249,7 @@ bool utp_socket_impl::resend_packet(packet* p, bool fast_resend)
 	return !m_stalled;
 }
 
-void utp_socket_impl::experienced_loss(std::uint32_t const seq_nr)
+void utp_socket_impl::experienced_loss(std::uint32_t const seq_nr, time_point const now)
 {
 	INVARIANT_CHECK;
 
@@ -2226,11 +2269,17 @@ void utp_socket_impl::experienced_loss(std::uint32_t const seq_nr)
 	// same packet again, ignore it.
 	if (compare_less_wrap(seq_nr, m_loss_seq_nr + 1, ACK_MASK)) return;
 
+	// don't reduce cwnd more than once every 100ms
+	if (m_next_loss >= now) return;
+
+	m_next_loss = now + milliseconds(m_sm.cwnd_reduce_timer());
+
 	// cut window size in 2
 	m_cwnd = std::max(m_cwnd * m_sm.loss_multiplier() / 100
 		, std::int64_t(m_mtu) * (1 << 16));
 	m_loss_seq_nr = m_seq_nr;
-	UTP_LOGV("%8p: Lost packet %d caused cwnd cut\n", static_cast<void*>(this), seq_nr);
+	UTP_LOGV("%8p: Lost packet %d caused cwnd cut. m_loss_seq_nr:%d\n"
+		, static_cast<void*>(this), seq_nr, m_seq_nr);
 
 	// if we happen to be in slow-start mode, we need to leave it
 	// note that we set ssthres to the window size _after_ reducing it. Next slow
@@ -2239,7 +2288,8 @@ void utp_socket_impl::experienced_loss(std::uint32_t const seq_nr)
 	{
 		m_ssthres = std::int32_t(m_cwnd >> 16);
 		m_slow_start = false;
-		UTP_LOGV("%8p: experienced loss, slow_start -> 0\n", static_cast<void*>(this));
+		UTP_LOGV("%8p: experienced loss, slow_start -> 0 ssthres:%d\n"
+			, static_cast<void*>(this), m_ssthres);
 	}
 }
 
@@ -2286,7 +2336,7 @@ void utp_socket_impl::maybe_inc_acked_seq_nr()
 }
 
 // returns RTT
-std::uint32_t utp_socket_impl::ack_packet(packet_ptr p, time_point const& receive_time
+std::uint32_t utp_socket_impl::ack_packet(packet_ptr p, time_point const receive_time
 	, std::uint16_t seq_nr)
 {
 #ifdef TORRENT_EXPENSIVE_INVARIANT_CHECKS
@@ -2310,7 +2360,6 @@ std::uint32_t utp_socket_impl::ack_packet(packet_ptr p, time_point const& receiv
 		TORRENT_ASSERT(p->mtu_probe);
 		// our mtu probe was acked!
 		m_mtu_floor = std::max(m_mtu_floor, p->size);
-		if (m_mtu_ceiling < m_mtu_floor) m_mtu_ceiling = m_mtu_floor;
 		update_mtu_limits();
 	}
 
@@ -2394,7 +2443,9 @@ void utp_socket_impl::incoming(std::uint8_t const* buf, int size, packet_ptr p
 
 	UTP_LOGV("%8p: incoming: saving packet in receive buffer (%d)\n", static_cast<void*>(this), m_receive_buffer_size);
 
+#if TORRENT_USE_INVARIANT_CHECKS
 	check_receive_buffers();
+#endif
 }
 
 bool utp_socket_impl::cancel_handlers(error_code const& ec, bool shutdown)
@@ -2607,7 +2658,7 @@ bool utp_socket_impl::incoming_packet(span<std::uint8_t const> buf
 	auto const* ph = reinterpret_cast<utp_header const*>(buf.data());
 	m_sm.inc_stats_counter(counters::utp_packets_in);
 
-	if (buf.size() < sizeof(utp_header))
+	if (buf.size() < int(sizeof(utp_header)))
 	{
 		UTP_LOG("%8p: ERROR: incoming packet size too small:%d (ignored)\n"
 			, static_cast<void*>(this), int(buf.size()));
@@ -2697,11 +2748,10 @@ bool utp_socket_impl::incoming_packet(span<std::uint8_t const> buf
 	// something is wrong.
 	// If our state is state_none, this packet must be a syn packet
 	// and the ack_nr should be ignored
-	std::uint16_t cmp_seq_nr = (m_seq_nr - 1) & ACK_MASK;
-#if TORRENT_UT_SEQ
-	if (m_state == UTP_STATE_SYN_SENT && ph->get_type() == ST_STATE)
-		cmp_seq_nr = m_seq_nr;
-#endif
+	std::uint16_t const cmp_seq_nr =
+		(m_state == UTP_STATE_SYN_SENT && ph->get_type() == ST_STATE)
+		? m_seq_nr : (m_seq_nr - 1) & ACK_MASK;
+
 	if ((m_state != UTP_STATE_NONE || ph->get_type() != ST_SYN)
 		&& (compare_less_wrap(cmp_seq_nr, ph->ack_nr, ACK_MASK)
 			|| compare_less_wrap(ph->ack_nr, m_acked_seq_nr
@@ -2739,7 +2789,9 @@ bool utp_socket_impl::incoming_packet(span<std::uint8_t const> buf
 
 	// if the socket is closing, always ignore any packet
 	// with a higher sequence number than the FIN sequence number
-	if (m_eof && compare_less_wrap(m_eof_seq_nr, ph->seq_nr, ACK_MASK))
+	// ST_STATE messages always include the next seqnr.
+	if (m_eof && (compare_less_wrap(m_eof_seq_nr, ph->seq_nr, ACK_MASK)
+		|| (m_eof_seq_nr == ph->seq_nr && ph->get_type() != ST_STATE)))
 	{
 #if TORRENT_UTP_LOG
 		UTP_LOG("%8p: ERROR: incoming packet type: %s seq_nr:%d eof_seq_nr:%d (ignored)\n"
@@ -2827,6 +2879,8 @@ bool utp_socket_impl::incoming_packet(span<std::uint8_t const> buf
 		++m_duplicate_acks;
 	}
 
+	TORRENT_ASSERT_VAL(m_outbuf.size() > 0 || m_duplicate_acks == 0, m_duplicate_acks);
+
 	std::uint32_t min_rtt = std::numeric_limits<std::uint32_t>::max();
 
 	TORRENT_ASSERT(m_outbuf.at((m_acked_seq_nr + 1) & ACK_MASK) || ((m_seq_nr - m_acked_seq_nr) & ACK_MASK) <= 1);
@@ -2856,6 +2910,7 @@ bool utp_socket_impl::incoming_packet(span<std::uint8_t const> buf
 		}
 
 		maybe_inc_acked_seq_nr();
+		if (m_outbuf.empty()) m_duplicate_acks = 0;
 	}
 
 	// look for extended headers
@@ -2876,13 +2931,6 @@ bool utp_socket_impl::incoming_packet(span<std::uint8_t const> buf
 		}
 		std::uint8_t const next_extension = *ptr++;
 		int const len = *ptr++;
-		if (len < 0)
-		{
-			UTP_LOGV("%8p: invalid extension length:%d packet:%d\n"
-				, static_cast<void*>(this), len, int(ptr - buf.data()));
-			m_sm.inc_stats_counter(counters::utp_invalid_pkts_in);
-			return true;
-		}
 		if (ptr - buf.data() + len > size)
 		{
 			UTP_LOG("%8p: ERROR: invalid extension header size:%d packet:%d\n"
@@ -2928,7 +2976,9 @@ bool utp_socket_impl::incoming_packet(span<std::uint8_t const> buf
 
 		if (p)
 		{
-			experienced_loss(m_fast_resend_seq_nr);
+			// don't consider a lost probe as proper loss, it doesn't necessarily
+			// signal congestion
+			if (!p->mtu_probe) experienced_loss(m_fast_resend_seq_nr, receive_time);
 			resend_packet(p, true);
 			if (m_state == UTP_STATE_ERROR_WAIT || m_state == UTP_STATE_DELETE) return true;
 		}
@@ -3137,6 +3187,8 @@ bool utp_socket_impl::incoming_packet(span<std::uint8_t const> buf
 				if (m_state == UTP_STATE_ERROR_WAIT || m_state == UTP_STATE_DELETE) return true;
 			}
 
+			TORRENT_ASSERT(!compare_less_wrap(m_seq_nr, m_acked_seq_nr, ACK_MASK));
+
 #if TORRENT_UTP_LOG
 			if (sample && acked_bytes && prev_bytes_in_flight)
 			{
@@ -3205,7 +3257,7 @@ bool utp_socket_impl::incoming_packet(span<std::uint8_t const> buf
 					, packet_timeout()
 					, int(total_milliseconds(m_timeout - receive_time))
 					, int(total_microseconds(receive_time.time_since_epoch()))
-					, (m_seq_nr - m_acked_seq_nr) & ACK_MASK
+					, m_outbuf.size()
 					, m_mtu
 					, their_delay_base
 					, std::uint32_t(m_reply_micro)
@@ -3431,13 +3483,15 @@ void utp_socket_impl::do_ledbat(const int acked_bytes, const int delay
 			, static_cast<void*>(this), m_mtu, in_flight, int(m_adv_wnd), int(m_cwnd >> 16), acked_bytes);
 		m_cwnd_full = false;
 	}
-
+/*
 	if ((m_cwnd >> 16) >= m_adv_wnd)
 	{
 		m_slow_start = false;
-		UTP_LOGV("%8p: cwnd > advertized wnd (%d) slow_start -> 0\n"
+		m_ssthres = (m_cwnd >> 16);
+		UTP_LOGV("%8p: cwnd > advertized wnd (%u) slow_start -> 0\n"
 			, static_cast<void*>(this), m_adv_wnd);
 	}
+*/
 }
 
 void utp_stream::bind(endpoint_type const&, error_code&) { }
@@ -3489,7 +3543,20 @@ void utp_socket_impl::tick(time_point const now)
 	if (now > m_timeout)
 	{
 		// TIMEOUT!
-		// set cwnd to 1 MSS
+
+		bool ignore_loss = false;
+
+		if (((m_acked_seq_nr + 1) & ACK_MASK) == m_mtu_seq
+			&& ((m_seq_nr - 1) & ACK_MASK) == m_mtu_seq
+			&& m_mtu_seq != 0)
+		{
+			// we timed out, and the only outstanding packet
+			// we had was the probe. Assume it was dropped
+			// because it was too big
+			m_mtu_ceiling = m_mtu - 1;
+			update_mtu_limits();
+			ignore_loss = true;
+		}
 
 		// the close_reason here is a bit of a hack. When it's set, it indicates
 		// that the upper layer intends to close the socket. However, it has been
@@ -3498,7 +3565,9 @@ void utp_socket_impl::tick(time_point const now)
 		// other end. This catches that case and let the socket time out.
 		if (m_outbuf.size() || m_close_reason != close_reason_t::none)
 		{
-			++m_num_timeouts;
+			// m_num_timeouts is used to update the connection timeout, and if we
+			// lose this packet because it's an MTU-probe, don't change the timeout
+			if (!ignore_loss) ++m_num_timeouts;
 			m_sm.inc_stats_counter(counters::utp_timeout);
 		}
 
@@ -3524,52 +3593,44 @@ void utp_socket_impl::tick(time_point const now)
 			return;
 		}
 
-		if (((m_acked_seq_nr + 1) & ACK_MASK) == m_mtu_seq
-			&& ((m_seq_nr - 1) & ACK_MASK) == m_mtu_seq
-			&& m_mtu_seq != 0)
+		if (!ignore_loss)
 		{
-			// we timed out, and the only outstanding packet
-			// we had was the probe. Assume it was dropped
-			// because it was too big
-			m_mtu_ceiling = m_mtu - 1;
-			if (m_mtu_floor > m_mtu_ceiling) m_mtu_floor = m_mtu_ceiling;
-			update_mtu_limits();
+			// set cwnd to 1 MSS
+			if (m_bytes_in_flight == 0 && (m_cwnd >> 16) >= m_mtu)
+			{
+				// this is just a timeout because this direction of
+				// the stream is idle. Don't reset the cwnd, just decay it
+				m_cwnd = std::max(m_cwnd * 2 / 3, std::int64_t(m_mtu) * (1 << 16));
+			}
+			else
+			{
+				// we timed out because a packet was not ACKed or because
+				// the cwnd was made smaller than one packet
+				m_cwnd = std::int64_t(m_mtu) * (1 << 16);
+			}
+
+			TORRENT_ASSERT(m_cwnd >= 0);
+
+			m_timeout = now + milliseconds(packet_timeout());
+
+			UTP_LOGV("%8p: resetting cwnd:%d\n"
+				, static_cast<void*>(this), int(m_cwnd >> 16));
+
+			// since we've already timed out now, don't count
+			// loss that we might detect for packets that just
+			// timed out
+			m_loss_seq_nr = m_seq_nr;
+
+			// when we time out, the cwnd is reset to 1 MSS, which means we
+			// need to ramp it up quickly again. enter slow start mode. This time
+			// we're very likely to have an ssthres set, which will make us leave
+			// slow start before inducing more delay or loss.
+			m_slow_start = true;
+			UTP_LOGV("%8p: slow_start -> 1\n", static_cast<void*>(this));
 		}
-
-		if (m_bytes_in_flight == 0 && (m_cwnd >> 16) >= m_mtu)
-		{
-			// this is just a timeout because this direction of
-			// the stream is idle. Don't reset the cwnd, just decay it
-			m_cwnd = std::max(m_cwnd * 2 / 3, std::int64_t(m_mtu) * (1 << 16));
-		}
-		else
-		{
-			// we timed out because a packet was not ACKed or because
-			// the cwnd was made smaller than one packet
-			m_cwnd = std::int64_t(m_mtu) * (1 << 16);
-		}
-
-		TORRENT_ASSERT(m_cwnd >= 0);
-
-		m_timeout = now + milliseconds(packet_timeout());
-
-		UTP_LOGV("%8p: resetting cwnd:%d\n"
-			, static_cast<void*>(this), int(m_cwnd >> 16));
 
 		// we dropped all packets, that includes the mtu probe
 		m_mtu_seq = 0;
-
-		// since we've already timed out now, don't count
-		// loss that we might detect for packets that just
-		// timed out
-		m_loss_seq_nr = m_seq_nr;
-
-		// when we time out, the cwnd is reset to 1 MSS, which means we
-		// need to ramp it up quickly again. enter slow start mode. This time
-		// we're very likely to have an ssthres set, which will make us leave
-		// slow start before inducing more delay or loss.
-		m_slow_start = true;
-		UTP_LOGV("%8p: slow_start -> 1\n", static_cast<void*>(this));
 
 		// we need to go one past m_seq_nr to cover the case
 		// where we just sent a SYN packet and then adjusted for
@@ -3653,16 +3714,17 @@ void utp_socket_impl::tick(time_point const now)
 	}
 }
 
+#if TORRENT_USE_INVARIANT_CHECKS
 void utp_socket_impl::check_receive_buffers() const
 {
 	INVARIANT_CHECK;
 
-	int size = 0;
-	for (auto const& p : m_receive_buffer)
-		size += p ? p->size - p->header_size : 0;
+	int const size = std::accumulate(m_receive_buffer.begin(), m_receive_buffer.end(), 0
+		, [](int const acc, packet_ptr const& p) { return acc + (p ? p->size - p->header_size : 0); } );
 
 	TORRENT_ASSERT(size == m_receive_buffer_size);
 }
+#endif
 
 #if TORRENT_USE_INVARIANT_CHECKS
 void utp_socket_impl::check_invariant() const

@@ -58,7 +58,7 @@ void run_test(Setup const& setup, Torrent const& torrent
 	// setup the simulation
 	sim::default_config network_cfg;
 	sim::simulation sim{network_cfg};
-	std::unique_ptr<sim::asio::io_service> ios = make_io_service(sim, 0);
+	std::unique_ptr<sim::asio::io_context> ios = make_io_context(sim, 0);
 	lt::session_proxy zombie;
 
 	// setup settings pack to use for the session (customization point)
@@ -118,7 +118,7 @@ TORRENT_TEST(torrent_paused_disconnect)
 {
 	run_test(
 		[](lt::session&) {},
-		[](lt::session&, lt::torrent_handle h, std::array<fake_peer*, 3>& test_peers) {
+		[](lt::session&, lt::torrent_handle h, std::array<fake_peer*, 3>&) {
 			add_fake_peers(h, 3);
 		},
 

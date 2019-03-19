@@ -341,6 +341,17 @@ namespace {
 		stats_counters().inc_stats_counter(counters::num_outgoing_dht_port);
 	}
 
+	template<class F, typename... Args>
+	void bt_peer_connection::extension_notify(F message, Args... args)
+	{
+#ifndef TORRENT_DISABLE_EXTENSIONS
+		for (auto const& e : m_extensions)
+		{
+			(*e.*message)(args...);
+		}
+#endif
+	}
+
 	void bt_peer_connection::write_have_all()
 	{
 		INVARIANT_CHECK;
@@ -350,6 +361,10 @@ namespace {
 		peer_log(peer_log_alert::outgoing_message, "HAVE_ALL");
 #endif
 		send_message(msg_have_all, counters::num_outgoing_have_all, 0);
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+		extension_notify(&peer_plugin::sent_have_all);
+#endif
 	}
 
 	void bt_peer_connection::write_have_none()
@@ -360,6 +375,10 @@ namespace {
 		peer_log(peer_log_alert::outgoing_message, "HAVE_NONE");
 #endif
 		send_message(msg_have_none, counters::num_outgoing_have_none, 0);
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+		extension_notify(&peer_plugin::sent_have_none);
+#endif
 	}
 
 	void bt_peer_connection::write_reject_request(peer_request const& r)
@@ -378,6 +397,10 @@ namespace {
 
 		send_message(msg_reject_request, counters::num_outgoing_reject, 0
 			, static_cast<int>(r.piece), r.start, r.length);
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+		extension_notify(&peer_plugin::sent_reject_request, r);
+#endif
 	}
 
 	void bt_peer_connection::write_allow_fast(piece_index_t const piece)
@@ -395,6 +418,10 @@ namespace {
 
 		send_message(msg_allowed_fast, counters::num_outgoing_allowed_fast, 0
 			, static_cast<int>(piece));
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+		extension_notify(&peer_plugin::sent_allow_fast, piece);
+#endif
 	}
 
 	void bt_peer_connection::write_suggest(piece_index_t const piece)
@@ -423,6 +450,10 @@ namespace {
 
 		send_message(msg_suggest_piece, counters::num_outgoing_suggest, 0
 			, static_cast<int>(piece));
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+		extension_notify(&peer_plugin::sent_suggest, piece);
+#endif
 	}
 
 	void bt_peer_connection::get_specific_peer_info(peer_info& p) const
@@ -486,15 +517,15 @@ namespace {
 			return;
 		}
 
-		std::size_t const pad_size = random(512);
+		int const pad_size = int(random(512));
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "ENCRYPTION", "pad size: %zu", pad_size);
+		peer_log(peer_log_alert::info, "ENCRYPTION", "pad size: %d", pad_size);
 #endif
 
 		char msg[dh_key_len + 512];
 		char* ptr = msg;
-		std::size_t const buf_size = dh_key_len + pad_size;
+		int const buf_size = int(dh_key_len) + pad_size;
 
 		std::array<char, dh_key_len> const local_key = export_key(m_dh_key_exchange->get_local_key());
 		std::memcpy(ptr, local_key.data(), dh_key_len);
@@ -525,7 +556,7 @@ namespace {
 		key_t const secret_key = m_dh_key_exchange->get_secret();
 		std::array<char, dh_key_len> const secret = export_key(secret_key);
 
-		std::size_t const pad_size = random(512);
+		int const pad_size = int(random(512));
 
 		// synchash,skeyhash,vc,crypto_provide,len(pad),pad,len(ia)
 		char msg[20 + 20 + 8 + 4 + 2 + 512 + 2];
@@ -574,7 +605,7 @@ namespace {
 		m_dh_key_exchange.reset(); // secret should be invalid at this point
 
 		// write the verification constant and crypto field
-		std::size_t const encrypt_size = sizeof(msg) - 512 + pad_size - 40;
+		int const encrypt_size = int(sizeof(msg)) - 512 + pad_size - 40;
 
 		// this is an invalid setting, but let's just make the best of the situation
 		int const enc_level = m_settings.get_int(settings_pack::allowed_enc_level);
@@ -589,9 +620,9 @@ namespace {
 #endif
 
 		write_pe_vc_cryptofield({ptr, encrypt_size}, crypto_provide, pad_size);
-		span<char> vec(ptr, aux::numeric_cast<std::size_t>(encrypt_size));
+		span<char> vec(ptr, encrypt_size);
 		m_rc4->encrypt(vec);
-		send_buffer({msg, sizeof(msg) - 512 + pad_size});
+		send_buffer({msg, int(sizeof(msg)) - 512 + pad_size});
 	}
 
 	void bt_peer_connection::write_pe4_sync(int const crypto_select)
@@ -604,9 +635,9 @@ namespace {
 		TORRENT_ASSERT(crypto_select == 0x02 || crypto_select == 0x01);
 		TORRENT_ASSERT(!m_sent_handshake);
 
-		std::size_t const pad_size = random(512);
+		int const pad_size = int(random(512));
 
-		std::size_t const buf_size = 8 + 4 + 2 + pad_size;
+		int const buf_size = 8 + 4 + 2 + pad_size;
 		char msg[512 + 8 + 4 + 2];
 		write_pe_vc_cryptofield(msg, crypto_select, pad_size);
 
@@ -629,7 +660,7 @@ namespace {
 	void bt_peer_connection::write_pe_vc_cryptofield(
 		span<char> write_buf
 		, int const crypto_field
-		, std::size_t const pad_size)
+		, int const pad_size)
 	{
 		INVARIANT_CHECK;
 
@@ -759,7 +790,7 @@ namespace {
 			|| recv_buffer[0] != msg_piece)
 			return piece_block_progress();
 
-		const char* ptr = recv_buffer.begin() + 1;
+		const char* ptr = recv_buffer.data() + 1;
 		peer_request r;
 		r.piece = piece_index_t(detail::read_int32(ptr));
 		r.start = detail::read_int32(ptr);
@@ -920,7 +951,7 @@ namespace {
 
 		span<char const> recv_buffer = m_recv_buffer.get();
 
-		const char* ptr = recv_buffer.begin() + 1;
+		const char* ptr = recv_buffer.data() + 1;
 		piece_index_t const index(detail::read_int32(ptr));
 
 		incoming_have(index);
@@ -954,7 +985,7 @@ namespace {
 		span<char const> recv_buffer = m_recv_buffer.get();
 
 		typed_bitfield<piece_index_t> bits;
-		bits.assign(recv_buffer.begin() + 1
+		bits.assign(recv_buffer.data() + 1
 			, t->valid_metadata()?get_bitfield().size():(m_recv_buffer.packet_size()-1)*CHAR_BIT);
 
 		incoming_bitfield(bits);
@@ -980,7 +1011,7 @@ namespace {
 		span<char const> recv_buffer = m_recv_buffer.get();
 
 		peer_request r;
-		const char* ptr = recv_buffer.begin() + 1;
+		const char* ptr = recv_buffer.data() + 1;
 		r.piece = piece_index_t(detail::read_int32(ptr));
 		r.start = detail::read_int32(ptr);
 		r.length = detail::read_int32(ptr);
@@ -999,7 +1030,7 @@ namespace {
 		TORRENT_ASSERT(received >= 0);
 
 		span<char const> recv_buffer = m_recv_buffer.get();
-		int const recv_pos = m_recv_buffer.pos(); // recv_buffer.end - recv_buffer.begin;
+		int const recv_pos = m_recv_buffer.pos();
 
 		std::shared_ptr<torrent> t = associated_torrent().lock();
 		TORRENT_ASSERT(t);
@@ -1016,22 +1047,21 @@ namespace {
 				received_bytes(0, received);
 				return;
 			}
-			if (recv_pos >= 13)
+			char const* ptr = recv_buffer.data() + 9;
+			int const list_size = detail::read_int32(ptr);
+
+			if (list_size > m_recv_buffer.packet_size() - 13 || list_size < 0)
 			{
-				char const* ptr = recv_buffer.begin() + 9;
-				int const list_size = detail::read_int32(ptr);
+				received_bytes(0, received);
+				disconnect(errors::invalid_hash_list, operation_t::bittorrent, peer_error);
+				return;
+			}
 
-				if (list_size > m_recv_buffer.packet_size() - 13)
-				{
-					disconnect(errors::invalid_hash_list, operation_t::bittorrent, peer_error);
-					return;
-				}
-
-				if (m_recv_buffer.packet_size() - 13 - list_size > t->block_size())
-				{
-					disconnect(errors::packet_too_large, operation_t::bittorrent, peer_error);
-					return;
-				}
+			if (m_recv_buffer.packet_size() - 13 - list_size > t->block_size())
+			{
+				received_bytes(0, received);
+				disconnect(errors::packet_too_large, operation_t::bittorrent, peer_error);
+				return;
 			}
 		}
 		else
@@ -1040,6 +1070,7 @@ namespace {
 			{
 				if (m_recv_buffer.packet_size() - 9 > t->block_size())
 				{
+					received_bytes(0, received);
 					disconnect(errors::packet_too_large, operation_t::bittorrent, peer_error);
 					return;
 				}
@@ -1056,13 +1087,19 @@ namespace {
 
 		if (recv_pos >= header_size)
 		{
-			const char* ptr = recv_buffer.begin() + 1;
+			const char* ptr = recv_buffer.data() + 1;
 			p.piece = piece_index_t(detail::read_int32(ptr));
 			p.start = detail::read_int32(ptr);
 
 			if (merkle)
 			{
 				list_size = detail::read_int32(ptr);
+				if (list_size < 0)
+				{
+					received_bytes(0, received);
+					disconnect(errors::invalid_hash_list, operation_t::bittorrent, peer_error);
+					return;
+				}
 				p.length = m_recv_buffer.packet_size() - list_size - header_size;
 				header_size += list_size;
 			}
@@ -1125,10 +1162,10 @@ namespace {
 			peer_log(peer_log_alert::incoming_message, "HASHPIECE"
 				, "piece: %d list: %d", static_cast<int>(p.piece), list_size);
 #endif
-			bdecode_node hash_list;
 			error_code ec;
-			if (bdecode(recv_buffer.begin() + 13, recv_buffer.begin() + 13 + list_size
-				, hash_list, ec) != 0)
+			bdecode_node const hash_list = bdecode(recv_buffer.subspan(13).first(list_size)
+				, ec);
+			if (ec)
 			{
 				disconnect(errors::invalid_hash_piece, operation_t::bittorrent, peer_error);
 				return;
@@ -1162,7 +1199,7 @@ namespace {
 			}
 		}
 
-		incoming_piece(p, recv_buffer.begin() + header_size);
+		incoming_piece(p, recv_buffer.data() + header_size);
 	}
 
 	// -----------------------------
@@ -1185,7 +1222,7 @@ namespace {
 		span<char const> recv_buffer = m_recv_buffer.get();
 
 		peer_request r;
-		const char* ptr = recv_buffer.begin() + 1;
+		const char* ptr = recv_buffer.data() + 1;
 		r.piece = piece_index_t(detail::read_int32(ptr));
 		r.start = detail::read_int32(ptr);
 		r.length = detail::read_int32(ptr);
@@ -1212,7 +1249,7 @@ namespace {
 
 		span<char const> recv_buffer = m_recv_buffer.get();
 
-		const char* ptr = recv_buffer.begin() + 1;
+		const char* ptr = recv_buffer.data() + 1;
 		int const listen_port = detail::read_uint16(ptr);
 
 		incoming_dht_port(listen_port);
@@ -1220,7 +1257,10 @@ namespace {
 		if (!m_supports_dht_port)
 		{
 			m_supports_dht_port = true;
-			write_dht_port();
+			// if we're done with the handshake, respond right away, otherwise
+			// we'll send the DHT port later
+			if (m_sent_handshake)
+				write_dht_port();
 		}
 	}
 
@@ -1239,7 +1279,7 @@ namespace {
 
 		span<char const> recv_buffer = m_recv_buffer.get();
 
-		const char* ptr = recv_buffer.begin() + 1;
+		const char* ptr = recv_buffer.data() + 1;
 		piece_index_t const piece(detail::read_int32(ptr));
 		incoming_suggest(piece);
 	}
@@ -1286,7 +1326,7 @@ namespace {
 		span<char const> recv_buffer = m_recv_buffer.get();
 
 		peer_request r;
-		const char* ptr = recv_buffer.begin() + 1;
+		const char* ptr = recv_buffer.data() + 1;
 		r.piece = piece_index_t(detail::read_int32(ptr));
 		r.start = detail::read_int32(ptr);
 		r.length = detail::read_int32(ptr);
@@ -1307,7 +1347,7 @@ namespace {
 
 		if (!m_recv_buffer.packet_finished()) return;
 		span<char const> recv_buffer = m_recv_buffer.get();
-		const char* ptr = recv_buffer.begin() + 1;
+		const char* ptr = recv_buffer.data() + 1;
 		piece_index_t const index(detail::read_int32(ptr));
 
 		incoming_allowed_fast(index);
@@ -1334,12 +1374,12 @@ namespace {
 		TORRENT_ASSERT(recv_buffer.front() == holepunch_msg);
 		recv_buffer = recv_buffer.subspan(1);
 
-		const char* ptr = recv_buffer.begin();
+		const char* ptr = recv_buffer.data();
 
 		// ignore invalid messages
 		if (int(recv_buffer.size()) < 2) return;
 
-		int const msg_type = detail::read_uint8(ptr);
+		auto const msg_type = static_cast<hp_message>(detail::read_uint8(ptr));
 		int const addr_type = detail::read_uint8(ptr);
 
 		tcp::endpoint ep;
@@ -1364,7 +1404,9 @@ namespace {
 				static const char* hp_msg_name[] = {"rendezvous", "connect", "failed"};
 				peer_log(peer_log_alert::incoming_message, "HOLEPUNCH"
 					, "msg: %s from %s to: unknown address type"
-					, (msg_type >= 0 && msg_type < 3 ? hp_msg_name[msg_type] : "unknown message type")
+					, (static_cast<int>(msg_type) < 3
+						? hp_msg_name[static_cast<int>(msg_type)]
+						: "unknown message type")
 					, print_address(remote().address()).c_str());
 			}
 #endif
@@ -1372,12 +1414,26 @@ namespace {
 			return; // unknown address type
 		}
 
+#ifndef TORRENT_DISABLE_LOGGING
+		if (msg_type > hp_message::failed)
+		{
+			if (should_log(peer_log_alert::incoming_message))
+			{
+				peer_log(peer_log_alert::incoming_message, "HOLEPUNCH"
+					, "msg: unknown message type (%d) to: %s"
+					, static_cast<int>(msg_type)
+					, print_address(ep.address()).c_str());
+			}
+			return;
+		}
+#endif
+
 		std::shared_ptr<torrent> t = associated_torrent().lock();
 		if (!t) return;
 
 		switch (msg_type)
 		{
-			case hp_rendezvous: // rendezvous
+			case hp_message::rendezvous: // rendezvous
 			{
 #ifndef TORRENT_DISABLE_LOGGING
 				if (should_log(peer_log_alert::incoming_message))
@@ -1393,24 +1449,24 @@ namespace {
 				if (p == nullptr)
 				{
 					// we're not connected to this peer
-					write_holepunch_msg(hp_failed, ep, hp_not_connected);
+					write_holepunch_msg(hp_message::failed, ep, hp_error::not_connected);
 					break;
 				}
 				if (!p->supports_holepunch())
 				{
-					write_holepunch_msg(hp_failed, ep, hp_no_support);
+					write_holepunch_msg(hp_message::failed, ep, hp_error::no_support);
 					break;
 				}
 				if (p == this)
 				{
-					write_holepunch_msg(hp_failed, ep, hp_no_self);
+					write_holepunch_msg(hp_message::failed, ep, hp_error::no_self);
 					break;
 				}
 
-				write_holepunch_msg(hp_connect, ep, 0);
-				p->write_holepunch_msg(hp_connect, remote(), 0);
+				write_holepunch_msg(hp_message::connect, ep);
+				p->write_holepunch_msg(hp_message::connect, remote());
 			} break;
-			case hp_connect:
+			case hp_message::connect:
 			{
 				// add or find the peer with this endpoint
 				torrent_peer* p = t->add_peer(ep, peer_info::pex);
@@ -1420,7 +1476,7 @@ namespace {
 					if (should_log(peer_log_alert::incoming_message))
 					{
 						peer_log(peer_log_alert::incoming_message, "HOLEPUNCH"
-							, "msg:connect to: %s error: failed to add peer"
+							, "msg:connect to: %s ERROR: failed to add peer"
 							, print_address(ep.address()).c_str());
 					}
 #endif
@@ -1434,7 +1490,7 @@ namespace {
 					if (should_log(peer_log_alert::incoming_message))
 					{
 						peer_log(peer_log_alert::incoming_message, "HOLEPUNCH"
-							, "msg:connect to: %s error: peer banned", print_address(ep.address()).c_str());
+							, "msg:connect to: %s ERROR: peer banned", print_address(ep.address()).c_str());
 					}
 #endif
 					// this peer is banned, don't connect to it
@@ -1460,7 +1516,7 @@ namespace {
 				}
 #endif
 			} break;
-			case hp_failed:
+			case hp_message::failed:
 			{
 				std::uint32_t error = detail::read_uint32(ptr);
 #ifndef TORRENT_DISABLE_LOGGING
@@ -1468,28 +1524,18 @@ namespace {
 				{
 					static char const* err_msg[] = {"no such peer", "not connected", "no support", "no self"};
 					peer_log(peer_log_alert::incoming_message, "HOLEPUNCH"
-						, "msg:failed error: %d msg: %s", error
+						, "msg:failed ERROR: %d msg: %s", error
 						, ((error > 0 && error < 5)?err_msg[error-1]:"unknown message id"));
 				}
 #endif
 				// #error deal with holepunch errors
 				(void)error;
 			} break;
-#ifndef TORRENT_DISABLE_LOGGING
-			default:
-			{
-				if (should_log(peer_log_alert::incoming_message))
-				{
-					peer_log(peer_log_alert::incoming_message, "HOLEPUNCH"
-						, "msg: unknown message type (%d) to: %s"
-						, msg_type, print_address(ep.address()).c_str());
-				}
-			}
-#endif
 		}
 	}
 
-	void bt_peer_connection::write_holepunch_msg(int const type, tcp::endpoint const& ep, int const error)
+	void bt_peer_connection::write_holepunch_msg(hp_message const type
+		, tcp::endpoint const& ep, hp_error const error)
 	{
 		char buf[35];
 		char* ptr = buf + 6;
@@ -1504,15 +1550,17 @@ namespace {
 			static const char* hp_msg_name[] = {"rendezvous", "connect", "failed"};
 			static const char* hp_error_string[] = {"", "no such peer", "not connected", "no support", "no self"};
 			peer_log(peer_log_alert::outgoing_message, "HOLEPUNCH"
-				, "msg: %s to: %s error: %s"
-				, (type >= 0 && type < 3 ? hp_msg_name[type] : "unknown message type")
+				, "msg: %s to: %s ERROR: %s"
+				, (static_cast<std::uint8_t>(type) < 3
+					? hp_msg_name[static_cast<std::uint8_t>(type)]
+					: "unknown message type")
 				, print_address(ep.address()).c_str()
-				, hp_error_string[error]);
+				, hp_error_string[static_cast<int>(error)]);
 		}
 #endif
-		if (type == hp_failed)
+		if (type == hp_message::failed)
 		{
-			detail::write_uint32(error, ptr);
+			detail::write_uint32(static_cast<int>(error), ptr);
 		}
 
 		// write the packet length and type
@@ -1523,7 +1571,7 @@ namespace {
 
 		TORRENT_ASSERT(ptr <= buf + sizeof(buf));
 
-		send_buffer({buf, std::size_t(ptr - buf)});
+		send_buffer({buf, ptr - buf});
 
 		stats_counters().inc_stats_counter(counters::num_outgoing_extended);
 	}
@@ -1576,7 +1624,7 @@ namespace {
 #endif
 				return;
 			}
-			bool ul = aux::read_uint8(recv_buffer) != 0;
+			bool const ul = aux::read_uint8(recv_buffer) != 0;
 #ifndef TORRENT_DISABLE_LOGGING
 			peer_log(peer_log_alert::incoming_message, "UPLOAD_ONLY"
 				, "%s", (ul?"true":"false"));
@@ -1658,18 +1706,17 @@ namespace {
 
 		span<char const> recv_buffer = m_recv_buffer.get();
 
-		bdecode_node root;
 		error_code ec;
 		int pos;
-		int ret = bdecode(recv_buffer.begin() + 2, recv_buffer.end(), root, ec, &pos);
-		if (ret != 0 || ec || root.type() != bdecode_node::dict_t)
+		bdecode_node root = bdecode(recv_buffer.subspan(2), ec, &pos);
+		if (ec || root.type() != bdecode_node::dict_t)
 		{
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::info))
 			{
 				peer_log(peer_log_alert::info, "EXTENSION_MESSAGE"
-					, "invalid extended handshake: %s pos: %d"
-					, ec.message().c_str(), pos);
+					, "invalid extended handshake. pos: %d %s"
+					, pos, print_error(ec).c_str());
 			}
 #endif
 			return;
@@ -1751,7 +1798,7 @@ namespace {
 				address_v6 ipv6_address(bytes);
 				if (ipv6_address.is_v4_mapped())
 					m_ses.set_external_address(local_endpoint()
-						, ipv6_address.to_v4()
+						, make_address_v4(v4_mapped, ipv6_address)
 						, aux::session_interface::source_peer, remote().address());
 				else
 					m_ses.set_external_address(local_endpoint()
@@ -1927,6 +1974,10 @@ namespace {
 			, static_cast<int>(r.piece), r.start, r.length);
 
 		if (!m_supports_fast) incoming_reject_request(r);
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+		extension_notify(&peer_plugin::sent_cancel, r);
+#endif
 	}
 
 	void bt_peer_connection::write_request(peer_request const& r)
@@ -1935,6 +1986,10 @@ namespace {
 
 		send_message(msg_request, counters::num_outgoing_request, message_type_request
 			, static_cast<int>(r.piece), r.start, r.length);
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+		extension_notify(&peer_plugin::sent_request, r);
+#endif
 	}
 
 	void bt_peer_connection::write_bitfield()
@@ -1992,6 +2047,7 @@ namespace {
 		TORRENT_ASSERT(num_pieces > 0);
 
 		constexpr std::uint8_t char_bit_mask = CHAR_BIT - 1;
+		constexpr std::uint8_t char_top_bit = 1 << (CHAR_BIT - 1);
 
 		const int packet_size = (num_pieces + char_bit_mask) / CHAR_BIT + 5;
 
@@ -2013,14 +2069,14 @@ namespace {
 		{
 			std::memset(ptr, 0, aux::numeric_cast<std::size_t>(packet_size - 5));
 			piece_picker const& p = t->picker();
-			int mask = 0x80;
+			int mask = char_top_bit;
 			for (piece_index_t i(0); i < piece_index_t(num_pieces); ++i)
 			{
 				if (p.have_piece(i)) *ptr |= mask;
 				mask >>= 1;
 				if (mask == 0)
 				{
-					mask = 0x80;
+					mask = char_top_bit;
 					++ptr;
 				}
 			}
@@ -2029,7 +2085,7 @@ namespace {
 		// add predictive pieces to the bitfield as well, since we won't
 		// announce them again
 		for (piece_index_t const p : t->predictive_pieces())
-			msg[5 + static_cast<int>(p) / CHAR_BIT] |= (0x80 >> (static_cast<int>(p) & char_bit_mask));
+			msg[5 + static_cast<int>(p) / CHAR_BIT] |= (char_top_bit >> (static_cast<int>(p) & char_bit_mask));
 
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::outgoing_message))
@@ -2039,7 +2095,7 @@ namespace {
 			bitfield_string.resize(n_pieces);
 			for (std::size_t k = 0; k < n_pieces; ++k)
 			{
-				if (msg[5 + int(k) / CHAR_BIT] & (0x80 >> (k % CHAR_BIT))) bitfield_string[k] = '1';
+				if (msg[5 + int(k) / CHAR_BIT] & (char_top_bit >> (k % CHAR_BIT))) bitfield_string[k] = '1';
 				else bitfield_string[k] = '0';
 			}
 			peer_log(peer_log_alert::outgoing_message, "BITFIELD"
@@ -2179,6 +2235,10 @@ namespace {
 
 		if (is_choked()) return;
 		send_message(msg_choke, counters::num_outgoing_choke, 0);
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+		extension_notify(&peer_plugin::sent_choke);
+#endif
 	}
 
 	void bt_peer_connection::write_unchoke()
@@ -2188,10 +2248,7 @@ namespace {
 		send_message(msg_unchoke, counters::num_outgoing_unchoke, 0);
 
 #ifndef TORRENT_DISABLE_EXTENSIONS
-		for (auto const& e : m_extensions)
-		{
-			e->sent_unchoke();
-		}
+		extension_notify(&peer_plugin::sent_unchoke);
 #endif
 	}
 
@@ -2200,6 +2257,10 @@ namespace {
 		INVARIANT_CHECK;
 
 		send_message(msg_interested, counters::num_outgoing_interested, 0);
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+		extension_notify(&peer_plugin::sent_interested);
+#endif
 	}
 
 	void bt_peer_connection::write_not_interested()
@@ -2207,6 +2268,10 @@ namespace {
 		INVARIANT_CHECK;
 
 		send_message(msg_not_interested, counters::num_outgoing_not_interested, 0);
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+		extension_notify(&peer_plugin::sent_not_interested);
+#endif
 	}
 
 	void bt_peer_connection::write_have(piece_index_t const index)
@@ -2222,6 +2287,10 @@ namespace {
 
 		send_message(msg_have, counters::num_outgoing_have, 0
 			, static_cast<int>(index));
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+		extension_notify(&peer_plugin::sent_have, index);
+#endif
 	}
 
 	void bt_peer_connection::write_dont_have(piece_index_t const index)
@@ -2325,6 +2394,10 @@ namespace {
 			t->alerts().emplace_alert<block_uploaded_alert>(t->get_handle(),
 				remote(), pid(), r.start / t->block_size() , r.piece);
 		}
+
+#ifndef TORRENT_DISABLE_EXTENSIONS
+		extension_notify(&peer_plugin::sent_piece, r);
+#endif
 	}
 
 	// --------------------------
@@ -2415,7 +2488,7 @@ namespace {
 			TORRENT_ASSERT(!m_encrypted);
 			TORRENT_ASSERT(!m_rc4_encrypted);
 			TORRENT_ASSERT(m_recv_buffer.packet_size() == dh_key_len);
-			TORRENT_ASSERT(recv_buffer.begin() == m_recv_buffer.get().begin());
+			TORRENT_ASSERT(recv_buffer.data() == m_recv_buffer.get().data());
 			TORRENT_ASSERT(recv_buffer.size() == m_recv_buffer.get().size());
 
 			if (!m_recv_buffer.packet_finished()) return;
@@ -2427,7 +2500,7 @@ namespace {
 
 			// read dh key, generate shared secret
 			m_dh_key_exchange->compute_secret(
-				reinterpret_cast<std::uint8_t const*>(recv_buffer.begin()));
+				reinterpret_cast<std::uint8_t const*>(recv_buffer.data()));
 
 #ifndef TORRENT_DISABLE_LOGGING
 			peer_log(peer_log_alert::info, "ENCRYPTION", "received DH key");
@@ -2473,7 +2546,7 @@ namespace {
 			TORRENT_ASSERT(!m_encrypted);
 			TORRENT_ASSERT(!m_rc4_encrypted);
 			TORRENT_ASSERT(!is_outgoing());
-			TORRENT_ASSERT(recv_buffer.begin() == m_recv_buffer.get().begin());
+			TORRENT_ASSERT(recv_buffer.data() == m_recv_buffer.get().data());
 			TORRENT_ASSERT(recv_buffer.size() == m_recv_buffer.get().size());
 
 			if (int(recv_buffer.size()) < 20)
@@ -2569,7 +2642,7 @@ namespace {
 
 			TORRENT_ASSERT(!is_disconnecting());
 
-			sha1_hash ih(recv_buffer.begin());
+			sha1_hash ih(recv_buffer.data());
 			torrent const* ti = m_ses.find_encrypted_torrent(ih, m_dh_key_exchange->get_hash_xor_mask());
 
 			if (ti)
@@ -2621,7 +2694,7 @@ namespace {
 			TORRENT_ASSERT(is_outgoing());
 			TORRENT_ASSERT(!m_encrypted);
 			TORRENT_ASSERT(!m_rc4_encrypted);
-			TORRENT_ASSERT(recv_buffer.begin() == m_recv_buffer.get().begin());
+			TORRENT_ASSERT(recv_buffer.data() == m_recv_buffer.get().data());
 			TORRENT_ASSERT(recv_buffer.size() == m_recv_buffer.get().size());
 
 			if (int(recv_buffer.size()) < 8)
@@ -2705,7 +2778,7 @@ namespace {
 			if (!m_recv_buffer.packet_finished()) return;
 
 			rc4_decrypt(m_recv_buffer.mutable_buffer().first(
-				size_t(m_recv_buffer.packet_size())));
+				m_recv_buffer.packet_size()));
 
 			recv_buffer = m_recv_buffer.get();
 
@@ -2809,14 +2882,13 @@ namespace {
 
 			int const pad_size = is_outgoing() ? m_recv_buffer.packet_size() : m_recv_buffer.packet_size() - 2;
 
-			rc4_decrypt(m_recv_buffer.mutable_buffer().first(
-				size_t(m_recv_buffer.packet_size())));
+			rc4_decrypt(m_recv_buffer.mutable_buffer().first(m_recv_buffer.packet_size()));
 
 			recv_buffer = m_recv_buffer.get();
 
 			if (!is_outgoing())
 			{
-				recv_buffer = recv_buffer.subspan(aux::numeric_cast<std::size_t>(pad_size));
+				recv_buffer = recv_buffer.subspan(pad_size);
 				int const len_ia = aux::read_int16(recv_buffer);
 
 				if (len_ia < 0)
@@ -2868,7 +2940,7 @@ namespace {
 			if (!m_recv_buffer.packet_finished()) return;
 
 			// ia is always rc4, so decrypt it
-			rc4_decrypt(m_recv_buffer.mutable_buffer().first(size_t(m_recv_buffer.packet_size())));
+			rc4_decrypt(m_recv_buffer.mutable_buffer().first(m_recv_buffer.packet_size()));
 
 #ifndef TORRENT_DISABLE_LOGGING
 			peer_log(peer_log_alert::info, "ENCRYPTION"
@@ -2898,7 +2970,7 @@ namespace {
 			if (m_rc4_encrypted)
 			{
 				span<char> const remaining = m_recv_buffer.mutable_buffer()
-					.subspan(aux::numeric_cast<std::size_t>(m_recv_buffer.packet_size()));
+					.subspan(m_recv_buffer.packet_size());
 				rc4_decrypt(remaining);
 
 #ifndef TORRENT_DISABLE_LOGGING
@@ -2936,11 +3008,11 @@ namespace {
 			if (!m_recv_buffer.packet_finished()) return;
 			recv_buffer = m_recv_buffer.get();
 
-			int packet_size = recv_buffer[0];
+			int const packet_size = recv_buffer[0];
 			static const char protocol_string[] = "\x13" "BitTorrent protocol";
 
 			if (packet_size != 19 ||
-				std::memcmp(recv_buffer.begin(), protocol_string, 20) != 0)
+				recv_buffer.first(20) != span<char const>{protocol_string, 20})
 			{
 #if !defined TORRENT_DISABLE_ENCRYPTION
 #ifndef TORRENT_DISABLE_LOGGING
@@ -3027,15 +3099,11 @@ namespace {
 
 #ifndef TORRENT_DISABLE_LOGGING
 			std::string extensions;
-			extensions.resize(8 * 8);
-			for (std::size_t i = 0; i < 8; ++i)
-			{
-				for (std::size_t j = 0; j < 8; ++j)
-				{
-					if (recv_buffer[i] & (0x80 >> j)) extensions[i * 8 + j] = '1';
-					else extensions[i * 8 + j] = '0';
-				}
-			}
+			extensions.reserve(8 * 8);
+			for (int i = 0; i < 8; ++i)
+				for (int j = 0; j < 8; ++j)
+					extensions += (recv_buffer[i] & (0x80 >> j)) ? '1' : '0';
+
 			if (should_log(peer_log_alert::incoming_message))
 			{
 				peer_log(peer_log_alert::incoming_message, "EXTENSIONS", "%s ext: %s%s%s"
@@ -3046,7 +3114,7 @@ namespace {
 			}
 #endif
 
-			std::memcpy(m_reserved_bits.data(), recv_buffer.begin(), 8);
+			std::memcpy(m_reserved_bits.data(), recv_buffer.data(), 8);
 			if (recv_buffer[5] & 0x10)
 				m_supports_extensions = true;
 
@@ -3128,13 +3196,11 @@ namespace {
 				hex_pid[40] = 0;
 				char ascii_pid[21];
 				ascii_pid[20] = 0;
-				for (std::size_t i = 0; i != 20; ++i)
-				{
-					if (is_print(recv_buffer[i])) ascii_pid[i] = recv_buffer[i];
-					else ascii_pid[i] = '.';
-				}
+				for (int i = 0; i != 20; ++i)
+					ascii_pid[i] = (is_print(recv_buffer[i])) ? recv_buffer[i] : '.';
+
 				peer_log(peer_log_alert::incoming, "HANDSHAKE", "received peer_id: %s client: %s ascii: \"%s\""
-					, hex_pid, identify_client(peer_id(recv_buffer.begin())).c_str(), ascii_pid);
+					, hex_pid, identify_client(peer_id(recv_buffer.data())).c_str(), ascii_pid);
 			}
 #endif
 			peer_id pid;
@@ -3249,7 +3315,7 @@ namespace {
 		if (m_state == state_t::read_packet_size)
 		{
 			// Make sure this is not fallen though into
-			TORRENT_ASSERT(recv_buffer.begin() == m_recv_buffer.get().begin());
+			TORRENT_ASSERT(recv_buffer.data() == m_recv_buffer.get().data());
 			TORRENT_ASSERT(recv_buffer.size() == m_recv_buffer.get().size());
 			TORRENT_ASSERT(m_recv_buffer.packet_size() == 5);
 
@@ -3266,7 +3332,7 @@ namespace {
 
 			TORRENT_ASSERT(bytes_transferred <= 1);
 
-			const char* ptr = recv_buffer.begin();
+			const char* ptr = recv_buffer.data();
 			int const packet_size = detail::read_int32(ptr);
 
 			// don't accept packets larger than 1 MB
@@ -3300,7 +3366,7 @@ namespace {
 
 		if (m_state == state_t::read_packet)
 		{
-			TORRENT_ASSERT(recv_buffer.begin() == m_recv_buffer.get().begin());
+			TORRENT_ASSERT(recv_buffer.data() == m_recv_buffer.get().data());
 			TORRENT_ASSERT(recv_buffer.size() == m_recv_buffer.get().size());
 			if (!t)
 			{

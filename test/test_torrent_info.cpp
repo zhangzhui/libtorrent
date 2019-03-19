@@ -117,6 +117,7 @@ static test_torrent_t test_torrents[] =
 	{ "no_creation_date.torrent" },
 	{ "url_seed.torrent" },
 	{ "url_seed_multi.torrent" },
+	{ "url_seed_multi_single_file.torrent" },
 	{ "url_seed_multi_space.torrent" },
 	{ "url_seed_multi_space_nolist.torrent" },
 	{ "root_hash.torrent" },
@@ -699,50 +700,50 @@ TORRENT_TEST(parse_torrents)
 	TEST_EQUAL(ti3.name(), "test2..test3.......test4");
 
 	std::string root_dir = parent_path(current_working_directory());
-	for (int i = 0; i < int(sizeof(test_torrents)/sizeof(test_torrents[0])); ++i)
+	for (auto const t : test_torrents)
 	{
-		std::printf("loading %s\n", test_torrents[i].file);
+		std::printf("loading %s\n", t.file);
 		std::string filename = combine_path(combine_path(root_dir, "test_torrents")
-			, test_torrents[i].file);
+			, t.file);
 		error_code ec;
 		auto ti = std::make_shared<torrent_info>(filename, ec);
 		TEST_CHECK(!ec);
 		if (ec) std::printf(" loading(\"%s\") -> failed %s\n", filename.c_str()
 			, ec.message().c_str());
 
-		if (std::string(test_torrents[i].file) == "whitespace_url.torrent")
+		if (t.file == "whitespace_url.torrent"_sv)
 		{
 			// make sure we trimmed the url
 			TEST_CHECK(ti->trackers().size() > 0);
 			if (ti->trackers().size() > 0)
 				TEST_CHECK(ti->trackers()[0].url == "udp://test.com/announce");
 		}
-		else if (std::string(test_torrents[i].file) == "duplicate_files.torrent")
+		else if (t.file == "duplicate_files.torrent"_sv)
 		{
 			// make sure we disambiguated the files
 			TEST_EQUAL(ti->num_files(), 2);
 			TEST_CHECK(ti->files().file_path(file_index_t{0}) == combine_path(combine_path("temp", "foo"), "bar.txt"));
 			TEST_CHECK(ti->files().file_path(file_index_t{1}) == combine_path(combine_path("temp", "foo"), "bar.1.txt"));
 		}
-		else if (std::string(test_torrents[i].file) == "pad_file.torrent")
+		else if (t.file == "pad_file.torrent"_sv)
 		{
 			TEST_EQUAL(ti->num_files(), 2);
 			TEST_EQUAL(bool(ti->files().file_flags(file_index_t{0}) & file_storage::flag_pad_file), false);
 			TEST_EQUAL(bool(ti->files().file_flags(file_index_t{1}) & file_storage::flag_pad_file), true);
 		}
-		else if (std::string(test_torrents[i].file) == "creation_date.torrent")
+		else if (t.file == "creation_date.torrent"_sv)
 		{
 			TEST_EQUAL(ti->creation_date(), 1234567);
 		}
-		else if (std::string(test_torrents[i].file) == "duplicate_web_seeds.torrent")
+		else if (t.file == "duplicate_web_seeds.torrent"_sv)
 		{
 			TEST_EQUAL(ti->web_seeds().size(), 3);
 		}
-		else if (std::string(test_torrents[i].file) == "no_creation_date.torrent")
+		else if (t.file == "no_creation_date.torrent"_sv)
 		{
 			TEST_CHECK(!ti->creation_date());
 		}
-		else if (std::string(test_torrents[i].file) == "url_seed.torrent")
+		else if (t.file == "url_seed.torrent"_sv)
 		{
 			TEST_EQUAL(ti->web_seeds().size(), 1);
 			TEST_EQUAL(ti->web_seeds()[0].url, "http://test.com/file");
@@ -752,7 +753,7 @@ TORRENT_TEST(parse_torrents)
 			TEST_EQUAL(ti->url_seeds()[0], "http://test.com/file");
 #endif
 		}
-		else if (std::string(test_torrents[i].file) == "url_seed_multi.torrent")
+		else if (t.file == "url_seed_multi.torrent"_sv)
 		{
 			TEST_EQUAL(ti->web_seeds().size(), 1);
 			TEST_EQUAL(ti->web_seeds()[0].url, "http://test.com/file/");
@@ -762,8 +763,13 @@ TORRENT_TEST(parse_torrents)
 			TEST_EQUAL(ti->url_seeds()[0], "http://test.com/file/");
 #endif
 		}
-		else if (std::string(test_torrents[i].file) == "url_seed_multi_space.torrent"
-			|| std::string(test_torrents[i].file) == "url_seed_multi_space_nolist.torrent")
+		else if (t.file == "url_seed_multi_single_file.torrent"_sv)
+		{
+			TEST_EQUAL(ti->web_seeds().size(), 1);
+			TEST_EQUAL(ti->web_seeds()[0].url, "http://test.com/file/temp/foo/bar.txt");
+		}
+		else if (t.file == "url_seed_multi_space.torrent"_sv
+			|| t.file == "url_seed_multi_space_nolist.torrent"_sv)
 		{
 			TEST_EQUAL(ti->web_seeds().size(), 1);
 			TEST_EQUAL(ti->web_seeds()[0].url, "http://test.com/test%20file/foo%20bar/");
@@ -773,14 +779,14 @@ TORRENT_TEST(parse_torrents)
 			TEST_EQUAL(ti->url_seeds()[0], "http://test.com/test%20file/foo%20bar/");
 #endif
 		}
-		else if (std::string(test_torrents[i].file) == "invalid_name2.torrent")
+		else if (t.file == "invalid_name2.torrent"_sv)
 		{
 			// if, after all invalid characters are removed from the name, it ends up
 			// being empty, it's set to the info-hash. Some torrents also have an empty name
 			// in which case it's also set to the info-hash
 			TEST_EQUAL(ti->name(), "b61560c2918f463768cd122b6d2fdd47b77bdb35");
 		}
-		else if (std::string(test_torrents[i].file) == "invalid_name3.torrent")
+		else if (t.file == "invalid_name3.torrent"_sv)
 		{
 			// windows does not allow trailing spaces in filenames
 #ifdef TORRENT_WINDOWS
@@ -789,42 +795,42 @@ TORRENT_TEST(parse_torrents)
 			TEST_EQUAL(ti->name(), "foobar ");
 #endif
 		}
-		else if (std::string(test_torrents[i].file) == "slash_path.torrent")
+		else if (t.file == "slash_path.torrent"_sv)
 		{
 			TEST_EQUAL(ti->num_files(), 1);
 			TEST_EQUAL(ti->files().file_path(file_index_t{0}), "temp" SEPARATOR "bar");
 		}
-		else if (std::string(test_torrents[i].file) == "slash_path2.torrent")
+		else if (t.file == "slash_path2.torrent"_sv)
 		{
 			TEST_EQUAL(ti->num_files(), 1);
 			TEST_EQUAL(ti->files().file_path(file_index_t{0}), "temp" SEPARATOR "abc....def" SEPARATOR "bar");
 		}
-		else if (std::string(test_torrents[i].file) == "slash_path3.torrent")
+		else if (t.file == "slash_path3.torrent"_sv)
 		{
 			TEST_EQUAL(ti->num_files(), 1);
 			TEST_EQUAL(ti->files().file_path(file_index_t{0}), "temp....abc");
 		}
-		else if (std::string(test_torrents[i].file) == "symlink_zero_size.torrent")
+		else if (t.file == "symlink_zero_size.torrent"_sv)
 		{
 			TEST_EQUAL(ti->num_files(), 2);
 			TEST_EQUAL(ti->files().symlink(file_index_t(1)), combine_path("foo", "bar"));
 		}
-		else if (std::string(test_torrents[i].file) == "pad_file_no_path.torrent")
+		else if (t.file == "pad_file_no_path.torrent"_sv)
 		{
 			TEST_EQUAL(ti->num_files(), 2);
 			TEST_EQUAL(ti->files().file_path(file_index_t{1}), combine_path(".pad", "0"));
 		}
-		else if (std::string(test_torrents[i].file) == "absolute_filename.torrent")
+		else if (t.file == "absolute_filename.torrent"_sv)
 		{
 			TEST_EQUAL(ti->num_files(), 2);
 			TEST_EQUAL(ti->files().file_path(file_index_t{0}), combine_path("temp", "abcde"));
 			TEST_EQUAL(ti->files().file_path(file_index_t{1}), combine_path("temp", "foobar"));
 		}
-		else if (std::string(test_torrents[i].file) == "invalid_filename.torrent")
+		else if (t.file == "invalid_filename.torrent"_sv)
 		{
 			TEST_EQUAL(ti->num_files(), 2);
 		}
-		else if (std::string(test_torrents[i].file) == "invalid_filename2.torrent")
+		else if (t.file == "invalid_filename2.torrent"_sv)
 		{
 			TEST_EQUAL(ti->num_files(), 3);
 		}
@@ -866,37 +872,87 @@ TORRENT_TEST(parse_torrents)
 
 namespace {
 
-void test_resolve_duplicates(int test_case)
+struct file_t
+{
+	std::string filename;
+	int size;
+	file_flags_t flags;
+	string_view expected_filename;
+};
+
+std::vector<lt::aux::vector<file_t, lt::file_index_t>> const test_cases
+{
+	{
+		{"test/temporary.txt", 0x4000, {}, "test/temporary.txt"},
+		{"test/Temporary.txt", 0x4000, {}, "test/Temporary.1.txt"},
+		{"test/TeMPorArY.txT", 0x4000, {}, "test/TeMPorArY.2.txT"},
+		// a file with the same name in a seprate directory is fine
+		{"test/test/TEMPORARY.TXT", 0x4000, {}, "test/test/TEMPORARY.TXT"},
+	},
+	{
+		{"test/b.exe", 0x4000, {}, "test/b.exe"},
+		// duplicate of b.exe
+		{"test/B.ExE", 0x4000, {}, "test/B.1.ExE"},
+		// duplicate of b.exe
+		{"test/B.exe", 0x4000, {}, "test/B.2.exe"},
+		{"test/filler", 0x4000, {}, "test/filler"},
+	},
+	{
+		{"test/A/tmp", 0x4000, {}, "test/A/tmp"},
+		// a file may not have the same name as a directory
+		{"test/a", 0x4000, {}, "test/a.1"},
+		// duplicate of directory a
+		{"test/A", 0x4000, {}, "test/A.2"},
+		{"test/filler", 0x4000, {}, "test/filler"},
+	},
+	{
+		// a subset of this path collides with the next filename
+		{"test/long/path/name/that/collides", 0x4000, {}, "test/long/path/name/that/collides"},
+		// so this file needs to be renamed, to not collide with the path name
+		{"test/long/path", 0x4000, {}, "test/long/path.1"},
+		{"test/filler-1", 0x4000, {}, "test/filler-1"},
+		{"test/filler-2", 0x4000, {}, "test/filler-2"},
+	},
+	{
+		// pad files are allowed to collide, as long as they have the same size
+		{"test/.pad/1234", 0x4000, file_storage::flag_pad_file, "test/.pad/1234"},
+		{"test/filler-1", 0x4000, {}, "test/filler-1"},
+		{"test/.pad/1234", 0x4000, file_storage::flag_pad_file, "test/.pad/1234"},
+		{"test/filler-2", 0x4000, {}, "test/filler-2"},
+	},
+	{
+		// pad files of different sizes are NOT allowed to collide
+		{"test/.pad/1234", 0x8000, file_storage::flag_pad_file, "test/.pad/1234"},
+		{"test/filler-1", 0x4000, {}, "test/filler-1"},
+		{"test/.pad/1234", 0x4000, file_storage::flag_pad_file, "test/.pad/1234.1"},
+		{"test/filler-2", 0x4000, {}, "test/filler-2"},
+	},
+	{
+		// pad files are NOT allowed to collide with normal files
+		{"test/.pad/1234", 0x4000, {}, "test/.pad/1234"},
+		{"test/filler-1", 0x4000, {}, "test/filler-1"},
+		{"test/.pad/1234", 0x4000, file_storage::flag_pad_file, "test/.pad/1234.1"},
+		{"test/filler-2", 0x4000, {}, "test/filler-2"},
+	},
+	{
+		// normal files are NOT allowed to collide with pad files
+		{"test/.pad/1234", 0x4000, file_storage::flag_pad_file, "test/.pad/1234"},
+		{"test/filler-1", 0x4000, {}, "test/filler-1"},
+		{"test/.pad/1234", 0x4000, {}, "test/.pad/1234.1"},
+		{"test/filler-2", 0x4000, {}, "test/filler-2"},
+	},
+	{
+		// pad files are NOT allowed to collide with directories
+		{"test/.pad/1234", 0x4000, file_storage::flag_pad_file, "test/.pad/1234.1"},
+		{"test/filler-1", 0x4000, {}, "test/filler-1"},
+		{"test/.pad/1234/filler-2", 0x4000, {}, "test/.pad/1234/filler-2"},
+	},
+};
+
+void test_resolve_duplicates(aux::vector<file_t, file_index_t> const& test)
 {
 	file_storage fs;
-
-	switch (test_case)
-	{
-		case 0:
-			fs.add_file("test/temporary.txt", 0x4000);
-			fs.add_file("test/Temporary.txt", 0x4000);
-			fs.add_file("test/TeMPorArY.txT", 0x4000);
-			fs.add_file("test/test/TEMPORARY.TXT", 0x4000);
-			break;
-		case 1:
-			fs.add_file("test/b.exe", 0x4000);
-			fs.add_file("test/B.ExE", 0x4000);
-			fs.add_file("test/B.exe", 0x4000);
-			fs.add_file("test/filler", 0x4000);
-			break;
-		case 2:
-			fs.add_file("test/A/tmp", 0x4000);
-			fs.add_file("test/a", 0x4000);
-			fs.add_file("test/A", 0x4000);
-			fs.add_file("test/filler", 0x4000);
-			break;
-		case 3:
-			fs.add_file("test/long/path/name/that/collides", 0x4000);
-			fs.add_file("test/long/path", 0x4000);
-			fs.add_file("test/filler-1", 0x4000);
-			fs.add_file("test/filler-2", 0x4000);
-			break;
-	}
+	for (auto const& f : test) fs.add_file(f.filename, f.size, f.flags);
 
 	lt::create_torrent t(fs, 0x4000);
 
@@ -912,45 +968,13 @@ void test_resolve_duplicates(int test_case)
 	bencode(out, tor);
 
 	torrent_info ti(tmp, from_span);
-
-	aux::vector<aux::vector<char const*, file_index_t>> const filenames
-	{
-		{ // case 0
-			"test/temporary.txt",
-			"test/Temporary.1.txt", // duplicate of temporary.txt
-			"test/TeMPorArY.2.txT", // duplicate of temporary.txt
-			// a file with the same name in a seprate directory is fine
-			"test/test/TEMPORARY.TXT",
-		},
-		{ // case 1
-			"test/b.exe",
-			"test/B.1.ExE", // duplicate of b.exe
-			"test/B.2.exe", // duplicate of b.exe
-			"test/filler",
-		},
-		{ // case 2
-			"test/A/tmp",
-			"test/a.1", // a file may not have the same name as a directory
-			"test/A.2", // duplicate of directory a
-			"test/filler",
-		},
-		{ // case 3
-			// a subset of this path collides with the next filename
-			"test/long/path/name/that/collides",
-			// so this file needs to be renamed, to not collide with the path name
-			"test/long/path.1",
-			"test/filler-1",
-			"test/filler-2",
-		}
-	};
-
 	for (auto const i : fs.file_range())
 	{
 		std::string p = ti.files().file_path(i);
 		convert_path_to_posix(p);
-		std::printf("%s == %s\n", p.c_str(), filenames[test_case][i]);
+		std::printf("%s == %s\n", p.c_str(), test[i].expected_filename.to_string().c_str());
 
-		TEST_EQUAL(p, filenames[test_case][i]);
+		TEST_EQUAL(p, test[i].expected_filename);
 	}
 }
 
@@ -958,8 +982,8 @@ void test_resolve_duplicates(int test_case)
 
 TORRENT_TEST(resolve_duplicates)
 {
-	for (int i = 0; i < 4; ++i)
-		test_resolve_duplicates(i);
+	for (auto const& t : test_cases)
+		test_resolve_duplicates(t);
 }
 
 TORRENT_TEST(empty_file)

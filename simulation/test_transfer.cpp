@@ -85,12 +85,12 @@ void run_test(
 	// setup the simulation
 	sim::default_config network_cfg;
 	sim::simulation sim{network_cfg};
-	sim::asio::io_service ios0 { sim, peer0 };
-	sim::asio::io_service ios1 { sim, peer1 };
+	sim::asio::io_context ios0 { sim, peer0 };
+	sim::asio::io_context ios1 { sim, peer1 };
 
 	lt::session_proxy zombie[2];
 
-	sim::asio::io_service proxy_ios{sim, proxy };
+	sim::asio::io_context proxy_ios{sim, proxy };
 	sim::socks_server socks4(proxy_ios, 4444, 4);
 	sim::socks_server socks5(proxy_ios, 5555, 5);
 
@@ -140,7 +140,7 @@ void run_test(
 	params.save_path = save_path(1);
 	ses[1]->async_add_torrent(params);
 
-	sim::timer t(sim, lt::seconds(60), [&](boost::system::error_code const& ec)
+	sim::timer t(sim, lt::seconds(60), [&](boost::system::error_code const&)
 	{
 		test(ses);
 
@@ -333,39 +333,6 @@ TORRENT_TEST(no_proxy_utp_banned)
 		[](lt::session&, lt::alert const*) {},
 		[](std::shared_ptr<lt::session> ses[2]) {
 			TEST_EQUAL(is_seed(*ses[0]), false);
-		}
-	);
-}
-
-TORRENT_TEST(auto_disk_cache_size)
-{
-	using namespace lt;
-	run_test(
-		[](lt::session& ses0, lt::session&) { set_cache_size(ses0, -1); },
-		[](lt::session&, lt::alert const*) {},
-		[](std::shared_ptr<lt::session> ses[2]) {
-			TEST_EQUAL(is_seed(*ses[0]), true);
-
-			int const cache_size = get_cache_size(*ses[0]);
-			std::printf("cache size: %d\n", cache_size);
-			// this assumes the test torrent is at least 4 blocks
-			TEST_CHECK(cache_size > 4);
-		}
-	);
-}
-
-TORRENT_TEST(disable_disk_cache)
-{
-	using namespace lt;
-	run_test(
-		[](lt::session& ses0, lt::session&) { set_cache_size(ses0, 0); },
-		[](lt::session&, lt::alert const*) {},
-		[](std::shared_ptr<lt::session> ses[2]) {
-			TEST_EQUAL(is_seed(*ses[0]), true);
-
-			int const cache_size = get_cache_size(*ses[0]);
-			std::printf("cache size: %d\n", cache_size);
-			TEST_EQUAL(cache_size, 0);
 		}
 	);
 }

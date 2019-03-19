@@ -177,10 +177,8 @@ std::tuple<int, int, int> routing_table::size() const
 	for (auto const& i : m_buckets)
 	{
 		nodes += int(i.live_nodes.size());
-		for (auto const& k : i.live_nodes)
-		{
-			if (k.confirmed()) ++confirmed;
-		}
+		confirmed += static_cast<int>(std::count_if(i.live_nodes.begin(), i.live_nodes.end()
+			, [](node_entry const& k) { return k.confirmed(); } ));
 
 		replacements += int(i.replacements.size());
 	}
@@ -328,7 +326,7 @@ bool compare_ip_cidr(address const& lhs, address const& rhs)
 		// if IPv4 addresses is in the same /24, they're too close and we won't
 		// trust the second one
 		std::uint32_t const mask
-			= std::uint32_t(lhs.to_v4().to_ulong() ^ rhs.to_v4().to_ulong());
+			= std::uint32_t(lhs.to_v4().to_uint() ^ rhs.to_v4().to_uint());
 		return mask <= 0x000000ff;
 	}
 }

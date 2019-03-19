@@ -58,8 +58,8 @@ void run_test(Setup const& setup, Test const& test)
 
 	sim::default_config network_cfg;
 	sim::simulation sim{network_cfg};
-	auto ios = std::unique_ptr<sim::asio::io_service>(new sim::asio::io_service(
-		sim, lt::address_v4::from_string("50.0.0.1")));
+	auto ios = std::make_unique<sim::asio::io_context>(
+		sim, lt::make_address_v4("50.0.0.1"));
 	lt::session_proxy zombie;
 
 	// setup settings pack to use for the session (customization point)
@@ -89,7 +89,7 @@ TORRENT_TEST(no_truncate_checking)
 	std::string filename;
 	int size = 0;
 	run_test(
-		[&](lt::add_torrent_params& atp, lt::settings_pack& p) {
+		[&](lt::add_torrent_params& atp, lt::settings_pack&) {
 			filename = lt::combine_path(atp.save_path, atp.ti->files().file_path(lt::file_index_t{0}));
 			std::ofstream f(filename);
 			// create a file that's 100 bytes larger
@@ -97,7 +97,7 @@ TORRENT_TEST(no_truncate_checking)
 			std::vector<char> dummy(size);
 			f.write(dummy.data(), dummy.size());
 		},
-		[](lt::session& ses) {}
+		[](lt::session&) {}
 		);
 
 	// file should not have been truncated just by checking
@@ -116,7 +116,6 @@ std::shared_ptr<lt::torrent_info> create_multifile_torrent()
 	lt::create_torrent t(fs, 0x40000, -1, {});
 
 	// calculate the hash for all pieces
-	lt::error_code ec;
 	set_piece_hashes(t, ".");
 
 	std::vector<char> buf;
@@ -127,7 +126,7 @@ std::shared_ptr<lt::torrent_info> create_multifile_torrent()
 TORRENT_TEST(aligned_zero_priority)
 {
 	run_test(
-		[&](lt::add_torrent_params& atp, lt::settings_pack& p) {
+		[&](lt::add_torrent_params& atp, lt::settings_pack&) {
 			atp.file_priorities.push_back(lt::download_priority_t{1});
 			atp.file_priorities.push_back(lt::download_priority_t{0});
 			atp.ti = create_multifile_torrent();
@@ -147,7 +146,7 @@ TORRENT_TEST(aligned_zero_priority_no_file)
 {
 	std::string partfile;
 	run_test(
-		[&](lt::add_torrent_params& atp, lt::settings_pack& p) {
+		[&](lt::add_torrent_params& atp, lt::settings_pack&) {
 			atp.ti = create_multifile_torrent();
 			atp.save_path = ".";
 			atp.file_priorities.push_back(lt::download_priority_t{1});
@@ -181,7 +180,7 @@ TORRENT_TEST(zero_priority_missing_partfile)
 {
 	std::shared_ptr<lt::torrent_info> ti = create_multifile_torrent();
 	run_test(
-		[&](lt::add_torrent_params& atp, lt::settings_pack& p) {
+		[&](lt::add_torrent_params& atp, lt::settings_pack&) {
 			atp.ti = ti;
 			atp.save_path = ".";
 			atp.file_priorities.push_back(lt::download_priority_t{1});
@@ -204,75 +203,16 @@ TORRENT_TEST(zero_priority_missing_partfile)
 	);
 }
 
-TORRENT_TEST(cache_after_checking)
+TORRENT_TEST(checking)
 {
 	run_test(
 		[](lt::add_torrent_params& atp, lt::settings_pack& p) {
 			atp.flags |= lt::torrent_flags::auto_managed;
+#if TORRENT_ABI_VERSION == 1
 			p.set_int(lt::settings_pack::cache_size, 100);
+#endif
 		},
 		[](lt::session& ses) {
-			int const cache = get_cache_size(ses);
-			TEST_CHECK(cache > 0);
-
-			std::vector<lt::torrent_handle> tor = ses.get_torrents();
-			TEST_EQUAL(tor.size(), 1);
-
-			TEST_EQUAL(tor[0].status().is_seeding, true);
-		});
-}
-
-TORRENT_TEST(checking_no_cache)
-{
-	run_test(
-		[](lt::add_torrent_params& atp, lt::settings_pack& p) {
-			atp.flags |= lt::torrent_flags::auto_managed;
-			p.set_int(lt::settings_pack::cache_size, 0);
-		},
-		[](lt::session& ses) {
-			int const cache = get_cache_size(ses);
-			TEST_EQUAL(cache, 0);
-
-			std::vector<lt::torrent_handle> tor = ses.get_torrents();
-			TEST_EQUAL(tor.size(), 1);
-
-			TEST_EQUAL(tor[0].status().is_seeding, true);
-		});
-}
-
-TORRENT_TEST(checking_limit_volatile)
-{
-	run_test(
-		[](lt::add_torrent_params& atp, lt::settings_pack& p) {
-			atp.flags |= lt::torrent_flags::auto_managed;
-			p.set_int(lt::settings_pack::cache_size, 300);
-			p.set_int(lt::settings_pack::cache_size_volatile, 2);
-		},
-		[](lt::session& ses) {
-			int const cache = get_cache_size(ses);
-			// the cache fits 300 blocks, but only allows two volatile blocks
-			TEST_EQUAL(cache, 2);
-
-			std::vector<lt::torrent_handle> tor = ses.get_torrents();
-			TEST_EQUAL(tor.size(), 1);
-
-			TEST_EQUAL(tor[0].status().is_seeding, true);
-		});
-}
-
-TORRENT_TEST(checking_volatile_limit_cache_size)
-{
-	run_test(
-		[](lt::add_torrent_params& atp, lt::settings_pack& p) {
-			atp.flags |= lt::torrent_flags::auto_managed;
-			p.set_int(lt::settings_pack::cache_size, 10);
-			p.set_int(lt::settings_pack::cache_size_volatile, 300);
-		},
-		[](lt::session& ses) {
-			int const cache = get_cache_size(ses);
-			// the cache allows 300 volatile blocks, but only fits 2 blocks
-			TEST_CHECK(cache > 0);
-			TEST_CHECK(cache <= 10);
 
 			std::vector<lt::torrent_handle> tor = ses.get_torrents();
 			TEST_EQUAL(tor.size(), 1);
