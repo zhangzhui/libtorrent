@@ -3,6 +3,7 @@
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 
 #include "boost_python.hpp"
+#include "bytes.hpp"
 #include <libtorrent/peer_info.hpp>
 #include <libtorrent/bitfield.hpp>
 #include <boost/python/iterator.hpp>
@@ -47,6 +48,11 @@ list get_pieces(peer_info const& pi)
     return ret;
 }
 
+bytes get_peer_info_client(peer_info const& pi)
+{
+	return pi.client;
+}
+
 using by_value = return_value_policy<return_by_value>;
 void bind_peer_info()
 {
@@ -87,8 +93,8 @@ void bind_peer_info()
         .add_property("downloading_block_index", make_getter(&peer_info::downloading_block_index, by_value()))
         .def_readonly("downloading_progress", &peer_info::downloading_progress)
         .def_readonly("downloading_total", &peer_info::downloading_total)
-        .def_readonly("client", &peer_info::client)
-        .def_readonly("connection_type", &peer_info::connection_type)
+        .add_property("client", get_peer_info_client)
+        .add_property("connection_type", make_getter(&peer_info::connection_type, by_value()))
         .def_readonly("pending_disk_bytes", &peer_info::pending_disk_bytes)
         .def_readonly("send_quota", &peer_info::send_quota)
         .def_readonly("receive_quota", &peer_info::receive_quota)
@@ -98,8 +104,13 @@ void bind_peer_info()
         .def_readonly("upload_rate_peak", &peer_info::upload_rate_peak)
         .def_readonly("progress", &peer_info::progress)
         .def_readonly("progress_ppm", &peer_info::progress_ppm)
+#if TORRENT_ABI_VERSION == 1
         .def_readonly("estimated_reciprocation_rate", &peer_info::estimated_reciprocation_rate)
+#endif
         .add_property("local_endpoint", get_local_endpoint)
+#if TORRENT_USE_I2P
+        .def("i2p_destination", &peer_info::i2p_destination)
+#endif
         ;
 
     // flags
@@ -109,8 +120,10 @@ void bind_peer_info()
     pi.attr("remote_choked") = peer_info::remote_choked;
     pi.attr("supports_extensions") = peer_info::supports_extensions;
     pi.attr("local_connection") = peer_info::local_connection;
+    pi.attr("outgoing_connection") = peer_info::outgoing_connection;
     pi.attr("handshake") = peer_info::handshake;
     pi.attr("connecting") = peer_info::connecting;
+    pi.attr("i2p_socket") = peer_info::i2p_socket;
 #if TORRENT_ABI_VERSION == 1
     pi.attr("queued") = peer_info::queued;
 #endif
@@ -127,8 +140,9 @@ void bind_peer_info()
 #endif
 
     // connection_type
-    pi.attr("standard_bittorrent") = (int)peer_info::standard_bittorrent;
-    pi.attr("web_seed") = (int)peer_info::web_seed;
+    pi.attr("standard_bittorrent") = peer_info::standard_bittorrent;
+    pi.attr("web_seed") = peer_info::web_seed;
+    pi.attr("http_seed") = peer_info::http_seed;
 
     // source
     pi.attr("tracker") = peer_info::tracker;

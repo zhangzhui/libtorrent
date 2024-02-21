@@ -1,59 +1,37 @@
 /*
 
-Copyright (c) 2015, Arvid Norberg
+Copyright (c) 2015-2017, 2019-2021, Arvid Norberg
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2018, 2020-2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
-#include "libtorrent/ip_voter.hpp"
+#include "libtorrent/aux_/ip_voter.hpp"
 #include "libtorrent/address.hpp"
 #include "libtorrent/socket.hpp"
-#include "libtorrent/random.hpp"
-#include "libtorrent/socket_io.hpp"
+#include "libtorrent/aux_/random.hpp"
+#include "libtorrent/aux_/socket_io.hpp"
 #include "libtorrent/aux_/session_interface.hpp"
-#include "libtorrent/broadcast_socket.hpp" // for supports_ipv6()
-#include "setup_transfer.hpp" // for rand_v4
+#include "setup_transfer.hpp" // for rand_v4, supports_ipv6
 
 using namespace lt;
 
 namespace {
 
-bool cast_vote(ip_voter& ipv, address ext_ip, address voter)
+bool cast_vote(aux::ip_voter& ipv, address ext_ip, address voter)
 {
 	bool new_ip = ipv.cast_vote(ext_ip, aux::session_interface::source_dht, voter);
 	std::printf("%15s -> %-15s\n"
-		, print_address(voter).c_str()
-		, print_address(ext_ip).c_str());
+		, aux::print_address(voter).c_str()
+		, aux::print_address(ext_ip).c_str());
 	if (new_ip)
 	{
 		std::printf("   \x1b[1mnew external IP: %s\x1b[0m\n"
-			, print_address(ipv.external_address()).c_str());
+			, aux::print_address(ipv.external_address()).c_str());
 	}
 	return new_ip;
 }
@@ -66,7 +44,7 @@ TORRENT_TEST(test_random)
 {
 	init_rand_address();
 
-	ip_voter ipv;
+	aux::ip_voter ipv;
 
 	address_v4 addr1(make_address_v4("51.41.61.132"));
 
@@ -85,7 +63,7 @@ TORRENT_TEST(two_ips)
 {
 	init_rand_address();
 
-	ip_voter ipv;
+	aux::ip_voter ipv;
 
 	address_v4 addr1(make_address_v4("51.1.1.1"));
 	address_v4 addr2(make_address_v4("53.3.3.3"));
@@ -112,7 +90,7 @@ TORRENT_TEST(one_ip)
 {
 	init_rand_address();
 
-	ip_voter ipv;
+	aux::ip_voter ipv;
 
 	address_v4 start_addr(make_address_v4("93.12.63.174"));
 	address_v4 addr1(make_address_v4("51.1.1.1"));
@@ -157,7 +135,7 @@ TORRENT_TEST(ip_voter_1)
 	init_rand_address();
 
 	// test external ip voting
-	ip_voter ipv1;
+	aux::ip_voter ipv1;
 
 	// test a single malicious node
 	// adds 50 legitimate responses from different peers
@@ -179,7 +157,7 @@ TORRENT_TEST(ip_voter_2)
 {
 	init_rand_address();
 
-	ip_voter ipv2,ipv6;
+	aux::ip_voter ipv2,ipv6;
 
 	// test a single malicious node
 	// adds 50 legitimate responses from different peers
@@ -219,4 +197,3 @@ TORRENT_TEST(ip_voter_2)
 	if (supports_ipv6())
 		TEST_CHECK(ipv6.external_address() == real_external2);
 }
-

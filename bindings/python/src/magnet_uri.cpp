@@ -5,7 +5,7 @@
 #include "boost_python.hpp"
 #include "bytes.hpp"
 #include <libtorrent/session.hpp>
-#include <libtorrent/torrent.hpp>
+#include <libtorrent/aux_/torrent.hpp>
 #include <libtorrent/magnet_uri.hpp>
 #include "gil.hpp"
 #include "bytes.hpp"
@@ -20,9 +20,17 @@ namespace {
 #if TORRENT_ABI_VERSION == 1
 	torrent_handle _add_magnet_uri(lt::session& s, std::string uri, dict params)
 	{
+        python_deprecated("add_magnet_uri() is deprecated");
 		add_torrent_params p;
 
 		dict_to_add_torrent_params(params, p);
+
+		if (p.save_path.empty())
+		{
+			PyErr_SetString(PyExc_KeyError,
+				"save_path must be set in add_torrent_params");
+			throw_error_already_set();
+		}
 
 		allow_threading_guard guard;
 
@@ -39,6 +47,7 @@ namespace {
 
 	dict parse_magnet_uri_dict(std::string const& uri)
 	{
+		python_deprecated("parse_magnet_uri_dict() is deprecated");
 		error_code ec;
 		add_torrent_params p = parse_magnet_uri(uri, ec);
 
@@ -57,13 +66,18 @@ namespace {
 		for (auto const& i : p.dht_nodes)
 			nodes_list.append(boost::python::make_tuple(i.first, i.second));
 		ret["dht_nodes"] =  nodes_list;
-		ret["info_hash"] = bytes(p.info_hash.to_string());
+		if (p.info_hashes.has_v2())
+			ret["info_hashes"] = bytes(p.info_hashes.v2.to_string());
+		else
+			ret["info_hashes"] = bytes(p.info_hashes.v1.to_string());
+#if TORRENT_ABI_VERSION < 3
+		ret["info_hash"] = bytes(p.info_hashes.get_best().to_string());
+#endif
 		ret["name"] = p.name;
 		ret["save_path"] = p.save_path;
 		ret["storage_mode"] = p.storage_mode;
 #if TORRENT_ABI_VERSION == 1
 		ret["url"] = p.url;
-		ret["uuid"] = p.uuid;
 #endif
 		ret["flags"] = p.flags;
 		return ret;
@@ -79,6 +93,7 @@ namespace {
 
 	std::string (*make_magnet_uri0)(torrent_handle const&) = make_magnet_uri;
 	std::string (*make_magnet_uri1)(torrent_info const&) = make_magnet_uri;
+	std::string (*make_magnet_uri2)(add_torrent_params const&) = make_magnet_uri;
 }
 
 void bind_magnet_uri()
@@ -88,6 +103,7 @@ void bind_magnet_uri()
 #endif
 	def("make_magnet_uri", make_magnet_uri0);
 	def("make_magnet_uri", make_magnet_uri1);
+	def("make_magnet_uri", make_magnet_uri2);
 	def("parse_magnet_uri", parse_magnet_uri_wrap);
 	def("parse_magnet_uri_dict", parse_magnet_uri_dict);
 }

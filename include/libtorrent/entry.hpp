@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2003-2009, 2013-2020, Arvid Norberg
+Copyright (c) 2016-2017, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_ENTRY_HPP_INCLUDED
@@ -66,6 +44,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <vector>
 #include <stdexcept>
 #include <cstdint>
+#include <variant>
 #if TORRENT_USE_IOSTREAM
 #include <iosfwd>
 #endif
@@ -74,33 +53,61 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/span.hpp"
 #include "libtorrent/string_view.hpp"
-#include "libtorrent/aux_/aligned_union.hpp"
+#include "libtorrent/aux_/noexcept_movable.hpp"
 #include "libtorrent/aux_/strview_less.hpp"
+
+#include "libtorrent/aux_/disable_warnings_push.hpp"
+#include <boost/container/map.hpp>
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
 
 namespace libtorrent {
 
 #if TORRENT_ABI_VERSION == 1
-	struct lazy_entry;
 	// backwards compatibility
 	using type_error = system_error;
 #endif
 	struct bdecode_node;
+	struct entry;
 
-	// The ``entry`` class represents one node in a bencoded hierarchy. It works as a
-	// variant type, it can be either a list, a dictionary (``std::map``), an integer
-	// or a string.
-	class TORRENT_EXPORT entry
-	{
-	public:
+	namespace entry_types {
 
-		// the key is always a string. If a generic entry would be allowed
-		// as a key, sorting would become a problem (e.g. to compare a string
-		// to a list). The definition doesn't mention such a limit though.
-		using dictionary_type = std::map<std::string, entry, aux::strview_less>;
+		using dictionary_type = boost::container::map<std::string, entry, aux::strview_less>;
 		using string_type = std::string;
 		using list_type = std::vector<entry>;
 		using integer_type = std::int64_t;
 		using preformatted_type = std::vector<char>;
+		struct uninitialized_type {
+			bool operator==(uninitialized_type const&) const { return true; }
+		};
+
+		// internal
+		using variant_type = std::variant<integer_type
+			, string_type
+			, list_type
+			, dictionary_type
+			, preformatted_type
+			, uninitialized_type>;
+
+		static_assert(std::is_nothrow_move_constructible<variant_type>::value
+			, "expected variant to be nothrow move constructible");
+	}
+
+	// The ``entry`` class represents one node in a bencoded hierarchy. It works as a
+	// variant type, it can be either a list, a dictionary (``std::map``), an integer
+	// or a string.
+	struct TORRENT_EXPORT entry : entry_types::variant_type
+	{
+		// the key is always a string. If a generic entry would be allowed
+		// as a key, sorting would become a problem (e.g. to compare a string
+		// to a list). The definition doesn't mention such a limit though.
+		using dictionary_type = entry_types::dictionary_type;
+		using string_type = entry_types::string_type;
+		using list_type = entry_types::list_type;
+		using integer_type = entry_types::integer_type;
+		using preformatted_type = entry_types::preformatted_type;
+		using uninitialized_type = entry_types::uninitialized_type;
+
+		using variant_type = entry_types::variant_type;
 
 		// the types an entry can have
 		enum data_type
@@ -109,8 +116,8 @@ namespace libtorrent {
 			string_t,
 			list_t,
 			dictionary_t,
+			preformatted_t,
 			undefined_t,
-			preformatted_t
 		};
 
 		// returns the concrete type of the entry
@@ -121,22 +128,18 @@ namespace libtorrent {
 		// newly constructed entry
 		entry(dictionary_type); // NOLINT
 		entry(span<char const>); // NOLINT
-		template <typename U, typename Cond = typename std::enable_if<
-			std::is_same<U, entry::string_type>::value
-			|| std::is_same<U, string_view>::value
-			|| std::is_same<U, char const*>::value>::type>
-		entry(U v) // NOLINT
-			: m_type(undefined_t)
-		{
-#if TORRENT_USE_ASSERTS
-			m_type_queried = true;
-#endif
-			new(&data) string_type(std::move(v));
-			m_type = string_t;
-		}
+		entry(string_view); // NOLINT
+		entry(string_type); // NOLINT
 		entry(list_type); // NOLINT
 		entry(integer_type); // NOLINT
 		entry(preformatted_type); // NOLINT
+
+		// hidden
+		// this is here to disambiguate between std::string and string_view. It
+		// needs to be a template to prevent implicit conversions from literal 0
+		template <typename U, typename Cond = typename std::enable_if<
+			std::is_same<U, char const*>::value>::type>
+		entry(U v);
 
 		// construct an empty entry of the specified type.
 		// see data_type enum.
@@ -151,36 +154,27 @@ namespace libtorrent {
 
 		// hidden
 		entry();
-
-		// hidden
 		~entry();
 
 		// copies the structure of the right hand side into this
 		// entry.
-#if TORRENT_ABI_VERSION == 1
-		entry& operator=(lazy_entry const&) &;
-#endif
 		entry& operator=(bdecode_node const&) &;
 		entry& operator=(entry const&) &;
-		entry& operator=(entry&&) & noexcept;
+		entry& operator=(entry&&) & ;
 		entry& operator=(dictionary_type) &;
 		entry& operator=(span<char const>) &;
-		template <typename U, typename Cond = typename std::enable_if<
-			std::is_same<U, entry::string_type>::value
-			|| std::is_same<U, char const*>::value>::type>
-		entry& operator=(U v) &
-		{
-			destruct();
-			new(&data) string_type(std::move(v));
-			m_type = string_t;
-#if TORRENT_USE_ASSERTS
-			m_type_queried = true;
-#endif
-			return *this;
-		}
+		entry& operator=(string_view) &;
+		entry& operator=(string_type) &;
 		entry& operator=(list_type) &;
 		entry& operator=(integer_type) &;
 		entry& operator=(preformatted_type) &;
+
+		// hidden
+		// this is here to disambiguate between std::string and string_view. It
+		// needs to be a template to prevent implicit conversions from literal 0
+		template <typename U, typename Cond = typename std::enable_if<
+			std::is_same<U, char const*>::value>::type>
+		entry& operator=(U v) &;
 
 		// The ``integer()``, ``string()``, ``list()`` and ``dict()`` functions
 		// are accessors that return the respective type. If the ``entry`` object
@@ -230,18 +224,18 @@ namespace libtorrent {
 		// To make it easier to extract information from a torrent file, the
 		// class torrent_info exists.
 		integer_type& integer();
-		const integer_type& integer() const;
+		integer_type const& integer() const;
 		string_type& string();
-		const string_type& string() const;
+		string_type const& string() const;
 		list_type& list();
-		const list_type& list() const;
+		list_type const& list() const;
 		dictionary_type& dict();
-		const dictionary_type& dict() const;
+		dictionary_type const& dict() const;
 		preformatted_type& preformatted();
-		const preformatted_type& preformatted() const;
+		preformatted_type const& preformatted() const;
 
 		// swaps the content of *this* with ``e``.
-		void swap(entry& e);
+		using variant_type::swap;
 
 		// All of these functions requires the entry to be a dictionary, if it
 		// isn't they will throw ``system_error``.
@@ -255,7 +249,7 @@ namespace libtorrent {
 		// existing element at the given key. If the key is not found, it will
 		// throw ``system_error``.
 		entry& operator[](string_view key);
-		const entry& operator[](string_view key) const;
+		entry const& operator[](string_view key) const;
 
 		// These functions requires the entry to be a dictionary, if it isn't
 		// they will throw ``system_error``.
@@ -270,50 +264,30 @@ namespace libtorrent {
 		// of the bencoded structure, with JSON-style syntax
 		std::string to_string(bool single_line = false) const;
 
-	protected:
-
-		void construct(data_type t);
-		void copy(const entry& e);
-		void destruct();
-
 	private:
 
-		aux::aligned_union<1
-#if TORRENT_COMPLETE_TYPES_REQUIRED
-			// for implementations that require complete types, use char and hope
-			// for the best
-			, std::list<char>
-			, std::map<std::string, char>
-#else
-			, list_type
-			, dictionary_type
-#endif
-			, preformatted_type
-			, string_type
-			, integer_type
-		>::type data;
-
-		// the bitfield is used so that the m_type_queried field still fits, so
-		// that the ABI is the same for debug builds and release builds. It
-		// appears to be very hard to match debug builds with debug versions of
-		// libtorrent
-		std::uint8_t m_type:7;
-
-	public:
-		// in debug mode this is set to false by bdecode to indicate that the
-		// program has not yet queried the type of this entry, and should not
-		// assume that it has a certain type. This is asserted in the accessor
-		// functions. This does not apply if exceptions are used.
-		mutable std::uint8_t m_type_queried:1;
+		template <typename T> T& get();
+		template <typename T> T const& get() const;
 	};
 
+	// hidden
 	TORRENT_EXPORT bool operator==(entry const& lhs, entry const& rhs);
 	inline bool operator!=(entry const& lhs, entry const& rhs) { return !(lhs == rhs); }
 
-namespace detail {
+	// hidden
+	// explicit template declaration
+	extern template
+	entry::entry(char const*);
+
+	// hidden
+	// explicit template declaration
+	extern template
+	entry& entry::operator=(char const*) &;
+
+namespace aux {
 
 	// internal
-	TORRENT_EXPORT string_view integer_to_str(span<char> buf
+	TORRENT_EXPORT string_view integer_to_str(std::array<char, 21>& buf
 		, entry::integer_type val);
 }
 

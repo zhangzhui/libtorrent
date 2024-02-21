@@ -1,34 +1,47 @@
-.. include:: header.rst
-
 .. raw:: html
 
    <div id="librarySidebar">
 
+Getting started
+
 * download_
-* features_
-* tutorial_
-* examples_
-* overview_
-* documentation_
-* `libtorrent 1.2`_
-* contributing_
 * building_
+* tutorial_
+* overview_
+* examples_
+* features_
+
+--------
+
+Documentation
+
+* reference_
+* `blog`_
+* `upgrade to 2.1`_
+* `upgrade to 2.0`_
+* `upgrade to 1.2`_
+* contributing_
 * troubleshooting_
-* `tuning`_
-* screenshot_
+* tuning_
+* fuzzing_
+* `security audit (2020)`_
+* `projects using libtorrent`_
+
+--------
+
+Contact
+
 * `mailing list`_ (archive_)
-* `who's using libtorrent?`_
 * `report bugs`_
 * `github page`_
-* `blog`_
 
 --------
 
 Extensions
 
-* `uTP`_
+* uTP_
 * `extensions protocol`_
-* `plugin interface`_
+* `libtorrent plugins`_
 * `streaming`_
 * `DHT extensions`_
 * `DHT security extension`_
@@ -43,7 +56,7 @@ Bindings
 
 * python_
 * Java_
-* go_
+* golang_
 * node_
 
 --------
@@ -55,45 +68,47 @@ Bindings
    </div>
    <div id="libraryBody">
 
-==========
-libtorrent
-==========
-
 .. _download: https://github.com/arvidn/libtorrent/releases
-.. _features: features.html
-.. _tutorial: tutorial.html
+.. _features: features-ref.html
+.. _tutorial: tutorial-ref.html
 .. _contributing: contributing.html
 .. _building: building.html
 .. _examples: examples.html
 .. _overview: manual-ref.html
-.. _documentation: reference.html
-.. _`libtorrent 1.2`: upgrade_to_1.2-ref.html
+.. _reference: reference.html
+.. _`upgrade to 2.1`: upgrade_to_2.1-ref.html
+.. _`upgrade to 2.0`: upgrade_to_2.0-ref.html
+.. _`upgrade to 1.2`: upgrade_to_1.2-ref.html
 .. _troubleshooting: troubleshooting.html
-.. _`tuning`: tuning.html
-.. _screenshot: client_test.png
-.. _`uTP`: utp.html
+.. _tuning: tuning-ref.html
+.. _fuzzing: fuzzing.html
+.. _`security audit (2020)`: security-audit.html
+.. _uTP: utp.html
 .. _`extensions protocol`: extension_protocol.html
-.. _`plugin interface`: reference-Plugins.html
+.. _`libtorrent plugins`: reference-Plugins.html
 .. _`streaming`: streaming.html
 .. _`DHT extensions`: dht_extensions.html
 .. _`DHT security extension`: dht_sec.html
 .. _`DHT store extension`: dht_store.html
 .. _`UDP tracker protocol`: udp_tracker_protocol.html
 .. _`HTTP seed`: http://www.getright.com/seedtorrent.html
-.. _multi-tracker: https://bittorrent.org/beps/bep_0012.html
+.. _multi-tracker: https://www.bittorrent.org/beps/bep_0012.html
 .. _mailing list: https://lists.sourceforge.net/lists/listinfo/libtorrent-discuss
 .. _archive: https://sourceforge.net/p/libtorrent/mailman/libtorrent-discuss/
-.. _`who's using libtorrent?`: projects.html
+.. _`projects using libtorrent`: projects.html
 .. _`report bugs`: https://github.com/arvidn/libtorrent/issues
 .. _`github page`: https://github.com/arvidn/libtorrent
 .. _blog: https://blog.libtorrent.org
 
 .. _Java: https://github.com/frostwire/frostwire-jlibtorrent/
 .. _python: python_binding.html
-.. _go: https://github.com/steeve/libtorrent-go
+.. _golang: https://github.com/steeve/libtorrent-go
 .. _node: https://github.com/fanatid/node-libtorrent
 
 .. _`Introduction, slides`: bittorrent.pdf
+
+introduction
+============
 
 libtorrent is a feature complete C++ bittorrent implementation focusing
 on efficiency and scalability. It runs on embedded devices as well as
@@ -103,13 +118,20 @@ the library.
 
 __ client_test.html
 
+.. image:: img/screenshot_thumb.png
+	:target: client_test.html
+	:alt: screenshot of libtorrent's client_test
+	:class: front-page-screenshot
+	:width: 400
+	:height: 239
+
 The main goals of libtorrent are:
 
 * to be CPU efficient
 * to be memory efficient
 * to be very easy to use
 
-Getting started
+getting started
 ===============
 
 The tutorial_ is an introduction to using libtorrent (C++). Also see the
@@ -117,26 +139,24 @@ The tutorial_ is an introduction to using libtorrent (C++). Also see the
 
 .. _`reference documentation`: reference.html
 
-Contribute
+.. raw:: html
+
+	<br/>
+	<a href="bitcoin:373ZDeQgQSQNuxdinNAPnQ63CRNn4iEXzg">
+	<img src="img/bitcoin.png" class="front-page-qr" alt="bitcoin address for libtorrent donations" width="190" height="190"></a>
+
+contribute
 ==========
 
-If your organization use libtorrent, please consider supporting its development.
-See the contribute_ page for other ways to help out.
+If your organization uses libtorrent, please consider supporting its development.
+See the contributing_ page for other ways to help out.
 
 .. raw:: html
 
-	<span style="display:block;text-align:center;">
-	<img src="bitcoin.png" style="display:inline"><br/>
+	<div style="text-align: right;">
 	<a href="bitcoin:373ZDeQgQSQNuxdinNAPnQ63CRNn4iEXzg">bitcoin:373ZDeQgQSQNuxdinNAPnQ63CRNn4iEXzg</a>
-	</span>
-	
-	<span style="display:block;text-align:center;margin-top:1em">
-	<span style="display:inline-block">
-	<a class="FlattrButton" style="display:none;" href="https://libtorrent.org"></a>
-	<noscript><a href="https://flattr.com/thing/95662/libtorrent" target="_blank">
-	<img src="https://api.flattr.com/button/flattr-badge-large.png" alt="Flattr this" title="Flattr this" border="0" /></a></noscript>
-	</span>
-	
+	</div>
+
 	<span style="display:inline-block">
 	<form action="https://www.paypal.com/cgi-bin/webscr" method="post" target="_top">
 	<input type="hidden" name="cmd" value="_donations">
@@ -145,14 +165,13 @@ See the contribute_ page for other ways to help out.
 	<input type="hidden" name="item_name" value="libtorrent">
 	<input type="hidden" name="currency_code" value="USD">
 	<input type="hidden" name="bn" value="PP-DonationsBF:btn_donate_LG.gif:NonHosted">
-	<input type="image" src="https://www.paypalobjects.com/webstatic/en_US/i/buttons/pp-acceptance-medium.png" border="0" name="submit" alt="PayPal - The safer, easier way to pay online!">
-	<img alt="" border="0" src="https://www.paypalobjects.com/en_US/i/scr/pixel.gif" width="1" height="1">
+	<input type="image" src="img/pp-acceptance-medium.png" border="0" name="submit" alt="PayPal - The safer, easier way to pay online!">
 	</form>
 	</span>
 	</span>
 
 
-Support
+support
 =======
 
 Please direct questions to the `mailing list`__, general libtorrent discussion.
@@ -179,7 +198,7 @@ list or posted to the `bug tracker`_.
 
 .. _`bug tracker`: https://github.com/arvidn/libtorrent/issues
 
-Acknowledgements
+acknowledgements
 ================
 
 Written by Arvid Norberg. Copyright |copy| 2003-2018

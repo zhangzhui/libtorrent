@@ -1,47 +1,28 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg & Daniel Wallin
+Copyright (c) 2006, Daniel Wallin
+Copyright (c) 2006, 2008-2010, 2013-2017, 2019-2021, Arvid Norberg
+Copyright (c) 2015, Thomas Yuan
+Copyright (c) 2016-2017, 2020-2021, Alden Torres
+Copyright (c) 2017, Pavel Pimenov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include <libtorrent/kademlia/find_data.hpp>
 #include <libtorrent/kademlia/node.hpp>
 #include <libtorrent/kademlia/dht_observer.hpp>
-#include <libtorrent/io.hpp>
+#include <libtorrent/aux_/io_bytes.hpp>
 #include <libtorrent/socket.hpp>
-#include <libtorrent/socket_io.hpp>
+#include <libtorrent/aux_/socket_io.hpp>
 
 #ifndef TORRENT_DISABLE_LOGGING
 #include <libtorrent/hex.hpp> // to_hex
 #endif
 
-namespace libtorrent { namespace dht {
+namespace libtorrent::dht {
 
 void find_data_observer::reply(msg const& m)
 {
@@ -70,7 +51,7 @@ void find_data_observer::reply(msg const& m)
 	if (token)
 	{
 		static_cast<find_data*>(algorithm())->got_write_token(
-			node_id(id.string_ptr()), token.string_value().to_string());
+			node_id(id.string_ptr()), std::string(token.string_value()));
 	}
 
 	traversal_observer::reply(m);
@@ -80,9 +61,9 @@ void find_data_observer::reply(msg const& m)
 find_data::find_data(
 	node& dht_node
 	, node_id const& target
-	, nodes_callback const& ncallback)
+	, nodes_callback ncallback)
 	: traversal_algorithm(dht_node, target)
-	, m_nodes_callback(ncallback)
+	, m_nodes_callback(std::move(ncallback))
 	, m_done(false)
 {
 }
@@ -93,8 +74,8 @@ void find_data::start()
 	// nodes from routing table.
 	if (m_results.empty())
 	{
-		std::vector<node_entry> nodes;
-		m_node.m_table.find_node(target(), nodes, routing_table::include_failed);
+		std::vector<node_entry> const nodes = m_node.m_table.find_node(
+			target(), routing_table::include_failed);
 
 		for (auto const& n : nodes)
 		{
@@ -108,7 +89,7 @@ void find_data::start()
 void find_data::got_write_token(node_id const& n, std::string write_token)
 {
 #ifndef TORRENT_DISABLE_LOGGING
-	auto logger = get_node().observer();
+	auto* logger = get_node().observer();
 	if (logger != nullptr && logger->should_log(dht_logger::traversal))
 	{
 		logger->log(dht_logger::traversal
@@ -127,7 +108,7 @@ observer_ptr find_data::new_observer(udp::endpoint const& ep
 #if TORRENT_USE_ASSERTS
 	if (o) o->m_in_constructor = false;
 #endif
-	return std::move(o);
+	return o;
 }
 
 char const* find_data::name() const { return "find_data"; }
@@ -137,7 +118,7 @@ void find_data::done()
 	m_done = true;
 
 #ifndef TORRENT_DISABLE_LOGGING
-	auto logger = get_node().observer();
+	auto* logger = get_node().observer();
 	if (logger != nullptr)
 	{
 		logger->log(dht_logger::traversal, "[%u] %s DONE"
@@ -157,7 +138,7 @@ void find_data::done()
 			if (logger != nullptr && logger->should_log(dht_logger::traversal))
 			{
 				logger->log(dht_logger::traversal, "[%u] not alive: %s"
-					, id(), print_endpoint(o->target_ep()).c_str());
+					, id(), aux::print_endpoint(o->target_ep()).c_str());
 			}
 #endif
 			continue;
@@ -169,7 +150,7 @@ void find_data::done()
 			if (logger != nullptr && logger->should_log(dht_logger::traversal))
 			{
 				logger->log(dht_logger::traversal, "[%u] no write token: %s"
-					, id(), print_endpoint(o->target_ep()).c_str());
+					, id(), aux::print_endpoint(o->target_ep()).c_str());
 			}
 #endif
 			continue;
@@ -179,7 +160,7 @@ void find_data::done()
 		if (logger != nullptr && logger->should_log(dht_logger::traversal))
 		{
 			logger->log(dht_logger::traversal, "[%u] %s"
-				, id(), print_endpoint(o->target_ep()).c_str());
+				, id(), aux::print_endpoint(o->target_ep()).c_str());
 		}
 #endif
 		--num_results;
@@ -190,4 +171,4 @@ void find_data::done()
 	traversal_algorithm::done();
 }
 
-} } // namespace libtorrent::dht
+} // namespace libtorrent::dht

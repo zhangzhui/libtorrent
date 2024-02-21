@@ -1,37 +1,15 @@
 /*
 
-Copyright (c) 2014, Arvid Norberg
+Copyright (c) 2014-2017, 2020-2021, Arvid Norberg
+Copyright (c) 2018, 2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
-#include "libtorrent/sliding_average.hpp"
+#include "libtorrent/aux_/sliding_average.hpp"
 
 namespace {
 
@@ -53,7 +31,7 @@ using namespace lt;
 // make sure we react quickly for the first few samples
 TORRENT_TEST(reaction_time)
 {
-	sliding_average<int, 10> avg;
+	aux::sliding_average<int, 10> avg;
 
 	avg.add_sample(-10);
 	avg.add_sample(10);
@@ -63,7 +41,7 @@ TORRENT_TEST(reaction_time)
 
 TORRENT_TEST(reaction_time2)
 {
-	sliding_average<int, 10> avg;
+	aux::sliding_average<int, 10> avg;
 
 	avg.add_sample(10);
 	avg.add_sample(20);
@@ -74,7 +52,7 @@ TORRENT_TEST(reaction_time2)
 // make sure we converge
 TORRENT_TEST(converge)
 {
-	sliding_average<int, 10> avg;
+	aux::sliding_average<int, 10> avg;
 	avg.add_sample(100);
 	for (int i = 0; i < 20; ++i)
 		avg.add_sample(10);
@@ -83,7 +61,7 @@ TORRENT_TEST(converge)
 
 TORRENT_TEST(converge2)
 {
-	sliding_average<int, 10> avg;
+	aux::sliding_average<int, 10> avg;
 	avg.add_sample(-100);
 	for (int i = 0; i < 20; ++i)
 		avg.add_sample(-10);
@@ -93,7 +71,7 @@ TORRENT_TEST(converge2)
 // test with a more realistic input
 TORRENT_TEST(random_converge)
 {
-	sliding_average<int, 10> avg;
+	aux::sliding_average<int, 10> avg;
 	for (int i = 0; i < int(sizeof(samples)/sizeof(samples[0])); ++i)
 		avg.add_sample(samples[i]);
 	TEST_CHECK(abs(avg.mean() - 60) <= 3);
@@ -101,7 +79,7 @@ TORRENT_TEST(random_converge)
 
 TORRENT_TEST(sliding_average)
 {
-	sliding_average<int, 4> avg;
+	aux::sliding_average<int, 4> avg;
 	TEST_EQUAL(avg.mean(), 0);
 	TEST_EQUAL(avg.avg_deviation(), 0);
 	avg.add_sample(500);

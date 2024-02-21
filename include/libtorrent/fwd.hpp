@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2017, Arvid Norberg
+Copyright (c) 2017-2022, Arvid Norberg
+Copyright (c) 2017-2018, Steven Siloti
+Copyright (c) 2020, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_FWD_HPP
@@ -38,16 +17,16 @@ POSSIBILITY OF SUCH DAMAGE.
 namespace libtorrent {
 
 // include/libtorrent/add_torrent_params.hpp
-TORRENT_VERSION_NAMESPACE_2
+TORRENT_VERSION_NAMESPACE_3
 struct add_torrent_params;
-TORRENT_VERSION_NAMESPACE_2_END
+TORRENT_VERSION_NAMESPACE_3_END
 
 // include/libtorrent/alert.hpp
-class alert;
+struct alert;
 
 // include/libtorrent/alert_types.hpp
 struct dht_routing_bucket;
-TORRENT_VERSION_NAMESPACE_2
+TORRENT_VERSION_NAMESPACE_3
 struct torrent_alert;
 struct peer_alert;
 struct tracker_alert;
@@ -104,7 +83,6 @@ struct fastresume_rejected_alert;
 struct peer_blocked_alert;
 struct dht_announce_alert;
 struct dht_get_peers_alert;
-struct stats_alert;
 struct cache_flushed_alert;
 struct lsd_peer_alert;
 struct trackerid_alert;
@@ -139,11 +117,21 @@ struct session_stats_header_alert;
 struct dht_sample_infohashes_alert;
 struct block_uploaded_alert;
 struct alerts_dropped_alert;
-TORRENT_VERSION_NAMESPACE_2_END
+struct socks5_alert;
+struct file_prio_alert;
+TORRENT_VERSION_NAMESPACE_3_END
+struct oversized_file_alert;
+struct torrent_conflict_alert;
+struct peer_info_alert;
+struct file_progress_alert;
+struct piece_info_alert;
+struct piece_availability_alert;
+struct tracker_list_alert;
 
 // include/libtorrent/announce_entry.hpp
-struct announce_endpoint;
 TORRENT_VERSION_NAMESPACE_2
+struct announce_infohash;
+struct announce_endpoint;
 struct announce_entry;
 TORRENT_VERSION_NAMESPACE_2_END
 
@@ -153,8 +141,14 @@ struct bdecode_node;
 // include/libtorrent/bitfield.hpp
 struct bitfield;
 
+// include/libtorrent/client_data.hpp
+struct client_data_t;
+
 // include/libtorrent/create_torrent.hpp
+TORRENT_VERSION_NAMESPACE_4
+struct create_file_entry;
 struct create_torrent;
+TORRENT_VERSION_NAMESPACE_4_END
 
 // include/libtorrent/disk_buffer_holder.hpp
 struct buffer_allocator_interface;
@@ -165,35 +159,41 @@ struct open_file_state;
 struct disk_interface;
 struct storage_holder;
 
+// include/libtorrent/disk_observer.hpp
+struct disk_observer;
+
 // include/libtorrent/entry.hpp
-class entry;
+struct entry;
 
 // include/libtorrent/error_code.hpp
 struct storage_error;
 
 // include/libtorrent/extensions.hpp
+TORRENT_VERSION_NAMESPACE_3
 struct plugin;
+TORRENT_VERSION_NAMESPACE_3_END
 struct torrent_plugin;
 struct peer_plugin;
 struct crypto_plugin;
 
 // include/libtorrent/file_storage.hpp
 struct file_slice;
+TORRENT_VERSION_NAMESPACE_4
 class file_storage;
+TORRENT_VERSION_NAMESPACE_4_END
 
 // include/libtorrent/hasher.hpp
 TORRENT_CRYPTO_NAMESPACE
 class hasher;
+class hasher256;
 TORRENT_CRYPTO_NAMESPACE_END
+
+// include/libtorrent/info_hash.hpp
+struct info_hash_t;
 
 // include/libtorrent/ip_filter.hpp
 struct ip_filter;
 class port_filter;
-
-// include/libtorrent/kademlia/dht_settings.hpp
-namespace dht {
-struct dht_settings;
-}
 
 // include/libtorrent/kademlia/dht_state.hpp
 namespace dht {
@@ -229,22 +229,26 @@ struct peer_request;
 // include/libtorrent/performance_counters.hpp
 struct counters;
 
+// include/libtorrent/piece_block.hpp
+struct piece_block;
+
 // include/libtorrent/session.hpp
-class session_proxy;
-struct session_params;
-class session;
+struct session_proxy;
+struct session;
 
 // include/libtorrent/session_handle.hpp
 struct session_handle;
 
+// include/libtorrent/session_params.hpp
+TORRENT_VERSION_NAMESPACE_3
+struct session_params;
+TORRENT_VERSION_NAMESPACE_3_END
+
 // include/libtorrent/session_stats.hpp
 struct stats_metric;
 
-// include/libtorrent/session_status.hpp
-struct utp_status;
-struct session_status;
-
 // include/libtorrent/settings_pack.hpp
+struct settings_interface;
 struct settings_pack;
 
 // include/libtorrent/storage_defs.hpp
@@ -256,23 +260,28 @@ struct partial_piece_info;
 struct torrent_handle;
 
 // include/libtorrent/torrent_info.hpp
-struct web_seed_entry;
+struct load_torrent_limits;
+TORRENT_VERSION_NAMESPACE_3
 class torrent_info;
+TORRENT_VERSION_NAMESPACE_3_END
 
 // include/libtorrent/torrent_status.hpp
-TORRENT_VERSION_NAMESPACE_2
+TORRENT_VERSION_NAMESPACE_4
 struct torrent_status;
-TORRENT_VERSION_NAMESPACE_2_END
+TORRENT_VERSION_NAMESPACE_3_END
 
-#if TORRENT_ABI_VERSION == 1
+// include/libtorrent/web_seed_entry.hpp
+struct web_seed_entry;
+
+#if TORRENT_ABI_VERSION <= 2
 
 // include/libtorrent/alert_types.hpp
-TORRENT_VERSION_NAMESPACE_2
+TORRENT_VERSION_NAMESPACE_3
 struct torrent_added_alert;
+struct stats_alert;
 struct anonymous_mode_alert;
 struct mmap_cache_alert;
-struct torrent_update_alert;
-TORRENT_VERSION_NAMESPACE_2_END
+TORRENT_VERSION_NAMESPACE_3_END
 
 // include/libtorrent/file_storage.hpp
 struct file_entry;
@@ -280,14 +289,25 @@ struct file_entry;
 // include/libtorrent/fingerprint.hpp
 struct fingerprint;
 
-// include/libtorrent/lazy_entry.hpp
-struct pascal_string;
-struct lazy_entry;
+// include/libtorrent/kademlia/dht_settings.hpp
+namespace dht {
+struct dht_settings;
+}
 
 // include/libtorrent/session_settings.hpp
 struct pe_settings;
 
+// include/libtorrent/session_status.hpp
+struct utp_status;
+struct session_status;
+
+// include/libtorrent/torrent_status.hpp
+TORRENT_VERSION_NAMESPACE_4
+TORRENT_VERSION_NAMESPACE_3_END
+
 #endif // TORRENT_ABI_VERSION
+
+	using file_layout = file_storage;
 
 }
 

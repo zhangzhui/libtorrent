@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2013-2018, Arvid Norberg
+Copyright (c) 2014-2020, Arvid Norberg
+Copyright (c) 2016-2017, Alden Torres
+Copyright (c) 2019, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_PERFORMANCE_COUNTERS_HPP_INCLUDED
@@ -42,10 +21,9 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	// TODO: It would be nice if this could be an internal type. default_disk_constructor depends on it now
 	struct TORRENT_EXPORT counters
 	{
-		// TODO: move this out of counters
+		// internal
 		enum stats_counter_t
 		{
 			// the number of peers that were disconnected this
@@ -144,12 +122,7 @@ namespace libtorrent {
 			on_disk_queue_counter,
 			on_disk_counter,
 
-#if TORRENT_ABI_VERSION == 1
-			torrent_evicted_counter,
-#endif
-
 			// bittorrent message counters
-			// TODO: should keepalives be in here too?
 			// how about dont-have, share-mode, upload-only
 			num_incoming_choke,
 			num_incoming_unchoke,
@@ -190,6 +163,9 @@ namespace libtorrent {
 			num_outgoing_pex,
 			num_outgoing_metadata,
 			num_outgoing_extended,
+			num_outgoing_hash_request,
+			num_outgoing_hashes,
+			num_outgoing_hash_reject,
 
 			num_piece_passed,
 			num_piece_failed,
@@ -200,7 +176,6 @@ namespace libtorrent {
 			num_blocks_written,
 			num_blocks_read,
 			num_blocks_hashed,
-			num_blocks_cache_hits,
 			num_write_ops,
 			num_read_ops,
 			num_read_back,
@@ -333,6 +308,8 @@ namespace libtorrent {
 
 		// it is important that all gauges have a higher index than counters.
 		// This assumption is relied upon in other parts of the code
+
+		// internal
 		enum stats_gauge_t
 		{
 			num_checking_torrents = num_stats_counters,
@@ -394,7 +371,7 @@ namespace libtorrent {
 			num_peers_down_disk,
 
 			// the number of peers in end-game mode. End game mode is where there
-			// are no blocks that we have not sent any requests to download. In ths
+			// are no blocks that we have not sent any requests to download. In this
 			// mode, blocks are allowed to be requested from more than one peer at
 			// at time.
 			num_peers_end_game,
@@ -457,6 +434,8 @@ namespace libtorrent {
 
 			num_outstanding_accept,
 
+			num_queued_tracker_announces,
+
 			num_counters,
 			num_gauges_counters = num_counters - num_stats_counters
 		};
@@ -469,7 +448,7 @@ namespace libtorrent {
 		counters() TORRENT_COUNTER_NOEXCEPT;
 
 		counters(counters const&) TORRENT_COUNTER_NOEXCEPT;
-		counters& operator=(counters const&) TORRENT_COUNTER_NOEXCEPT;
+		counters& operator=(counters const&) & TORRENT_COUNTER_NOEXCEPT;
 
 		// returns the new value
 		std::int64_t inc_stats_counter(int c, std::int64_t value = 1) TORRENT_COUNTER_NOEXCEPT;

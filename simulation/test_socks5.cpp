@@ -1,40 +1,18 @@
 /*
 
-Copyright (c) 2016, Arvid Norberg
+Copyright (c) 2016, 2021, Alden Torres
+Copyright (c) 2016-2021, Arvid Norberg
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session.hpp"
 #include "libtorrent/torrent_handle.hpp"
 #include "libtorrent/settings_pack.hpp"
 #include "libtorrent/alert_types.hpp"
-#include "libtorrent/deadline_timer.hpp"
+#include "libtorrent/aux_/deadline_timer.hpp"
 #include "simulator/http_server.hpp"
 #include "settings.hpp"
 #include "create_torrent.hpp"
@@ -50,6 +28,27 @@ POSSIBILITY OF SUCH DAMAGE.
 using namespace sim;
 using namespace lt;
 
+using socks_flags_t = lt::flags::bitfield_flag<std::uint64_t, struct socks_test_type_tag>;
+
+constexpr socks_flags_t proxy_hostname = 0_bit;
+
+struct sim_config : sim::default_config
+{
+	chrono::high_resolution_clock::duration hostname_lookup(
+		asio::ip::address const& requestor
+		, std::string hostname
+		, std::vector<asio::ip::address>& result
+		, boost::system::error_code& ec) override
+	{
+		if (hostname == "tracker.hostname.org")
+		{
+			result.push_back(make_address_v4("2.2.2.2"));
+			return duration_cast<chrono::high_resolution_clock::duration>(chrono::milliseconds(100));
+		}
+
+		return default_config::hostname_lookup(requestor, hostname, result, ec);
+	}
+};
 
 // this is the general template for these tests. create the session with custom
 // settings (Settings), set up the test, by adding torrents with certain
@@ -57,17 +56,18 @@ using namespace lt;
 template <typename Setup, typename HandleAlerts, typename Test>
 void run_test(Setup const& setup
 	, HandleAlerts const& on_alert
-	, Test const& test)
+	, Test const& test
+	, std::uint32_t const flags = 0)
 {
 	// setup the simulation
-	sim::default_config network_cfg;
+	sim_config network_cfg;
 	sim::simulation sim{network_cfg};
 	std::unique_ptr<sim::asio::io_context> ios = make_io_context(sim, 0);
 	lt::session_proxy zombie;
 
 	sim::asio::io_context proxy_ios{sim, addr("50.50.50.50") };
-	sim::socks_server socks4(proxy_ios, 4444, 4);
-	sim::socks_server socks5(proxy_ios, 5555, 5);
+	sim::socks_server socks4(proxy_ios, 4444, 4, flags);
+	sim::socks_server socks5(proxy_ios, 5555, 5, flags);
 
 	lt::settings_pack pack = settings();
 	// create session
@@ -111,7 +111,7 @@ TORRENT_TEST(socks5_tcp_announce)
 			set_proxy(ses, settings_pack::socks5);
 
 			lt::add_torrent_params params;
-			params.info_hash = sha1_hash("abababababababababab");
+			params.info_hashes.v1 = sha1_hash("abababababababababab");
 			params.trackers.push_back("http://2.2.2.2:8080/announce");
 			params.save_path = ".";
 			ses.async_add_torrent(params);
@@ -119,7 +119,7 @@ TORRENT_TEST(socks5_tcp_announce)
 		[&alert_port](lt::session&, lt::alert const* alert) {
 			if (auto* a = lt::alert_cast<lt::listen_succeeded_alert>(alert))
 			{
-				if (a->socket_type == socket_type_t::udp)
+				if (a->socket_type == socket_type_t::utp)
 				{
 					alert_port = a->port;
 				}
@@ -153,30 +153,33 @@ TORRENT_TEST(socks5_tcp_announce)
 		}
 	);
 
-	TEST_EQUAL(tracker_port, 6881);
+	TEST_EQUAL(tracker_port, 1);
 	TEST_CHECK(alert_port != -1);
 }
 
-TORRENT_TEST(udp_tracker)
+void test_udp_tracker(std::uint32_t const flags, socks_flags_t const sflags)
 {
 	using namespace lt;
 	bool tracker_alert = false;
 	bool connected = false;
 	bool announced = false;
 	run_test(
-		[](lt::session& ses)
+		[sflags](lt::session& ses)
 		{
 			set_proxy(ses, settings_pack::socks5);
 
 			// The socks server in libsimulator does not support forwarding UDP
 			// packets to hostnames (just IPv4 destinations)
 			settings_pack p;
-			p.set_bool(settings_pack::proxy_hostnames, false);
+			p.set_bool(settings_pack::proxy_hostnames, bool(sflags & proxy_hostname));
 			ses.apply_settings(p);
 
 			lt::add_torrent_params params;
-			params.info_hash = sha1_hash("abababababababababab");
-			params.trackers.push_back("udp://2.2.2.2:8080/announce");
+			params.info_hashes.v1 = sha1_hash("abababababababababab");
+			if (sflags & proxy_hostname)
+				params.trackers.push_back("udp://tracker.hostname.org:8080/announce");
+			else
+				params.trackers.push_back("udp://2.2.2.2:8080/announce");
 			params.save_path = ".";
 			ses.async_add_torrent(params);
 		},
@@ -191,7 +194,7 @@ TORRENT_TEST(udp_tracker)
 			udp_server tracker(sim, "2.2.2.2", 8080,
 			[&](char const* msg, int size)
 			{
-				using namespace lt::detail;
+				using namespace lt::aux;
 				std::vector<char> ret;
 				TEST_CHECK(size >= 16);
 
@@ -230,18 +233,34 @@ TORRENT_TEST(udp_tracker)
 				}
 				else
 				{
-					std::printf("unsupported udp tracker action: %d\n", action);
+					std::printf("unsupported udp tracker action: %u\n", action);
 				}
 				return ret;
 			});
 
 			sim.run();
 		}
+		, flags
 	);
 
 	TEST_CHECK(tracker_alert);
 	TEST_CHECK(connected);
 	TEST_CHECK(announced);
+}
+
+TORRENT_TEST(udp_tracker)
+{
+	test_udp_tracker(0, {});
+}
+
+TORRENT_TEST(udp_tracker_empty_domainname)
+{
+	test_udp_tracker(socks_flag::udp_associate_respond_empty_hostname, {});
+}
+
+TORRENT_TEST(udp_tracker_hostname)
+{
+	test_udp_tracker(0, proxy_hostname);
 }
 
 TORRENT_TEST(socks5_udp_retry)
@@ -258,17 +277,15 @@ TORRENT_TEST(socks5_udp_retry)
 	lt::session_proxy zombie;
 
 	sim::asio::io_context proxy_ios{sim, addr("50.50.50.50") };
-	// close UDP associate connectons prematurely
+	// close UDP associate connections prematurely
 	sim::socks_server socks5(proxy_ios, 5555, 5, socks_flag::disconnect_udp_associate);
 
 	lt::settings_pack pack = settings();
-	pack.set_str(settings_pack::listen_interfaces, "50.50.50.50:6881");
 	// create session
 	std::shared_ptr<lt::session> ses = std::make_shared<lt::session>(pack, *ios);
+	print_alerts(*ses);
 	set_proxy(*ses, settings_pack::socks5);
 
-	// run for 60 seconds.The sokcks5 retry interval is expected to be 5 seconds,
-	// meaning there should have been 12 connection attempts
 	sim::timer t(sim, lt::seconds(60), [&](boost::system::error_code const&)
 	{
 		fprintf(stderr, "shutting down\n");
@@ -279,5 +296,7 @@ TORRENT_TEST(socks5_udp_retry)
 	sim.run();
 
 	// number of UDP ASSOCIATE commands invoked on the socks proxy
+	// We run for 60 seconds. The sokcks5 retry interval is expected to be 5
+	// seconds, meaning there should have been 12 connection attempts
 	TEST_EQUAL(socks5.cmd_counts()[2], 12);
 }

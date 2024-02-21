@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2008, Arvid Norberg
+Copyright (c) 2015-2022, Arvid Norberg
+Copyright (c) 2017, Antoine Dahan
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "setup_swarm.hpp"
@@ -38,6 +16,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/session.hpp"
 #include "libtorrent/session_stats.hpp"
 #include "libtorrent/aux_/path.hpp"
+#include "libtorrent/aux_/random.hpp"
 #include "libtorrent/torrent_info.hpp"
 #include "libtorrent/time.hpp"
 #include "settings.hpp"
@@ -47,6 +26,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "simulator/nat.hpp"
 #include "simulator/queue.hpp"
 #include "utils.hpp"
+
+#include <fstream>
 
 using namespace lt;
 
@@ -252,7 +233,7 @@ TORRENT_TEST(utp_only)
 		});
 }
 
-void test_stop_start_download(swarm_test type, bool graceful)
+void test_stop_start_download(swarm_test_t type, bool graceful)
 {
 	bool paused_once = false;
 	bool resumed = false;
@@ -289,7 +270,7 @@ void test_stop_start_download(swarm_test type, bool graceful)
 			if (paused_once == false)
 			{
 				auto st = get_status(ses);
-				const bool limit_reached = (type == swarm_test::download)
+				const bool limit_reached = (type & swarm_test::download)
 					? st.total_wanted_done > st.total_wanted / 2
 					: st.total_payload_upload >= 3 * 16 * 1024;
 
@@ -304,13 +285,13 @@ void test_stop_start_download(swarm_test type, bool graceful)
 
 			std::printf("tick: %d\n", ticks);
 
-			const int timeout = type == swarm_test::download ? 22 : 100;
+			const int timeout = (type & swarm_test::download) ? 22 : 100;
 			if (ticks > timeout)
 			{
 				TEST_ERROR("timeout");
 				return true;
 			}
-			if (type == swarm_test::upload) return false;
+			if (type & swarm_test::upload) return false;
 			if (!is_seed(ses)) return false;
 			std::printf("completed in %d ticks\n", ticks);
 			return true;
@@ -412,7 +393,7 @@ struct timeout_config : sim::default_config
 		auto it = m_incoming.find(ip);
 		if (it != m_incoming.end()) return sim::route().append(it->second);
 		it = m_incoming.insert(it, std::make_pair(ip, std::make_shared<queue>(
-			std::ref(m_sim->get_io_context())
+			m_sim->get_io_context()
 			, 1000
 			, lt::duration_cast<lt::time_duration>(seconds(10))
 			, 1000, "packet-loss modem in")));
@@ -424,7 +405,7 @@ struct timeout_config : sim::default_config
 		auto it = m_outgoing.find(ip);
 		if (it != m_outgoing.end()) return sim::route().append(it->second);
 		it = m_outgoing.insert(it, std::make_pair(ip, std::make_shared<queue>(
-			std::ref(m_sim->get_io_context()), 1000
+			m_sim->get_io_context(), 1000
 			, lt::duration_cast<lt::time_duration>(seconds(5)), 200 * 1000, "packet-loss out")));
 		return sim::route().append(it->second);
 	}
@@ -475,7 +456,7 @@ struct nat_config : sim::default_config
 
 	sim::route outgoing_route(lt::address ip) override
 	{
-		// This is extremely simplistic. It will simply alter the percieved source
+		// This is extremely simplistic. It will simply alter the perceived source
 		// IP of the connecting client.
 		sim::route r;
 		if (ip == addr("50.0.0.1")) r.append(m_nat_hop);
@@ -557,7 +538,7 @@ TORRENT_TEST(delete_files)
 TORRENT_TEST(delete_partfile)
 {
 	std::string save_path;
-	setup_swarm(2, swarm_test::download
+	setup_swarm(2, swarm_test::download | swarm_test::real_disk
 		// add session
 		, [](lt::settings_pack&) {}
 		// add torrent
@@ -591,7 +572,7 @@ TORRENT_TEST(torrent_completed_alert)
 		// add session
 		, [](lt::settings_pack& pack)
 		{
-			pack.set_int(lt::settings_pack::alert_mask, alert::file_progress_notification);
+			pack.set_int(lt::settings_pack::alert_mask, alert_category::file_progress);
 		}
 		// add torrent
 		, [](lt::add_torrent_params&) {}
@@ -629,7 +610,7 @@ TORRENT_TEST(block_uploaded_alert)
 		, [](lt::settings_pack& pack)
 		{
 			pack.set_int(lt::settings_pack::alert_mask,
-				alert::upload_notification | alert::status_notification);
+				alert_category::upload | alert_category::status);
 		}
 		// add torrent
 		, [](lt::add_torrent_params&) {}
@@ -677,7 +658,7 @@ void test_settings(SettingsFun fun)
 		// terminate
 		, [](int ticks, lt::session& ses) -> bool
 		{
-			if (ticks > 80)
+			if (ticks > 89)
 			{
 				TEST_ERROR("timeout");
 				return true;
@@ -795,7 +776,6 @@ TORRENT_TEST(download_rate_limit_negative)
 	);
 }
 
-
 TORRENT_TEST(unchoke_slots_limit)
 {
 	test_settings([](lt::settings_pack& pack) {
@@ -809,6 +789,215 @@ TORRENT_TEST(unchoke_slots_limit_negative)
 		pack.set_int(settings_pack::unchoke_slots_limit, -1);
 		pack.set_int(settings_pack::choking_algorithm, settings_pack::fixed_slots_choker);
 	});
+}
+
+TORRENT_TEST(settings_stress_test)
+{
+	std::array<int, 11> const settings{{
+		settings_pack::unchoke_slots_limit,
+		settings_pack::connections_limit,
+		settings_pack::predictive_piece_announce,
+		settings_pack::allow_multiple_connections_per_ip,
+		settings_pack::send_redundant_have,
+		settings_pack::rate_limit_ip_overhead,
+		settings_pack::rate_limit_ip_overhead,
+		settings_pack::anonymous_mode,
+//		settings_pack::enable_upnp,
+//		settings_pack::enable_natpmp,
+		settings_pack::enable_lsd,
+		settings_pack::enable_ip_notifier,
+		settings_pack::piece_extent_affinity,
+	}};
+	std::array<int, 4> const values{{-1, 0, 1, std::numeric_limits<int>::max()}};
+
+	for (auto t : { swarm_test::download, swarm_test::upload})
+	{
+		for (auto s1 : settings)
+		{
+			for (auto s2 : settings)
+			{
+				if (s1 == s2) continue;
+
+				setup_swarm(2, t
+					// add session
+					, [](lt::settings_pack& p) {
+					p.set_int(settings_pack::choking_algorithm, settings_pack::fixed_slots_choker);
+					}
+					// add torrent
+					, [](lt::add_torrent_params& params) {}
+					// on alert
+					, [](lt::alert const*, lt::session&) {}
+					// terminate
+					, [&](int tick, lt::session& session) -> bool
+					{
+						int const s = (tick & 1) ? s2 : s1;
+						settings_pack p;
+						if ((s & settings_pack::type_mask) == settings_pack::bool_type_base)
+							p.set_bool(s, bool(tick & 2));
+						else
+							p.set_int(s, values[(tick >> 1) % values.size()]);
+						session.apply_settings(std::move(p));
+						return tick > int(settings.size() * values.size() * 2);
+					});
+			}
+		}
+	}
+}
+
+TORRENT_TEST(pex)
+{
+	// we create 3 nodes. Node 0 seeds and node 1 and 2 are downloaders.
+	// node 0 is initially only connected to node 1. The test ensures that node
+	// 0 eventually is connected to node 2, as it should have been introduced
+	// via PEX
+
+	dsl_config network_cfg;
+	sim::simulation sim{network_cfg};
+
+	asio::io_context ios(sim);
+	lt::time_point start_time(lt::clock_type::now());
+
+	std::vector<std::shared_ptr<lt::session>> nodes;
+	std::vector<std::shared_ptr<sim::asio::io_context>> io_service;
+	std::vector<lt::session_proxy> zombies;
+	lt::aux::deadline_timer timer(ios);
+
+	lt::error_code ec;
+	int const swarm_id = unit_test::test_counter();
+	std::string path = save_path(swarm_id, 0);
+
+	lt::create_directory(path, ec);
+	if (ec) std::printf("failed to create directory: \"%s\": %s\n"
+		, path.c_str(), ec.message().c_str());
+	std::ofstream file(lt::combine_path(path, "temporary").c_str());
+	auto ti = ::create_torrent(&file, "temporary", 0x4000, 50, false);
+	file.close();
+
+	int const num_nodes = 3;
+
+	bool done = false;
+
+	// session 0 is the seeding one.
+	// the IPs are 50.0.0.1, 50.0.0.2 and 50.0.0.3
+	for (int i = 0; i < num_nodes; ++i)
+	{
+		// create a new io_service
+		char ep[30];
+		std::snprintf(ep, sizeof(ep), "50.0.%d.%d", (i + 1) >> 8, (i + 1) & 0xff);
+		io_service.push_back(std::make_shared<sim::asio::io_context>(sim, addr(ep)));
+
+		lt::settings_pack pack = settings();
+
+		// make sure the sessions have different peer ids
+		lt::peer_id pid;
+		lt::aux::random_bytes(pid);
+		pack.set_str(lt::settings_pack::peer_fingerprint, pid.to_string());
+		std::shared_ptr<lt::session> ses =
+			std::make_shared<lt::session>(pack, *io_service.back());
+		nodes.push_back(ses);
+
+		lt::add_torrent_params p;
+		p.flags &= ~lt::torrent_flags::paused;
+		p.flags &= ~lt::torrent_flags::auto_managed;
+
+		// node 0 and 1 are downloaders and node 2 is a seed
+		// save path 0 is where the files are, so that's for seeds
+		// It's important that node 1 and 2 want to stay connected, otherwise
+		// node 1 won't be able to gossip about 2 to 0.
+		p.save_path = save_path(swarm_id, i > 1 ? 0 : 1);
+		p.ti = ti;
+		ses->async_add_torrent(p);
+
+		ses->set_alert_notify([&, i]() {
+			// this function is called inside libtorrent and we cannot perform work
+			// immediately in it. We have to notify the outside to pull all the alerts
+			post(*io_service[i], [&,i]()
+			{
+				lt::session* ses = nodes[i].get();
+
+				// when shutting down, we may have destructed the session
+				if (ses == nullptr) return;
+
+				std::vector<lt::alert*> alerts;
+				ses->pop_alerts(&alerts);
+
+				for (lt::alert* a : alerts)
+				{
+					// only print alerts from the session under test
+					lt::time_duration d = a->timestamp() - start_time;
+					std::uint32_t const millis = std::uint32_t(
+						lt::duration_cast<lt::milliseconds>(d).count());
+
+					if (i == 0) {
+					std::printf("%4u.%03u: %-25s %s\n"
+						, millis / 1000, millis % 1000
+						, a->what()
+						, a->message().c_str());
+					}
+
+					// if a torrent was added save the torrent handle
+					if (lt::add_torrent_alert* at = lt::alert_cast<lt::add_torrent_alert>(a))
+					{
+						lt::torrent_handle h = at->handle;
+
+						if (i == 0)
+						{
+							// node only connects to node 1
+							h.connect_peer(lt::tcp::endpoint(addr("50.0.0.2"), 6881));
+						}
+						else
+						{
+							// other nodes connect to each other
+							for (int k = 1; k < num_nodes; ++k)
+							{
+								char ep[30];
+								std::snprintf(ep, sizeof(ep), "50.0.%d.%d"
+									, (k + 1) >> 8, (k + 1) & 0xff);
+								h.connect_peer(lt::tcp::endpoint(addr(ep), 6881));
+							}
+						}
+					}
+
+					if (i == 0)
+					{
+						// if node 0 was connected to 50.0.0.3, we're done
+						if (lt::peer_connect_alert* ca = lt::alert_cast<lt::peer_connect_alert>(a))
+						{
+							if (ca->endpoint.address() == addr("50.0.0.3"))
+								done = true;
+						}
+						if (lt::incoming_connection_alert* ca = lt::alert_cast<lt::incoming_connection_alert>(a))
+						{
+							if (ca->endpoint.address() == addr("50.0.0.3"))
+								done = true;
+						}
+					}
+				}
+			});
+		});
+	}
+
+	std::function<void(lt::error_code const&)> on_done
+		= [&](lt::error_code const& ec)
+	{
+		if (ec) return;
+
+		std::printf("TERMINATING\n");
+
+		// terminate simulation
+		for (int i = 0; i < int(nodes.size()); ++i)
+		{
+			zombies.push_back(nodes[i]->abort());
+			nodes[i].reset();
+		}
+	};
+
+	timer.expires_after(lt::seconds(65));
+	timer.async_wait(on_done);
+
+	sim.run();
+
+	TEST_EQUAL(done, true);
 }
 
 // TODO: add test that makes sure a torrent in graceful pause mode won't make

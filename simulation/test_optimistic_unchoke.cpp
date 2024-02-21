@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2016, Arvid Norberg
+Copyright (c) 2016, 2021, Alden Torres
+Copyright (c) 2016-2021, Arvid Norberg
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "setup_swarm.hpp"
@@ -45,7 +23,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/session_stats.hpp"
 #include "libtorrent/io_context.hpp"
 #include "libtorrent/torrent_info.hpp"
-#include "libtorrent/deadline_timer.hpp"
+#include "libtorrent/aux_/deadline_timer.hpp"
 
 #include <memory>
 
@@ -79,12 +57,13 @@ TORRENT_TEST(optimistic_unchoke)
 	// only allow an optimistic unchoke slot
 	pack.set_int(settings_pack::unchoke_slots_limit, 1);
 	pack.set_int(settings_pack::num_optimistic_unchoke_slots, 1);
+	pack.set_int(settings_pack::peer_timeout, 9999);
 
 	std::vector<choke_state> peer_choke_state(num_nodes);
 
 	session_proxy proxy;
 
-	auto ses = std::make_shared<lt::session>(std::ref(pack), std::ref(ios));
+	auto ses = std::make_shared<lt::session>(pack, ios);
 	ses->async_add_torrent(atp);
 
 	std::vector<std::shared_ptr<sim::asio::io_context>> io_context;
@@ -100,8 +79,8 @@ TORRENT_TEST(optimistic_unchoke)
 			char ep[30];
 			std::snprintf(ep, sizeof(ep), "50.0.%d.%d", (i + 1) >> 8, (i + 1) & 0xff);
 			io_context.push_back(std::make_shared<sim::asio::io_context>(
-				std::ref(sim), addr(ep)));
-			peers.push_back(std::make_shared<peer_conn>(std::ref(*io_context.back())
+				sim, addr(ep)));
+			peers.push_back(std::make_shared<peer_conn>(*io_context.back()
 				, [&,i](int msg, char const* /* buf */, int /* len */)
 				{
 					choke_state& cs = peer_choke_state[i];
@@ -133,7 +112,7 @@ TORRENT_TEST(optimistic_unchoke)
 					lt::time_duration d = lt::clock_type::now() - start_time;
 					std::uint32_t const millis = std::uint32_t(
 						lt::duration_cast<lt::milliseconds>(d).count());
-					printf("\x1b[35m%4d.%03d: [%d] %s (%d ms)\x1b[0m\n"
+					printf("\x1b[35m%4u.%03u: [%d] %s (%d ms)\x1b[0m\n"
 						, millis / 1000, millis % 1000, i, msg_str[msg]
 						, int(lt::duration_cast<lt::milliseconds>(cs.unchoke_duration).count()));
 				}

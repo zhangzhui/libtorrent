@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2004, 2006-2007, 2009-2011, 2013, 2015-2022, Arvid Norberg
+Copyright (c) 2015, Mikhail Titov
+Copyright (c) 2016-2017, 2020-2021, Alden Torres
+Copyright (c) 2016-2017, Andrei Kurushin
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/config.hpp"
@@ -37,30 +17,29 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <algorithm>
 #include <mutex>
 #include <cstring>
+#include <vector>
 
 #ifdef TORRENT_WINDOWS
 #include "libtorrent/aux_/windows.hpp"
-#endif
-
-#if TORRENT_USE_ICONV
-#include <iconv.h>
-#include <locale.h>
+#else
+#include <clocale>
 #endif
 
 #include "libtorrent/assert.hpp"
-#include "libtorrent/parse_url.hpp"
+#include "libtorrent/aux_/parse_url.hpp"
 
-#include "libtorrent/utf8.hpp"
+#include "libtorrent/aux_/utf8.hpp"
 #include "libtorrent/aux_/escape_string.hpp"
-#include "libtorrent/string_util.hpp" // for to_string
+#include "libtorrent/aux_/string_util.hpp" // for to_string
 #include "libtorrent/aux_/array.hpp"
+#include "libtorrent/aux_/byteswap.hpp"
 
 namespace libtorrent {
 
 	// defined in hex.cpp
 	namespace aux {
 
-		extern const char hex_chars[];
+		extern const aux::array<char, 16> hex_chars;
 	}
 
 	std::string unescape_string(string_view s, error_code& ec)
@@ -189,13 +168,6 @@ namespace libtorrent {
 		std::replace(path.begin(), path.end(), '\\', '/');
 	}
 
-#ifdef TORRENT_WINDOWS
-	void convert_path_to_windows(std::string& path)
-	{
-		std::replace(path.begin(), path.end(), '/', '\\');
-	}
-#endif
-
 	// TODO: 2 this should probably be moved into string_util.cpp
 	std::string read_until(char const*& str, char const delim, char const* end)
 	{
@@ -212,17 +184,15 @@ namespace libtorrent {
 		return ret;
 	}
 
-	std::string maybe_url_encode(std::string const& url)
+	std::string maybe_url_encode(string_view url)
 	{
-		std::string protocol, host, auth, path;
-		int port;
 		error_code ec;
-		std::tie(protocol, auth, host, port, path) = parse_url_components(url, ec);
-		if (ec) return url;
+		auto const [protocol, auth, host, port, path] = aux::parse_url_components(url, ec);
+		if (ec) return std::string(url);
 
 		// first figure out if this url contains unencoded characters
 		if (!need_encoding(path.c_str(), int(path.size())))
-			return url;
+			return std::string(url);
 
 		std::string msg;
 		std::string escaped_path { escape_path(path) };
@@ -244,44 +214,16 @@ namespace libtorrent {
 		if (port != -1)
 		{
 			msg.append(":");
-			msg.append(to_string(port).data());
+			msg.append(aux::to_string(port).data());
 		}
 		msg.append(escaped_path);
 
 		return msg;
 	}
 
-#if TORRENT_ABI_VERSION == 1
-	std::string resolve_file_url(std::string const& url)
-	{
-		TORRENT_ASSERT(url.substr(0, 7) == "file://");
-		// first, strip the file:// part.
-		// On windows, we have
-		// to strip the first / as well
-		std::size_t num_to_strip = 7;
-#ifdef TORRENT_WINDOWS
-		if (url[7] == '/' || url[7] == '\\') ++num_to_strip;
-#endif
-		std::string ret = url.substr(num_to_strip);
-
-		// we also need to URL-decode it
-		error_code ec;
-		std::string unescaped = unescape_string(ret, ec);
-		if (ec) unescaped = ret;
-
-		// on windows, we need to convert forward slashes
-		// to backslashes
-#ifdef TORRENT_WINDOWS
-		convert_path_to_windows(unescaped);
-#endif
-
-		return unescaped;
-	}
-#endif
-
 	std::string base64encode(const std::string& s)
 	{
-		static char const base64_table[] =
+		static aux::array<char, 64> const base64_table{
 		{
 			'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
 			'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
@@ -291,7 +233,7 @@ namespace libtorrent {
 			'o', 'p', 'q', 'r', 's', 't', 'u', 'v',
 			'w', 'x', 'y', 'z', '0', '1', '2', '3',
 			'4', '5', '6', '7', '8', '9', '+', '/'
-		};
+		}};
 
 		aux::array<std::uint8_t, 3> inbuf;
 		aux::array<std::uint8_t, 4> outbuf;
@@ -332,23 +274,70 @@ namespace libtorrent {
 	}
 
 #if TORRENT_USE_I2P
-	std::string base32encode(string_view s, encode_string_flags_t const flags)
+
+namespace {
+	std::uint32_t map_base64_char(char const c)
 	{
-		static char const base32_table_canonical[] =
+		if (c >= 'A' && c <= 'Z')
+			return std::uint32_t(c - 'A');
+		if (c >= 'a' && c <= 'z')
+			return std::uint32_t(26 + c - 'a');
+		if (c >= '0' && c <= '9')
+			return std::uint32_t(52 + c - '0');
+		if (c == '-') return 62;
+		if (c == '~') return 63;
+		throw system_error(error_code(lt::errors::invalid_escaped_string));
+	}
+}
+
+	// this decodes the i2p alphabet
+	std::vector<char> base64decode_i2p(string_view s)
+	{
+		std::uint32_t output = 0;
+
+		std::vector<char> ret;
+		int bit_offset = 18;
+		for (auto const c : s)
 		{
-			'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
-			'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
-			'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
-			'Y', 'Z', '2', '3', '4', '5', '6', '7'
-		};
-		static char const base32_table_lowercase[] =
+			if (c == '=') break;
+			output |= map_base64_char(c) << bit_offset;
+			if (bit_offset == 0)
+			{
+				output = aux::host_to_network(output);
+				aux::array<char, 4> tmp;
+				std::memcpy(tmp.data(), &output, 4);
+				ret.push_back(tmp[1]);
+				ret.push_back(tmp[2]);
+				ret.push_back(tmp[3]);
+				output = 0;
+				bit_offset = 18;
+			}
+			else
+			{
+				bit_offset -= 6;
+			}
+		}
+		if (bit_offset < 18)
+		{
+			output = aux::host_to_network(output);
+			aux::array<char, 4> tmp;
+			std::memcpy(tmp.data(), &output, 4);
+			ret.push_back(tmp[1]);
+			if (bit_offset < 6)
+				ret.push_back(tmp[2]);
+		}
+		return ret;
+	}
+
+	std::string base32encode_i2p(span<char const> s)
+	{
+		static aux::array<char, 32> const base32_table{
 		{
 			'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h',
 			'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p',
 			'q', 'r', 's', 't', 'u', 'v', 'w', 'x',
 			'y', 'z', '2', '3', '4', '5', '6', '7'
-		};
-		char const *base32_table = (flags & string::lowercase) ? base32_table_lowercase : base32_table_canonical;
+		}};
 
 		static aux::array<int, 6> const input_output_mapping{{{0, 2, 4, 5, 7, 8}}};
 
@@ -358,7 +347,7 @@ namespace libtorrent {
 		std::string ret;
 		for (auto i = s.begin(); i != s.end();)
 		{
-			int available_input = std::min(int(inbuf.size()), int(s.end() - i));
+			int const available_input = std::min(int(inbuf.size()), int(s.end() - i));
 
 			// clear input buffer
 			inbuf.fill(0);
@@ -380,18 +369,8 @@ namespace libtorrent {
 			// write output
 			int const num_out = input_output_mapping[available_input];
 			for (int j = 0; j < num_out; ++j)
-			{
 				ret += base32_table[outbuf[j]];
-			}
-
-			if (!(flags & string::no_padding))
-			{
-				// write pad
-				for (int j = 0; j < int(outbuf.size()) - num_out; ++j)
-				{
-					ret += '=';
-				}
-			}
+			// i2p does not use padding
 		}
 		return ret;
 	}
@@ -471,161 +450,148 @@ namespace libtorrent {
 #if defined TORRENT_WINDOWS
 	std::wstring convert_to_wstring(std::string const& s)
 	{
-		error_code ec;
-		std::wstring ret = libtorrent::utf8_wchar(s, ec);
-		if (!ec) return ret;
-
-		ret.clear();
-		const char* end = &s[0] + s.size();
-		for (const char* i = &s[0]; i < end;)
-		{
-			wchar_t c = '.';
-			int const result = std::mbtowc(&c, i, end - i);
-			if (result > 0) i += result;
-			else ++i;
-			ret += c;
-		}
-		return ret;
+		std::wstring ws;
+		ws.resize(s.size() + 1);
+		int wsize = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &ws[0], int(ws.size()));
+		if (wsize < 0) return {};
+		if (wsize > 0 && ws[wsize - 1] == '\0') --wsize;
+		ws.resize(wsize);
+		return ws;
 	}
 
 	std::string convert_from_wstring(std::wstring const& s)
 	{
-		error_code ec;
-		std::string ret = libtorrent::wchar_utf8(s, ec);
-		if (!ec) return ret;
-
-		ret.clear();
-		const wchar_t* end = &s[0] + s.size();
-		for (const wchar_t* i = &s[0]; i < end;)
-		{
-			char c[10];
-			TORRENT_ASSERT(sizeof(c) >= std::size_t(MB_CUR_MAX));
-			int const result = std::wctomb(c, *i);
-			if (result > 0)
-			{
-				i += result;
-				ret.append(c, result);
-			}
-			else
-			{
-				++i;
-				ret += ".";
-			}
-		}
+		std::string ret;
+		ret.resize(s.size() * 4 + 1);
+		int size = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), -1
+			, &ret[0], int(ret.size()), nullptr, nullptr);
+		if (size < 0) return {};
+		if (size > 0 && ret[size - 1] == '\0') --size;
+		ret.resize(size);
 		return ret;
 	}
 #endif
 
-#if TORRENT_USE_ICONV
+#if !TORRENT_NATIVE_UTF8
+
+#if defined TORRENT_WINDOWS
+
 namespace {
 
-	// this is a helper function to deduce the type of the second argument to
-	// the iconv() function.
-
-	template <typename Input>
-	size_t call_iconv(size_t (&fun)(iconv_t, Input**, size_t*, char**, size_t*)
-		, iconv_t cd, char const** in, size_t* insize, char** out, size_t* outsize)
+	std::string convert_impl(std::string const& s, UINT from, UINT to)
 	{
-		return fun(cd, const_cast<Input**>(in), insize, out, outsize);
-	}
+		// if the local codepage is already UTF-8, no need to convert
+		static UINT const cp = GetACP();
+		if (cp == CP_UTF8) return s;
 
-	std::string iconv_convert_impl(std::string const& s, iconv_t h)
-	{
+		std::wstring ws;
+		ws.resize(s.size() + 1);
+		int wsize = MultiByteToWideChar(from, 0, s.c_str(), -1, &ws[0], int(ws.size()));
+		if (wsize > 0 && ws[wsize - 1] == '\0') --wsize;
+		ws.resize(wsize);
+
 		std::string ret;
-		size_t insize = s.size();
-		size_t outsize = insize * 4;
-		ret.resize(outsize);
-		char const* in = s.c_str();
-		char* out = &ret[0];
-		// posix has a weird iconv() signature. implementations
-		// differ on the type of the second parameter. We use a helper template
-		// to deduce what we need to cast to.
-		std::size_t const retval = call_iconv(::iconv, h, &in, &insize, &out, &outsize);
-		if (retval == size_t(-1)) return s;
-		// if this string has an invalid utf-8 sequence in it, don't touch it
-		if (insize != 0) return s;
-		// not sure why this would happen, but it seems to be possible
-		if (outsize > s.size() * 4) return s;
-		// outsize is the number of bytes unused of the out-buffer
-		TORRENT_ASSERT(ret.size() >= outsize);
-		ret.resize(ret.size() - outsize);
+		ret.resize(ws.size() * 4 + 1);
+		int size = WideCharToMultiByte(to, 0, ws.c_str(), -1, &ret[0], int(ret.size()), nullptr, nullptr);
+		if (size > 0 && ret[size - 1] == '\0') --size;
+		ret.resize(size);
 		return ret;
 	}
 } // anonymous namespace
 
 	std::string convert_to_native(std::string const& s)
 	{
-		static std::mutex iconv_mutex;
-		// only one thread can use this handle at a time
-		std::lock_guard<std::mutex> l(iconv_mutex);
-
-		// the empty string represents the local dependent encoding
-		static iconv_t iconv_handle = ::iconv_open("", "UTF-8");
-		if (iconv_handle == iconv_t(-1)) return s;
-		return iconv_convert_impl(s, iconv_handle);
+		return convert_impl(s, CP_UTF8, CP_ACP);
 	}
 
 	std::string convert_from_native(std::string const& s)
 	{
-		static std::mutex iconv_mutex;
-		// only one thread can use this handle at a time
-		std::lock_guard<std::mutex> l(iconv_mutex);
-
-		// the empty string represents the local dependent encoding
-		static iconv_t iconv_handle = ::iconv_open("UTF-8", "");
-		if (iconv_handle == iconv_t(-1)) return s;
-		return iconv_convert_impl(s, iconv_handle);
+		return convert_impl(s, CP_ACP, CP_UTF8);
 	}
 
-#elif defined TORRENT_WINDOWS
+#else
+
+namespace {
+
+	bool ends_with(string_view s, string_view suffix)
+	{
+		return s.size() >= suffix.size()
+			&& s.substr(s.size() - suffix.size()) == suffix;
+	}
+
+	bool has_utf8_locale()
+	{
+		char const* lang = std::getenv("LANG");
+		if (lang == nullptr) return false;
+		return ends_with(lang, ".UTF-8");
+	}
+
+	bool need_conversion()
+	{
+		static bool const ret = has_utf8_locale();
+		return !ret;
+	}
+}
 
 	std::string convert_to_native(std::string const& s)
 	{
-		std::wstring ws = libtorrent::utf8_wchar(s);
+		if (!need_conversion()) return s;
+
+		std::mbstate_t state{};
 		std::string ret;
-		ret.resize(ws.size() * 4 + 1);
-		std::size_t size = WideCharToMultiByte(CP_ACP, 0, ws.c_str(), -1, &ret[0], int(ret.size()), nullptr, nullptr);
-		if (size == std::size_t(-1)) return s;
-		if (size != 0 && ret[size - 1] == '\0') --size;
-		ret.resize(size);
+		string_view ptr = s;
+		while (!ptr.empty())
+		{
+			// decode a single utf-8 character
+			auto [codepoint, len] = aux::parse_utf8_codepoint(ptr);
+
+			if (codepoint == -1)
+				codepoint = '.';
+
+			ptr = ptr.substr(std::size_t(len));
+
+			char out[10];
+			std::size_t const size = std::wcrtomb(out, static_cast<wchar_t>(codepoint), &state);
+			if (size == static_cast<std::size_t>(-1))
+			{
+				ret += '.';
+				state = std::mbstate_t{};
+			}
+			else
+				for (std::size_t i = 0; i < size; ++i)
+					ret += out[i];
+		}
 		return ret;
 	}
 
 	std::string convert_from_native(std::string const& s)
 	{
-		std::wstring ws;
-		ws.resize(s.size() + 1);
-		std::size_t size = MultiByteToWideChar(CP_ACP, 0, s.c_str(), -1, &ws[0], int(ws.size()));
-		if (size == std::size_t(-1)) return s;
-		if (size != 0 && ws[size - 1] == '\0') --size;
-		ws.resize(size);
-		return libtorrent::wchar_utf8(ws);
-	}
+		if (!need_conversion()) return s;
 
-#elif TORRENT_USE_LOCALE
-
-	std::string convert_to_native(std::string const& s)
-	{
-		std::wstring ws = libtorrent::utf8_wchar(s);
-		std::size_t size = wcstombs(0, ws.c_str(), 0);
-		if (size == std::size_t(-1)) return s;
+		std::mbstate_t state{};
 		std::string ret;
-		ret.resize(size);
-		size = wcstombs(&ret[0], ws.c_str(), size + 1);
-		if (size == std::size_t(-1)) return s;
-		ret.resize(size);
+		string_view ptr = s;
+		while (!ptr.empty())
+		{
+			wchar_t codepoint;
+			std::size_t const size = std::mbrtowc(&codepoint, ptr.data(), ptr.size(), &state);
+			if (size == static_cast<std::size_t>(-1))
+			{
+				ret.push_back('.');
+				state = std::mbstate_t{};
+				ptr = ptr.substr(1);
+			}
+			else
+			{
+				aux::append_utf8_codepoint(ret, static_cast<std::int32_t>(codepoint));
+				ptr = ptr.substr(size < 1 ? 1 : size);
+			}
+		}
+
 		return ret;
 	}
 
-	std::string convert_from_native(std::string const& s)
-	{
-		std::wstring ws;
-		ws.resize(s.size());
-		std::size_t size = mbstowcs(&ws[0], s.c_str(), s.size());
-		if (size == std::size_t(-1)) return s;
-		return libtorrent::wchar_utf8(ws);
-	}
-
+#endif
 #endif
 
 }

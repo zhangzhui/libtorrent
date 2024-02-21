@@ -1,38 +1,17 @@
 /*
 
-Copyright (c) 2014-2015, Arvid Norberg
+Copyright (c) 2015-2017, 2019-2022, Arvid Norberg
+Copyright (c) 2015, Steven Siloti
+Copyright (c) 2016, 2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session.hpp"
 #include "libtorrent/io_context.hpp"
-#include "libtorrent/deadline_timer.hpp"
+#include "libtorrent/aux_/deadline_timer.hpp"
 #include "libtorrent/address.hpp"
 #include "libtorrent/add_torrent_params.hpp"
 #include "libtorrent/time.hpp"
@@ -40,119 +19,82 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/ip_filter.hpp"
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/aux_/path.hpp"
-#include "libtorrent/random.hpp"
+#include "libtorrent/aux_/random.hpp"
+#include "disk_io.hpp"
 #include <fstream>
 
 #include "settings.hpp"
 #include "setup_swarm.hpp"
-#include "setup_transfer.hpp" // for create_torrent
+#include "setup_transfer.hpp" // for create_torrent, addr
 #include "utils.hpp"
 #include "simulator/queue.hpp"
 
 using namespace sim;
 
+#define DEBUG_SWARM 0
+
+constexpr swarm_test_t swarm_test::download;
+constexpr swarm_test_t swarm_test::upload;
+constexpr swarm_test_t swarm_test::no_auto_stop;
+constexpr swarm_test_t swarm_test::large_torrent;
+constexpr swarm_test_t swarm_test::real_disk;
+
 namespace {
 
-	int transfer_rate(lt::address ip)
-	{
-		// in order to get a heterogeneous network, the last digit in the IP
-		// address determines the latency to that node as well as upload and
-		// download rates.
-		int last_digit;
-		if (ip.is_v4())
-			last_digit = ip.to_v4().to_bytes()[3];
-		else
-			last_digit = ip.to_v6().to_bytes()[15];
-		return (last_digit + 4) * 5;
-	}
+int transfer_rate(lt::address ip)
+{
+	// in order to get a heterogeneous network, the last digit in the IP
+	// address determines the latency to that node as well as upload and
+	// download rates.
+	int last_digit;
+	if (ip.is_v4())
+		last_digit = ip.to_v4().to_bytes()[3];
+	else
+		last_digit = ip.to_v6().to_bytes()[15];
+	return (last_digit + 4) * 5;
+}
 
 } // anonymous namespace
 
-typedef sim::chrono::high_resolution_clock::duration duration;
+using duration = sim::chrono::high_resolution_clock::duration;
 using sim::chrono::milliseconds;
+
+dsl_config::dsl_config(int kb_per_second, int send_queue_size, chrono::milliseconds latency)
+	: m_rate(kb_per_second)
+	, m_queue_size(send_queue_size)
+	, m_latency(latency)
+{
+	if (m_latency == lt::milliseconds(0))
+		m_latency = lt::milliseconds(kb_per_second / 2);
+}
 
 sim::route dsl_config::incoming_route(asio::ip::address ip)
 {
-	int rate = transfer_rate(ip);
+	int const rate = m_rate > 0 ? m_rate : transfer_rate(ip);
+	int const queue_size = m_queue_size > 0 ? m_queue_size : 200000;
 
 	auto it = m_incoming.find(ip);
 	if (it != m_incoming.end()) return sim::route().append(it->second);
 	it = m_incoming.insert(it, std::make_pair(ip, std::make_shared<queue>(
 		m_sim->get_io_context()
 		, rate * 1000
-		, lt::duration_cast<duration>(milliseconds(rate / 2))
-		, 200 * 1000, "DSL modem in")));
+		, lt::duration_cast<duration>(m_latency)
+		, queue_size, "DSL modem in")));
 	return sim::route().append(it->second);
 }
 
 sim::route dsl_config::outgoing_route(asio::ip::address ip)
 {
-	int rate = transfer_rate(ip);
+	int const rate = m_rate > 0 ? m_rate : transfer_rate(ip);
+	int const queue_size = m_queue_size > 0 ? m_queue_size : 200000;
 
 	auto it = m_outgoing.find(ip);
 	if (it != m_outgoing.end()) return sim::route().append(it->second);
 	it = m_outgoing.insert(it, std::make_pair(ip, std::make_shared<queue>(
 		m_sim->get_io_context(), rate * 1000
-		, lt::duration_cast<duration>(milliseconds(rate / 2)), 200 * 1000, "DSL modem out")));
+		, lt::duration_cast<duration>(m_latency)
+		, queue_size, "DSL modem out")));
 	return sim::route().append(it->second);
-}
-
-std::string save_path(int swarm_id, int idx)
-{
-	char path[200];
-	std::snprintf(path, sizeof(path), "swarm-%04d-peer-%02d"
-		, swarm_id, idx);
-	return path;
-}
-
-void add_extra_peers(lt::session& ses)
-{
-	auto handles = ses.get_torrents();
-	TEST_EQUAL(handles.size(), 1);
-	auto h = handles[0];
-
-	for (int i = 0; i < 30; ++i)
-	{
-		char ep[30];
-		std::snprintf(ep, sizeof(ep), "60.0.0.%d", i + 1);
-		h.connect_peer(lt::tcp::endpoint(addr(ep), 6881));
-	}
-}
-
-lt::torrent_status get_status(lt::session& ses)
-{
-	auto handles = ses.get_torrents();
-	TEST_EQUAL(handles.size(), 1);
-	if (handles.empty()) return lt::torrent_status();
-	auto h = handles[0];
-	return h.status();
-}
-
-bool has_metadata(lt::session& ses)
-{
-	auto handles = ses.get_torrents();
-	TEST_EQUAL(handles.size(), 1);
-	if (handles.empty()) return false;
-	auto h = handles[0];
-	return h.status().has_metadata;
-}
-
-bool is_seed(lt::session& ses)
-{
-	auto handles = ses.get_torrents();
-	TEST_EQUAL(handles.size(), 1);
-	if (handles.empty()) return false;
-	auto h = handles[0];
-	return h.status().is_seeding;
-}
-
-int completed_pieces(lt::session& ses)
-{
-	auto handles = ses.get_torrents();
-	TEST_EQUAL(handles.size(), 1);
-	if (handles.empty()) return 0;
-	auto h = handles[0];
-	return h.status().num_pieces;
 }
 
 namespace {
@@ -179,26 +121,8 @@ bool should_print(lt::alert* a)
 }
 }
 
-void utp_only(lt::settings_pack& p)
-{
-	using namespace lt;
-	p.set_bool(settings_pack::enable_outgoing_tcp, false);
-	p.set_bool(settings_pack::enable_incoming_tcp, false);
-	p.set_bool(settings_pack::enable_outgoing_utp, true);
-	p.set_bool(settings_pack::enable_incoming_utp, true);
-}
-
-void enable_enc(lt::settings_pack& p)
-{
-	using namespace lt;
-	p.set_bool(settings_pack::prefer_rc4, true);
-	p.set_int(settings_pack::in_enc_policy, settings_pack::pe_forced);
-	p.set_int(settings_pack::out_enc_policy, settings_pack::pe_forced);
-	p.set_int(settings_pack::allowed_enc_level, settings_pack::pe_both);
-}
-
 void setup_swarm(int num_nodes
-	, swarm_test type
+	, swarm_test_t type
 	, std::function<void(lt::settings_pack&)> new_session
 	, std::function<void(lt::add_torrent_params&)> add_torrent
 	, std::function<void(lt::alert const*, lt::session&)> on_alert
@@ -212,7 +136,7 @@ void setup_swarm(int num_nodes
 }
 
 void setup_swarm(int num_nodes
-	, swarm_test type
+	, swarm_test_t type
 	, sim::simulation& sim
 	, std::function<void(lt::settings_pack&)> new_session
 	, std::function<void(lt::add_torrent_params&)> add_torrent
@@ -230,7 +154,7 @@ void setup_swarm(int num_nodes
 }
 
 void setup_swarm(int num_nodes
-	, swarm_test type
+	, swarm_test_t type
 	, sim::simulation& sim
 	, lt::settings_pack const& default_settings
 	, lt::add_torrent_params const& default_add_torrent
@@ -250,7 +174,7 @@ void setup_swarm(int num_nodes
 }
 
 void setup_swarm(int num_nodes
-	, swarm_test type
+	, swarm_test_t const type
 	, sim::simulation& sim
 	, lt::settings_pack const& default_settings
 	, lt::add_torrent_params const& default_add_torrent
@@ -266,17 +190,31 @@ void setup_swarm(int num_nodes
 	std::vector<std::shared_ptr<lt::session>> nodes;
 	std::vector<std::shared_ptr<sim::asio::io_context>> io_context;
 	std::vector<lt::session_proxy> zombies;
-	lt::deadline_timer timer(ios);
+	lt::aux::deadline_timer timer(ios);
 
 	lt::error_code ec;
-	int const swarm_id = test_counter();
+	int const swarm_id = unit_test::test_counter();
 	std::string path = save_path(swarm_id, 0);
-	lt::create_directory(path, ec);
-	if (ec) std::printf("failed to create directory: \"%s\": %s\n"
-		, path.c_str(), ec.message().c_str());
-	std::ofstream file(lt::combine_path(path, "temporary").c_str());
-	auto ti = ::create_torrent(&file, "temporary", 0x4000, 9, false);
-	file.close();
+
+	std::shared_ptr<lt::torrent_info> ti;
+
+	if (type & swarm_test::real_disk)
+	{
+		lt::create_directory(path, ec);
+		if (ec) std::printf("failed to create directory: \"%s\": %s\n"
+			, path.c_str(), ec.message().c_str());
+		std::ofstream file(lt::combine_path(path, "temporary").c_str());
+		ti = ::create_torrent(&file, "temporary", 0x4000, (type & swarm_test::large_torrent) ? 50 : 9, false);
+	}
+	else
+	{
+		ti = ::create_test_torrent(0x4000, (type & swarm_test::large_torrent) ? 50 : 9, {});
+	}
+
+	if (bool(type & swarm_test::download) && bool(type & swarm_test::upload))
+	{
+		TEST_ERROR("can only use one of upload or download test type");
+	}
 
 	// session 0 is the one we're testing. The others provide the scaffolding
 	// it's either a downloader or a seed
@@ -291,16 +229,34 @@ void setup_swarm(int num_nodes
 		ips.push_back(addr(ep));
 		io_context.push_back(std::make_shared<sim::asio::io_context>(sim, ips));
 
-		lt::settings_pack pack = default_settings;
+		lt::session_params params;
+		params.settings = default_settings;
 
 		// make sure the sessions have different peer ids
 		lt::peer_id pid;
 		lt::aux::random_bytes(pid);
-		pack.set_str(lt::settings_pack::peer_fingerprint, pid.to_string());
-		if (i == 0) new_session(pack);
+		params.settings.set_str(lt::settings_pack::peer_fingerprint, pid.to_string());
+
+		if (!(type & swarm_test::real_disk))
+		{
+			if (type & swarm_test::download)
+			{
+				// in download tests, session 0 is a downloader and every other session
+				// is a seed. save path 0 is where the files are, so that's for seeds
+				params.disk_io_constructor = test_disk().set_seed(i > 0);
+			}
+			else
+			{
+				// in seed tests, session 0 is a seed and every other session
+				// a downloader. save path 0 is where the files are, so that's for seeds
+				params.disk_io_constructor = test_disk().set_seed(i == 0);
+			}
+		}
+
+		if (i == 0) new_session(params.settings);
 
 		std::shared_ptr<lt::session> ses =
-			std::make_shared<lt::session>(pack, *io_context.back());
+			std::make_shared<lt::session>(params, *io_context.back());
 		init_session(*ses);
 		nodes.push_back(ses);
 
@@ -314,18 +270,26 @@ void setup_swarm(int num_nodes
 		}
 
 		lt::add_torrent_params p = default_add_torrent;
-		if (type == swarm_test::download)
+		if (type & swarm_test::real_disk)
 		{
-			// in download tests, session 0 is a downloader and every other session
-			// is a seed. save path 0 is where the files are, so that's for seeds
-			p.save_path = save_path(swarm_id, i > 0 ? 0 : 1);
+			if (type & swarm_test::download)
+			{
+				// in download tests, session 0 is a downloader and every other session
+				// is a seed. save path 0 is where the files are, so that's for seeds
+				p.save_path = save_path(swarm_id, i > 0 ? 0 : 1);
+			}
+			else
+			{
+				// in seed tests, session 0 is a seed and every other session
+				// a downloader. save path 0 is where the files are, so that's for seeds
+				p.save_path = save_path(swarm_id, i);
+			}
 		}
 		else
 		{
-			// in seed tests, session 0 is a seed and every other session
-			// a downloader. save path 0 is where the files are, so that's for seeds
-			p.save_path = save_path(swarm_id, i);
+			p.save_path = ".";
 		}
+
 		p.ti = ti;
 		if (i == 0) add_torrent(p);
 		ses->async_add_torrent(p);
@@ -345,11 +309,12 @@ void setup_swarm(int num_nodes
 
 				// to debug the sessions not under test, comment out the following
 				// line
+#if DEBUG_SWARM == 0
 				if (i != 0) return;
+#endif
 
 				for (lt::alert* a : alerts)
 				{
-
 					// only print alerts from the session under test
 					lt::time_duration d = a->timestamp() - start_time;
 					std::uint32_t const millis = std::uint32_t(
@@ -357,10 +322,22 @@ void setup_swarm(int num_nodes
 
 					if (should_print(a))
 					{
-						std::printf("%4d.%03d: %-25s %s\n", millis / 1000, millis % 1000
+						std::printf(
+#if DEBUG_SWARM != 0
+							"[%d] "
+#endif
+							"%4u.%03u: %-25s %s\n"
+#if DEBUG_SWARM != 0
+							, i
+#endif
+							, millis / 1000, millis % 1000
 							, a->what()
 							, a->message().c_str());
 					}
+
+#if DEBUG_SWARM != 0
+					if (i != 0) continue;
+#endif
 
 					// if a torrent was added save the torrent handle
 					if (lt::add_torrent_alert* at = lt::alert_cast<lt::add_torrent_alert>(a))
@@ -394,7 +371,7 @@ void setup_swarm(int num_nodes
 
 		bool shut_down = terminate(tick, *nodes[0]);
 
-		if (type == swarm_test::upload)
+		if ((type & swarm_test::upload) && !bool(type & swarm_test::no_auto_stop))
 		{
 			shut_down |= std::all_of(nodes.begin() + 1, nodes.end()
 				, [](std::shared_ptr<lt::session> const& s)

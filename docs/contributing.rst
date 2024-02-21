@@ -1,7 +1,3 @@
-=================
-libtorrent manual
-=================
-
 .. include:: header.rst
 
 .. contents:: Table of contents
@@ -23,8 +19,12 @@ enumerated on this page, please contact arvid@libtorrent.org or the `mailing lis
 	report any issue to the bug tracker at `github`_.
 
 	New features that need testing are streaming (``set_piece_deadline()``), the different
-	choking algorithms (especially the new BitTyrant choker), the disk cache options (such
-	as ``explicit_cache``).
+	choking algorithms (like the rate-based choker).
+
+	Additional fuzzers are also always welcome. Find a libtorrent interface
+	that's not already covered by a fuzzer (see the ``fuzzers`` directory in the
+	root) and add a new fuzzer to it. Alternatively, improve an existing fuzzer by
+	producing inputs that gets coverage deeper in to libtorrent.
 
 .. _`github`: https://github.com/arvidn/libtorrent/issues
 
@@ -34,7 +34,14 @@ enumerated on this page, please contact arvid@libtorrent.org or the `mailing lis
 	in general. Non-reference documentation is very much welcome as well, higher level
 	descriptions on how to configure libtorrent for various situations for instance.
 	The reference documentation for libtorrent is generated from the header files.
-	For updates, please submit a `pull request`_.
+
+	Each heading in the online documentation has a short-cut link to file a new issue
+	against the documentation.
+
+	For updates, please submit a `pull request`_. All documentation is in
+	restructured text (rst_). All documentation is spell checked with hunspell
+	which can be invoked via ``make spell-check`` in the docs directory. If
+	words are missing, please add them to ``docs/hunspell/libtorrent.dic``
 
 3. Code
 	Contributing code for new features or bug-fixes is highly welcome. If you're interested
@@ -47,13 +54,10 @@ enumerated on this page, please contact arvid@libtorrent.org or the `mailing lis
 
 For an overview of the internals of libtorrent, see the hacking_ page.
 
-For outstanding things to do, see the `todo list`_ or the `sonarqube analysis`_ of master.
+For outstanding things to do, see the `todo list`_.
 
 .. _hacking: hacking.html
-
 .. _`pull request`: https://github.com/arvidn/libtorrent
-
 .. _`todo list`: todo.html
-
-.. _`sonarqube analysis`: https://sonarcloud.io/dashboard?id=libtorrent
+.. _rst: https://docutils.sourceforge.io/rst.html
 

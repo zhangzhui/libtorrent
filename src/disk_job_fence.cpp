@@ -1,38 +1,17 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg, Daniel Wallin
+Copyright (c) 2003, Daniel Wallin
+Copyright (c) 2017, 2020, Alden Torres
+Copyright (c) 2016-2020, 2022, Arvid Norberg
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 
 #include "libtorrent/aux_/disk_job_fence.hpp"
-#include "libtorrent/disk_io_job.hpp"
+#include "libtorrent/aux_/disk_job.hpp"
 #include "libtorrent/performance_counters.hpp"
 
 #define DEBUG_STORAGE 0
@@ -43,18 +22,19 @@ POSSIBILITY OF SUCH DAMAGE.
 #define DLOG(...) do {} while (false)
 #endif
 
-namespace libtorrent { namespace aux {
+namespace libtorrent {
+namespace aux {
 
-	int disk_job_fence::job_complete(disk_io_job* j, tailqueue<disk_io_job>& jobs)
+	int disk_job_fence::job_complete(disk_job* j, tailqueue<disk_job>& jobs)
 	{
 		std::lock_guard<std::mutex> l(m_mutex);
 
-		TORRENT_ASSERT(j->flags & disk_io_job::in_progress);
-		j->flags &= ~disk_io_job::in_progress;
+		TORRENT_ASSERT(j->flags & disk_job::in_progress);
+		j->flags &= ~disk_job::in_progress;
 
 		TORRENT_ASSERT(m_outstanding_jobs > 0);
 		--m_outstanding_jobs;
-		if (j->flags & disk_io_job::fence)
+		if (j->flags & disk_job::fence)
 		{
 			// a fence job just completed. Make sure the fence logic
 			// works by asserting m_outstanding_jobs is in fact 0 now
@@ -69,8 +49,8 @@ namespace libtorrent { namespace aux {
 			int ret = 0;
 			while (!m_blocked_jobs.empty())
 			{
-				disk_io_job *bj = m_blocked_jobs.pop_front();
-				if (bj->flags & disk_io_job::fence)
+				disk_job *bj = m_blocked_jobs.pop_front();
+				if (bj->flags & disk_job::fence)
 				{
 					// we encountered another fence. We cannot post anymore
 					// jobs from the blocked jobs queue. We have to go back
@@ -79,8 +59,8 @@ namespace libtorrent { namespace aux {
 					// executing currently, we should add the fence job.
 					if (m_outstanding_jobs == 0 && jobs.empty())
 					{
-						TORRENT_ASSERT(!(bj->flags & disk_io_job::in_progress));
-						bj->flags |= disk_io_job::in_progress;
+						TORRENT_ASSERT(!(bj->flags & disk_job::in_progress));
+						bj->flags |= disk_job::in_progress;
 						++m_outstanding_jobs;
 						++ret;
 #if TORRENT_USE_ASSERTS
@@ -94,10 +74,11 @@ namespace libtorrent { namespace aux {
 						// put the fence job back in the blocked queue
 						m_blocked_jobs.push_front(bj);
 					}
+					TORRENT_ASSERT(m_has_fence > 0 || m_blocked_jobs.size() == 0);
 					return ret;
 				}
-				TORRENT_ASSERT(!(bj->flags & disk_io_job::in_progress));
-				bj->flags |= disk_io_job::in_progress;
+				TORRENT_ASSERT(!(bj->flags & disk_job::in_progress));
+				bj->flags |= disk_job::in_progress;
 
 				++m_outstanding_jobs;
 				++ret;
@@ -120,11 +101,11 @@ namespace libtorrent { namespace aux {
 		TORRENT_ASSERT(m_blocked_jobs.size() > 0);
 
 		// this is the fence job
-		disk_io_job *bj = m_blocked_jobs.pop_front();
-		TORRENT_ASSERT(bj->flags & disk_io_job::fence);
+		disk_job *bj = m_blocked_jobs.pop_front();
+		TORRENT_ASSERT(bj->flags & disk_job::fence);
 
-		TORRENT_ASSERT(!(bj->flags & disk_io_job::in_progress));
-		bj->flags |= disk_io_job::in_progress;
+		TORRENT_ASSERT(!(bj->flags & disk_job::in_progress));
+		bj->flags |= disk_job::in_progress;
 
 		++m_outstanding_jobs;
 #if TORRENT_USE_ASSERTS
@@ -136,7 +117,7 @@ namespace libtorrent { namespace aux {
 		return 1;
 	}
 
-	bool disk_job_fence::is_blocked(disk_io_job* j)
+	bool disk_job_fence::is_blocked(disk_job* j)
 	{
 		std::lock_guard<std::mutex> l(m_mutex);
 		DLOG(stderr, "[%p] is_blocked: fence: %d num_outstanding: %d\n"
@@ -147,8 +128,8 @@ namespace libtorrent { namespace aux {
 		// this job still needs to get queued up
 		if (m_has_fence == 0)
 		{
-			TORRENT_ASSERT(!(j->flags & disk_io_job::in_progress));
-			j->flags |= disk_io_job::in_progress;
+			TORRENT_ASSERT(!(j->flags & disk_job::in_progress));
+			j->flags |= disk_job::in_progress;
 			++m_outstanding_jobs;
 			return false;
 		}
@@ -176,11 +157,11 @@ namespace libtorrent { namespace aux {
 	}
 
 	// j is the fence job. It must have exclusive access to the storage
-	int disk_job_fence::raise_fence(disk_io_job* j, counters& cnt)
+	int disk_job_fence::raise_fence(disk_job* j, counters& cnt)
 	{
-		TORRENT_ASSERT(!(j->flags & disk_io_job::in_progress));
-		TORRENT_ASSERT(!(j->flags & disk_io_job::fence));
-		j->flags |= disk_io_job::fence;
+		TORRENT_ASSERT(!(j->flags & disk_job::in_progress));
+		TORRENT_ASSERT(!(j->flags & disk_job::fence));
+		j->flags |= disk_job::fence;
 
 		std::lock_guard<std::mutex> l(m_mutex);
 
@@ -197,7 +178,7 @@ namespace libtorrent { namespace aux {
 			// after this, without being passed through is_blocked()
 			// that's why we're accounting for it here
 
-			j->flags |= disk_io_job::in_progress;
+			j->flags |= disk_job::in_progress;
 			++m_outstanding_jobs;
 			return fence_post_fence;
 		}
@@ -213,4 +194,5 @@ namespace libtorrent { namespace aux {
 		return fence_post_none;
 	}
 
-}}
+}
+}

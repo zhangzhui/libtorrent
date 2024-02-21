@@ -20,7 +20,7 @@ struct entry_to_python
             result.append(*i);
         }
 
-        return result;
+        return TORRENT_RVO(result);
     }
 
     static object convert(entry::dictionary_type const& d)
@@ -30,7 +30,7 @@ struct entry_to_python
         for (entry::dictionary_type::const_iterator i(d.begin()), e(d.end()); i != e; ++i)
             result[bytes(i->first)] = i->second;
 
-        return result;
+        return TORRENT_RVO(result);
     }
 
     static object convert0(entry const& e)
@@ -110,7 +110,7 @@ struct entry_from_python
                 {
                     result.dict().insert(
                         std::make_pair(
-                            extract<char const*>(items[i][0])(),
+                            extract<std::string>(items[i][0])(),
                             construct0(items[i][1])
                         )
                     );
@@ -139,6 +139,9 @@ struct entry_from_python
         }
         else if (extract<str>(e).check())
         {
+             // TODO: Throw a TypeError here in the future
+             python_deprecated("constructing a bencode entry from anything but "
+                 "int, dict, list, bytes and int-tuple is deprecated");
              return entry(extract<std::string>(e)());
         }
         else if (extract<entry::integer_type>(e).check())
@@ -157,6 +160,12 @@ struct entry_from_python
             }
 
             return entry(preformatted);
+        }
+        else
+        {
+            // TODO: Throw a TypeError here in the future
+            python_deprecated("constructing a bencode entry from anything but "
+                "int, dict, list, bytes and int-tuple is deprecated");
         }
 
         return entry();

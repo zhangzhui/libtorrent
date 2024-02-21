@@ -1,38 +1,19 @@
 /*
 
-Copyright (c) 2013, Arvid Norberg
+Copyright (c) 2013-2022, Arvid Norberg
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2018, Alden Torres
+Copyright (c) 2018, d-komarov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include <sys/stat.h> // for chmod
 
 #include "libtorrent/session.hpp"
+#include "libtorrent/session_params.hpp"
 #include "test.hpp"
 #include "settings.hpp"
 #include "setup_transfer.hpp"
@@ -43,6 +24,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/torrent_status.hpp"
 #include "libtorrent/hex.hpp" // to_hex
 #include "libtorrent/aux_/path.hpp"
+#include "libtorrent/aux_/open_mode.hpp"
 
 namespace {
 
@@ -74,53 +56,63 @@ enum
 	// force-recheck. Make sure the stat cache is cleared and let us pick up the
 	// new files
 	force_recheck = 8,
+
+	// files that are *bigger* than expected still considered OK. We don't
+	// truncate files willy-nilly. Checking is a read-only operation.
+	extended_files = 16,
+
+	v2 = 32,
+
+	single_file = 64,
 };
 
-void test_checking(int flags)
+void test_checking(int const flags)
 {
 	using namespace lt;
 
-	std::printf("\n==== TEST CHECKING %s%s%s%s=====\n\n"
+	std::printf("\n==== TEST CHECKING %s%s%s%s%s%s%s=====\n\n"
 		, (flags & read_only_files) ? "read-only-files ":""
 		, (flags & corrupt_files) ? "corrupt ":""
 		, (flags & incomplete_files) ? "incomplete ":""
-		, (flags & force_recheck) ? "force_recheck ":"");
+		, (flags & force_recheck) ? "force_recheck ":""
+		, (flags & extended_files) ? "extended_files ":""
+		, (flags & v2) ? "v2 ":""
+		, (flags & single_file) ? "single_file ":"");
 
 	error_code ec;
 	create_directory("test_torrent_dir", ec);
 	if (ec) fprintf(stdout, "ERROR: creating directory test_torrent_dir: (%d) %s\n"
 		, ec.value(), ec.message().c_str());
 
-	file_storage fs;
-	std::srand(10);
-	int piece_size = 0x4000;
+	int const piece_size = (flags & single_file) ? 0x8000 : 0x4000;
 
-	static std::array<const int, 46> const file_sizes
-	{{ 0, 5, 16 - 5, 16000, 17, 10, 8000, 8000, 1,1,1,1,1,100,1,1,1,1,100,1,1,1,1,1,1
-		,1,1,1,1,1,1,13,65000,34,75,2,30,400,500,23000,900,43000,400,4300,6, 4 }};
+	auto const file_sizes = (flags & single_file)
+		? std::vector<int>{500000}
+		: std::vector<int>{0, 5, 16 - 5, 16000, 17, 10, 8000, 8000, 1,1,1,1,1,100,1,1,1,1,100,1,1,1,1,1,1
+		,1,1,1,1,1,1,13,65000,34,75,2,30,400,50000,73000,900,43000,400,4300,6, 4 };
 
-	create_random_files("test_torrent_dir", file_sizes, &fs);
+	auto fs = create_random_files("test_torrent_dir", file_sizes);
 
-	lt::create_torrent t(fs, piece_size, 0x4000
-		, lt::create_torrent::optimize_alignment);
+	lt::create_torrent t(std::move(fs), piece_size, (flags & v2) ? create_torrent::v2_only : create_torrent::v1_only);
 
 	// calculate the hash for all pieces
 	set_piece_hashes(t, ".", ec);
 	if (ec) std::printf("ERROR: set_piece_hashes: (%d) %s\n"
 		, ec.value(), ec.message().c_str());
 
-	std::vector<char> buf;
-	bencode(std::back_inserter(buf), t.generate());
+	std::vector<char> const buf = bencode(t.generate());
 	auto ti = std::make_shared<torrent_info>(buf, ec, from_span);
+	TEST_CHECK(ti->is_valid());
 
 	std::printf("generated torrent: %s test_torrent_dir\n"
-		, aux::to_hex(ti->info_hash()).c_str());
+		, aux::to_hex(ti->info_hashes().v1).c_str());
 
 	// truncate every file in half
-	if (flags & incomplete_files)
+	if (flags & (incomplete_files | extended_files))
 	{
 		for (std::size_t i = 0; i < file_sizes.size(); ++i)
 		{
+			if ((i & 1) == 1) continue;
 			char name[1024];
 			std::snprintf(name, sizeof(name), "test%d", int(i));
 			char dirname[200];
@@ -128,12 +120,16 @@ void test_checking(int flags)
 			std::string path = combine_path("test_torrent_dir", dirname);
 			path = combine_path(path, name);
 
-			file f(path, aux::open_mode::write, ec);
-			if (ec) std::printf("ERROR: opening file \"%s\": (%d) %s\n"
-				, path.c_str(), ec.value(), ec.message().c_str());
-			f.set_size(file_sizes[i] / 2, ec);
-			if (ec) std::printf("ERROR: truncating file \"%s\": (%d) %s\n"
-				, path.c_str(), ec.value(), ec.message().c_str());
+			std::int64_t const new_len = (flags & extended_files)
+				? file_sizes[i] + 10
+				: file_sizes[i] * 2 / 3;
+
+			int const ret = ::truncate(path.c_str(), new_len);
+			if (ret < 0)
+			{
+				std::printf("ERROR: truncating file \"%s\": (%d) %s\n"
+					, path.c_str(), errno, strerror(errno));
+			}
 		}
 	}
 
@@ -143,10 +139,10 @@ void test_checking(int flags)
 		std::printf("corrupt file test. overwriting files\n");
 		// increase the size of some files. When they're read only that forces
 		// the checker to open them in write-mode to truncate them
-			static std::array<const int, 46> const file_sizes2
+		std::vector<int> const file_sizes2
 		{{ 0, 5, 16 - 5, 16001, 30, 10, 8000, 8000, 1,1,1,1,1,100,1,1,1,1,100,1,1,1,1,1,1
 			,1,1,1,1,1,1,13,65000,34,75,2,30,400,500,23000,900,43000,400,4300,6, 4}};
-		create_random_files("test_torrent_dir", file_sizes2);
+		create_random_files("test_torrent_dir", (flags & single_file) ? file_sizes : file_sizes2);
 	}
 
 	// make the files read only
@@ -194,7 +190,7 @@ void test_checking(int flags)
 	{
 		// first make sure the session tries to check for the file and can't find
 		// them
-		libtorrent::alert const* a = wait_for_alert(
+		lt::alert const* a = wait_for_alert(
 			ses1, torrent_checked_alert::alert_type, "checking");
 		TEST_CHECK(a);
 
@@ -222,26 +218,33 @@ void test_checking(int flags)
 		std::this_thread::sleep_for(lt::milliseconds(500));
 	}
 
-	if (flags & incomplete_files)
+	if (flags & (incomplete_files | corrupt_files))
 	{
 		TEST_CHECK(!st.is_seeding);
 
 		std::this_thread::sleep_for(lt::milliseconds(500));
 		st = tor1.status();
-		TEST_CHECK(!st.is_seeding);
-	}
-
-	if (flags & corrupt_files)
-	{
-		TEST_CHECK(!st.is_seeding);
 
 		TEST_CHECK(!st.errc);
 		if (st.errc)
 			std::printf("error: %s\n", st.errc.message().c_str());
+		std::vector<std::int64_t> const file_progress = tor1.file_progress();
+		bool one_incomplete = false;
+		file_storage const& fs1 = ti->files();
+		for (file_index_t i : fs1.file_range())
+		{
+			if (fs1.pad_file_at(i)) continue;
+			std::printf("file: %d progress: %" PRId64 " / %" PRId64 "\n", static_cast<int>(i)
+				, file_progress[std::size_t(static_cast<int>(i))], fs1.file_size(i));
+			if (fs1.file_size(i) == file_progress[std::size_t(static_cast<int>(i))]) continue;
+			one_incomplete = true;
+		}
+		TEST_CHECK(one_incomplete);
+		TEST_CHECK(st.num_pieces < ti->num_pieces());
 	}
-
-	if ((flags & (incomplete_files | corrupt_files)) == 0)
+	else
 	{
+		TEST_CHECK(st.num_pieces == ti->num_pieces());
 		TEST_CHECK(st.is_seeding);
 		if (st.errc)
 			std::printf("error: %s\n", st.errc.message().c_str());
@@ -294,6 +297,11 @@ TORRENT_TEST(incomplete)
 	test_checking(incomplete_files);
 }
 
+TORRENT_TEST(extended)
+{
+	test_checking(extended_files);
+}
+
 TORRENT_TEST(corrupt)
 {
 	test_checking(corrupt_files);
@@ -302,6 +310,51 @@ TORRENT_TEST(corrupt)
 TORRENT_TEST(force_recheck)
 {
 	test_checking(force_recheck);
+}
+
+TORRENT_TEST(checking_v2)
+{
+	test_checking(v2);
+}
+
+TORRENT_TEST(read_only_corrupt_v2)
+{
+	test_checking(read_only_files | corrupt_files | v2);
+}
+
+TORRENT_TEST(read_only_v2)
+{
+	test_checking(read_only_files | v2);
+}
+
+TORRENT_TEST(incomplete_v2)
+{
+	test_checking(incomplete_files | v2);
+}
+
+TORRENT_TEST(corrupt_v2)
+{
+	test_checking(corrupt_files | v2);
+}
+
+TORRENT_TEST(single_file_v2)
+{
+	test_checking(v2 | single_file);
+}
+
+TORRENT_TEST(single_file_corrupt_v2)
+{
+	test_checking(corrupt_files | v2 | single_file);
+}
+
+TORRENT_TEST(single_file_incomplete_v2)
+{
+	test_checking(incomplete_files | v2 | single_file);
+}
+
+TORRENT_TEST(force_recheck_v2)
+{
+	test_checking(force_recheck | v2);
 }
 
 TORRENT_TEST(discrete_checking)
@@ -316,21 +369,23 @@ TORRENT_TEST(discrete_checking)
 	int const piece_size = 2 * megabyte;
 	static std::array<int const, 2> const file_sizes{{ 9 * megabyte, 3 * megabyte }};
 
-	file_storage fs;
-	create_random_files("test_torrent_dir", file_sizes, &fs);
-	TEST_EQUAL(fs.num_files(), 2);
+	auto fs = create_random_files("test_torrent_dir", file_sizes);
+	TEST_EQUAL(fs.size(), 2);
 
-	lt::create_torrent t(fs, piece_size, 1, lt::create_torrent::optimize_alignment);
+	lt::create_torrent t(std::move(fs), piece_size);
 	set_piece_hashes(t, ".", ec);
 	if (ec) printf("ERROR: set_piece_hashes: (%d) %s\n", ec.value(), ec.message().c_str());
 
-	std::vector<char> buf;
-	bencode(std::back_inserter(buf), t.generate());
+	std::vector<char> const buf = bencode(t.generate());
 	auto ti = std::make_shared<torrent_info>(buf, ec, from_span);
-	printf("generated torrent: %s test_torrent_dir\n", aux::to_hex(ti->info_hash().to_string()).c_str());
+	printf("generated torrent: %s test_torrent_dir result: %s\n"
+		, aux::to_hex(ti->info_hashes().v1.to_string()).c_str()
+		, ec.message().c_str());
 
-	// we have two files, but there's a padfile now too
-	TEST_EQUAL(ti->num_files(), 3);
+	TEST_CHECK(ti->is_valid());
+
+	// we have two files, but there are also two padfiles now
+	TEST_EQUAL(ti->num_files(), 4);
 
 	{
 		session ses1(settings());

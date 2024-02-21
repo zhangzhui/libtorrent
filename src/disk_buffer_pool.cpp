@@ -1,42 +1,20 @@
 /*
 
-Copyright (c) 2007-2018, Arvid Norberg
+Copyright (c) 2011, 2013-2022, Arvid Norberg
+Copyright (c) 2016, 2018, 2020, Alden Torres
+Copyright (c) 2016, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/config.hpp"
-#include "libtorrent/disk_buffer_pool.hpp"
+#include "libtorrent/aux_/disk_buffer_pool.hpp"
 #include "libtorrent/assert.hpp"
-#include "libtorrent/aux_/session_settings.hpp"
+#include "libtorrent/settings_pack.hpp" // for settings_interface
 #include "libtorrent/io_context.hpp"
 #include "libtorrent/disk_observer.hpp"
-#include "libtorrent/platform_util.hpp" // for total_physical_ram
 #include "libtorrent/disk_interface.hpp" // for default_block_size
 
 #include "libtorrent/aux_/disable_warnings_push.hpp"
@@ -49,11 +27,16 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <linux/unistd.h>
 #endif
 
+#ifdef TORRENT_ADDRESS_SANITIZER
+#include <sanitizer/asan_interface.h>
+#endif
+
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
 namespace libtorrent {
+namespace aux {
 
-	namespace {
+namespace {
 
 	// this is posted to the network thread
 	void watermark_callback(std::vector<std::weak_ptr<disk_observer>> const& cbs)
@@ -65,7 +48,7 @@ namespace libtorrent {
 		}
 	}
 
-	} // anonymous namespace
+} // anonymous namespace
 
 	disk_buffer_pool::disk_buffer_pool(io_context& ios)
 		: m_in_use(0)
@@ -73,12 +56,7 @@ namespace libtorrent {
 		, m_low_watermark(std::max(m_max_use - 32, 0))
 		, m_exceeded_max_size(false)
 		, m_ios(ios)
-	{
-#if TORRENT_USE_ASSERTS
-		m_magic = 0x1337;
-		m_settings_set = false;
-#endif
-	}
+	{}
 
 	disk_buffer_pool::~disk_buffer_pool()
 	{
@@ -194,7 +172,7 @@ namespace libtorrent {
 		check_buffer_level(l);
 	}
 
-	void disk_buffer_pool::set_settings(aux::session_settings const& sett)
+	void disk_buffer_pool::set_settings(settings_interface const& sett)
 	{
 		std::unique_lock<std::mutex> l(m_pool_mutex);
 
@@ -234,4 +212,5 @@ namespace libtorrent {
 		--m_in_use;
 	}
 
+}
 }

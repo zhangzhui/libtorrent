@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2015, Arvid Norberg, Alden Torres
+Copyright (c) 2016, Alden Torres
+Copyright (c) 2016-2017, 2019-2020, 2022, Arvid Norberg
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
@@ -76,7 +54,9 @@ TORRENT_TEST(count_leading_zeros)
 		std::uint32_t buf[5];
 		to_binary(t.first, buf);
 		TEST_EQUAL(aux::count_leading_zeros_sw({buf, 5}), t.second);
+#if TORRENT_HAS_BUILTIN_CLZ || defined _MSC_VER
 		TEST_EQUAL(aux::count_leading_zeros_hw({buf, 5}), t.second);
+#endif
 		TEST_EQUAL(aux::count_leading_zeros({buf, 5}), t.second);
 	}
 }
@@ -85,38 +65,52 @@ TORRENT_TEST(count_trailing_ones_u32)
 {
 	std::uint32_t v = 0;
 	TEST_EQUAL(aux::count_trailing_ones_sw(v), 0);
+#if TORRENT_HAS_BUILTIN_CTZ || defined _MSC_VER
 	TEST_EQUAL(aux::count_trailing_ones_hw(v), 0);
+#endif
 	TEST_EQUAL(aux::count_trailing_ones(v), 0);
 
 	v = 0xffffffff;
 	TEST_EQUAL(aux::count_trailing_ones_sw(v), 32);
+#if TORRENT_HAS_BUILTIN_CTZ || defined _MSC_VER
 	TEST_EQUAL(aux::count_trailing_ones_hw(v), 32);
+#endif
 	TEST_EQUAL(aux::count_trailing_ones(v), 32);
 
 	v = aux::host_to_network(0xff00ff00);
 	TEST_EQUAL(aux::count_trailing_ones_sw(v), 0);
+#if TORRENT_HAS_BUILTIN_CTZ || defined _MSC_VER
 	TEST_EQUAL(aux::count_trailing_ones_hw(v), 0);
+#endif
 	TEST_EQUAL(aux::count_trailing_ones(v), 0);
 
 	v = aux::host_to_network(0xff0fff00);
 	TEST_EQUAL(aux::count_trailing_ones_sw(v), 0);
+#if TORRENT_HAS_BUILTIN_CTZ || defined _MSC_VER
 	TEST_EQUAL(aux::count_trailing_ones_hw(v), 0);
+#endif
 	TEST_EQUAL(aux::count_trailing_ones(v), 0);
 
 	v = aux::host_to_network(0xf0ff00ff);
 	TEST_EQUAL(aux::count_trailing_ones_sw(v), 8);
+#if TORRENT_HAS_BUILTIN_CTZ || defined _MSC_VER
 	TEST_EQUAL(aux::count_trailing_ones_hw(v), 8);
+#endif
 	TEST_EQUAL(aux::count_trailing_ones(v), 8);
 
 	v = aux::host_to_network(0xf0ff0fff);
 	TEST_EQUAL(aux::count_trailing_ones_sw(v), 12);
+#if TORRENT_HAS_BUILTIN_CTZ || defined _MSC_VER
 	TEST_EQUAL(aux::count_trailing_ones_hw(v), 12);
+#endif
 	TEST_EQUAL(aux::count_trailing_ones(v), 12);
 
 	std::uint32_t const arr[2] = {
 		aux::host_to_network(0xf0ff0fff)
 		, 0xffffffff};
 	TEST_EQUAL(aux::count_trailing_ones_sw(arr), 44);
+#if TORRENT_HAS_BUILTIN_CTZ || defined _MSC_VER
 	TEST_EQUAL(aux::count_trailing_ones_hw(arr), 44);
+#endif
 	TEST_EQUAL(aux::count_trailing_ones(arr), 44);
 }

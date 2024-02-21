@@ -1,33 +1,14 @@
 /*
 
-Copyright (c) 2003-2017, Arvid Norberg
+Copyright (c) 2014-2022, Arvid Norberg
+Copyright (c) 2016, Alden Torres
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2017, AllSeeingEyeTolledEweSew
+Copyright (c) 2018, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "torrent_view.hpp"
@@ -39,6 +20,8 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include <array>
 
+namespace {
+
 const int header_size = 2;
 using lt::queue_position_t;
 
@@ -46,7 +29,7 @@ std::string torrent_state(lt::torrent_status const& s)
 {
 	static char const* state_str[] =
 		{"checking (q)", "checking", "dl metadata"
-		, "downloading", "finished", "seeding", "allocating", "checking (r)"};
+		, "downloading", "finished", "seeding", "", "checking (r)"};
 
 	if (s.errc) return s.errc.message();
 	std::string ret;
@@ -56,8 +39,11 @@ std::string torrent_state(lt::torrent_status const& s)
 		ret += "queued ";
 	}
 
-	if ((s.flags & lt::torrent_flags::upload_mode)) ret += "upload mode";
-	else ret += state_str[s.state];
+	if (s.state == lt::torrent_status::downloading
+		&& (s.flags & lt::torrent_flags::upload_mode))
+		ret += "upload mode";
+	else
+		ret += state_str[s.state];
 
 	if (!(s.flags & lt::torrent_flags::auto_managed))
 	{
@@ -66,13 +52,23 @@ std::string torrent_state(lt::torrent_status const& s)
 		else
 			ret += " [F]";
 	}
-	char buf[10];
-	std::snprintf(buf, sizeof(buf), " (%.1f%%)", s.progress_ppm / 10000.f);
-	ret += buf;
+	if (s.flags & lt::torrent_flags::i2p_torrent)
+		ret += " i2p";
+	if (s.state == lt::torrent_status::seeding)
+	{
+		ret += " ";
+		ret += add_suffix(s.total_done);
+	}
+	else
+	{
+		char buf[20];
+		std::snprintf(buf, sizeof(buf), " (%.1f%%)", s.progress_ppm / 10000.0);
+		ret += buf;
+	}
 	return ret;
 }
 
-bool compare_torrent(lt::torrent_status const* lhs, lt::torrent_status const* rhs)
+bool cmp_torrent_position(lt::torrent_status const* lhs, lt::torrent_status const* rhs)
 {
 	if (lhs->queue_position != queue_position_t{-1} && rhs->queue_position != queue_position_t{-1})
 	{
@@ -86,20 +82,26 @@ bool compare_torrent(lt::torrent_status const* lhs, lt::torrent_status const* rh
 		if (lhs->seed_rank != rhs->seed_rank)
 			return lhs->seed_rank > rhs->seed_rank;
 
-		return lhs->info_hash < rhs->info_hash;
+		return lhs->info_hashes < rhs->info_hashes;
 	}
 
 	return (lhs->queue_position == queue_position_t{-1})
 		< (rhs->queue_position == queue_position_t{-1});
 }
 
-torrent_view::torrent_view()
-	: m_active_torrent(0)
-	, m_scroll_position(0)
-	, m_torrent_filter(0)
-	, m_width(80)
-	, m_height(30)
-{}
+bool cmp_torrent_name(lt::torrent_status const* lhs, lt::torrent_status const* rhs)
+{
+	return lhs->name < rhs->name;
+}
+
+bool cmp_torrent_size(lt::torrent_status const* lhs, lt::torrent_status const* rhs)
+{
+	return lhs->total_done > rhs->total_done;
+}
+
+}
+
+torrent_view::torrent_view() = default;
 
 void torrent_view::set_size(int width, int height)
 {
@@ -124,6 +126,20 @@ void torrent_view::set_filter(int filter)
 	render();
 }
 
+int torrent_view::sort_order() const
+{
+	return m_sort_order;
+}
+
+void torrent_view::set_sort_order(int const o)
+{
+	if (o == m_sort_order) return;
+	m_sort_order = order(o);
+
+	update_sort_order();
+	render();
+}
+
 // returns the lt::torrent_status of the currently selected torrent.
 lt::torrent_status const& torrent_view::get_active_torrent() const
 {
@@ -132,7 +148,7 @@ lt::torrent_status const& torrent_view::get_active_torrent() const
 	if (m_active_torrent < 0) m_active_torrent = 0;
 	TORRENT_ASSERT(m_active_torrent >= 0);
 
-	return *m_filtered_handles[m_active_torrent];
+	return *m_filtered_handles[std::size_t(m_active_torrent)];
 }
 
 lt::torrent_handle torrent_view::get_active_handle() const
@@ -144,7 +160,7 @@ lt::torrent_handle torrent_view::get_active_handle() const
 
 	if (m_filtered_handles.empty()) return lt::torrent_handle();
 
-	return m_filtered_handles[m_active_torrent]->handle;
+	return m_filtered_handles[std::size_t(m_active_torrent)]->handle;
 }
 
 void torrent_view::remove_torrent(lt::torrent_handle h)
@@ -154,8 +170,7 @@ void torrent_view::remove_torrent(lt::torrent_handle h)
 	bool need_rerender = false;
 	if (show_torrent(i->second))
 	{
-		auto j = std::find(m_filtered_handles.begin(), m_filtered_handles.end()
-			, &i->second);
+		auto j = std::find(m_filtered_handles.begin(), m_filtered_handles.end(), &i->second);
 		if (j != m_filtered_handles.end())
 		{
 			m_filtered_handles.erase(j);
@@ -230,6 +245,14 @@ void torrent_view::update_torrents(std::vector<lt::torrent_status> st)
 	}
 }
 
+void torrent_view::for_each_torrent(std::function<void(lt::torrent_status const&)> f)
+{
+	for (auto const& h : m_all_handles)
+	{
+		f(h.second);
+	}
+}
+
 int torrent_view::height() const
 {
 	return m_height;
@@ -242,45 +265,48 @@ void torrent_view::arrow_up()
 
 	if (m_active_torrent - 1 < m_scroll_position)
 	{
+		int const scroll_step = std::max(m_height / 3, 8);
 		--m_active_torrent;
-		m_scroll_position = m_active_torrent;
+		m_scroll_position = std::max(0, m_active_torrent - scroll_step);
 		TORRENT_ASSERT(m_scroll_position >= 0);
 		render();
 		return;
 	}
 
 	set_cursor_pos(0, header_size + m_active_torrent - m_scroll_position);
-	print_torrent(*m_filtered_handles[m_active_torrent], false);
+	print_torrent(*m_filtered_handles[std::size_t(m_active_torrent)], false);
 	--m_active_torrent;
 	TORRENT_ASSERT(m_active_torrent >= 0);
 
 	set_cursor_pos(0, header_size + m_active_torrent - m_scroll_position);
-	print_torrent(*m_filtered_handles[m_active_torrent], true);
+	print_torrent(*m_filtered_handles[std::size_t(m_active_torrent)], true);
 }
 
 void torrent_view::arrow_down()
 {
 	if (m_filtered_handles.empty()) return;
-	if (m_active_torrent >= int(m_filtered_handles.size()) - 1) return;
+	int const max_pos = int(m_filtered_handles.size()) - 1;
+	if (m_active_torrent >= max_pos) return;
 
 	int bottom_pos = m_height - header_size - 1;
 	if (m_active_torrent - m_scroll_position + 1 > bottom_pos)
 	{
+		int const scroll_step = std::max(m_height / 3, 8);
 		++m_active_torrent;
-		m_scroll_position = m_active_torrent - bottom_pos;
+		m_scroll_position = std::min(max_pos, m_active_torrent + scroll_step) - bottom_pos;
 		TORRENT_ASSERT(m_scroll_position >= 0);
 		render();
 		return;
 	}
 
 	set_cursor_pos(0, header_size + m_active_torrent - m_scroll_position);
-	print_torrent(*m_filtered_handles[m_active_torrent], false);
+	print_torrent(*m_filtered_handles[std::size_t(m_active_torrent)], false);
 
 	TORRENT_ASSERT(m_active_torrent >= 0);
 	++m_active_torrent;
 
 	set_cursor_pos(0, header_size + m_active_torrent - m_scroll_position);
-	print_torrent(*m_filtered_handles[m_active_torrent], true);
+	print_torrent(*m_filtered_handles[std::size_t(m_active_torrent)], true);
 }
 
 void torrent_view::render()
@@ -331,33 +357,68 @@ void torrent_view::print_tabs()
 		, "seeding", "queued", "stopped", "checking"}};
 	for (int i = 0; i < int(filter_names.size()); ++i)
 	{
-		int const ret = std::snprintf(dest.data(), dest.size(), "%s[%s]%s"
+		int const ret = std::snprintf(dest.data(), std::size_t(dest.size()), "%s[%s]%s"
 			, m_torrent_filter == i?esc("7"):""
-			, filter_names[i], m_torrent_filter == i?esc("0"):"");
+			, filter_names[std::size_t(i)], m_torrent_filter == i?esc("0"):"");
 		if (ret >= 0 && ret <= dest.size()) dest = dest.subspan(ret);
 	}
-	int const ret = std::snprintf(dest.data(), dest.size(), "\x1b[K");
+	int const ret = std::snprintf(dest.data(), std::size_t(dest.size()), "\x1b[K");
 	if (ret >= 0 && ret <= dest.size()) dest = dest.subspan(ret);
 
 	if (m_width + 1 < int(str.size()))
-		str[m_width + 1] = '\0';
+		str.back() = '\0';
 	print(str.data());
+}
+
+namespace {
+
+struct column_info
+{
+	char const* name;
+	int width;
+	int sort_order;
+};
+
+std::array<column_info, 10> const torrent_columns = {{
+	{"#", 3, 0},
+	{"Name", 50, 1},
+	{"Progress", 35, -1},
+	{"Pieces", 14, 2},
+	{"Download", 17, -1},
+	{"Upload", 17, -1},
+	{"Peers (D:S)", 11, -1},
+	{"Down", 6, -1},
+	{"Up", 6, -1},
+	{"Flags", 4, -1},
+}};
+
 }
 
 void torrent_view::print_headers()
 {
 	set_cursor_pos(0, 1);
 
-	std::array<char, 400> str;
-
 	// print title bar for torrent list
-	std::snprintf(str.data(), str.size()
-		, " %-3s %-50s %-35s %-14s %-17s %-17s %-11s %-6s %-6s %-4s\x1b[K"
-		, "#", "Name", "Progress", "Pieces", "Download", "Upload", "Peers (D:S)"
-		, "Down", "Up", "Flags");
+	std::array<char, 400> str;
+	int cursor = 0;
+	for (auto const& ci : torrent_columns)
+	{
+		if (ci.sort_order == m_sort_order)
+		{
+			cursor += std::snprintf(str.data() + cursor, str.size() - std::size_t(cursor), "\x1b[7m");
+			if (std::size_t(cursor) > str.size()) break;
+		}
+		cursor += std::snprintf(str.data() + cursor, str.size() - std::size_t(cursor), "%-*s ", ci.width, ci.name);
+		if (std::size_t(cursor) > str.size()) break;
+		if (ci.sort_order == m_sort_order)
+		{
+			cursor += std::snprintf(str.data() + cursor, str.size() - std::size_t(cursor), "\x1b[0m");
+			if (std::size_t(cursor) > str.size()) break;
+		}
+	}
+	cursor += std::snprintf(str.data() + cursor, str.size() - std::size_t(cursor), "\x1b[K");
 
-	if (m_width + 1 < int(str.size()))
-		str[m_width + 1] = '\0';
+	str.back() = '\0';
 
 	print(str.data());
 }
@@ -367,8 +428,8 @@ void torrent_view::print_torrent(lt::torrent_status const& s, bool selected)
 	std::array<char, 512> str;
 	lt::span<char> dest(str);
 
-	// the active torrent is highligted in the list
-	// this inverses the forground and background colors
+	// the active torrent is highlighted in the list
+	// this inverses the foreground and background colors
 	char const* selection = "";
 	if (selected)
 		selection = "\x1b[1m\x1b[44m";
@@ -395,7 +456,7 @@ void torrent_view::print_torrent(lt::torrent_status const& s, bool selected)
 	int const total_pieces = ti && ti->is_valid() ? ti->num_pieces() : 0;
 	color_code piece_color = total_pieces == s.num_pieces ? col_green : col_yellow;
 
-	int const ret = std::snprintf(dest.data(), dest.size(), "%s%-3s %-50s %s%s %s/%s %s (%s) "
+	int const ret = std::snprintf(dest.data(), std::size_t(dest.size()), "%s%-3s %-50s %s%s %s/%s %s (%s) "
 		"%s (%s) %5d:%-5d %s %s %c"
 		, selection
 		, queue_pos
@@ -411,17 +472,17 @@ void torrent_view::print_torrent(lt::torrent_status const& s, bool selected)
 		, s.num_peers - s.num_seeds, s.num_seeds
 		, color(add_suffix(s.all_time_download), col_green).c_str()
 		, color(add_suffix(s.all_time_upload), col_red).c_str()
-		, s.need_save_resume?'S':' ');
+		, bool(s.need_save_resume_data)?'S':' ');
 	if (ret >= 0 && ret <= dest.size()) dest = dest.subspan(ret);
 
 	// if this is the selected torrent, restore the background color
 	if (selected)
 	{
-		int const ret2 = std::snprintf(dest.data(), dest.size(), "%s", esc("0"));
+		int const ret2 = std::snprintf(dest.data(), std::size_t(dest.size()), "%s", esc("0"));
 		if (ret2 >= 0 && ret2 <= dest.size()) dest = dest.subspan(ret2);
 	}
 
-	int const ret2 = std::snprintf(dest.data(), dest.size(), "\x1b[K");
+	int const ret2 = std::snprintf(dest.data(), std::size_t(dest.size()), "\x1b[K");
 	if (ret2 >= 0 && ret2 <= dest.size()) dest = dest.subspan(ret2);
 
 	print(str.data());
@@ -468,10 +529,27 @@ void torrent_view::update_filtered_torrents()
 	if (m_active_torrent >= int(m_filtered_handles.size())) m_active_torrent = int(m_filtered_handles.size()) - 1;
 	if (m_active_torrent < 0) m_active_torrent = 0;
 	TORRENT_ASSERT(m_active_torrent >= 0);
-	std::sort(m_filtered_handles.begin(), m_filtered_handles.end(), &compare_torrent);
+
+	update_sort_order();
 	if (m_scroll_position + m_height - header_size > int(m_filtered_handles.size()))
 	{
 		m_scroll_position = std::max(0, int(m_filtered_handles.size()) - m_height + header_size);
 	}
 }
 
+
+void torrent_view::update_sort_order()
+{
+	switch (m_sort_order)
+	{
+		case order::queue:
+			std::sort(m_filtered_handles.begin(), m_filtered_handles.end(), &cmp_torrent_position);
+			break;
+		case order::name:
+			std::sort(m_filtered_handles.begin(), m_filtered_handles.end(), &cmp_torrent_name);
+			break;
+		case order::size:
+			std::sort(m_filtered_handles.begin(), m_filtered_handles.end(), &cmp_torrent_size);
+			break;
+	}
+}

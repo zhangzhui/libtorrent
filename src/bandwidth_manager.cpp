@@ -1,42 +1,21 @@
 /*
 
-Copyright (c) 2009-2018, Arvid Norberg
+Copyright (c) 2009, 2011, 2013-2014, 2016-2017, 2019-2020, Arvid Norberg
+Copyright (c) 2015-2016, 2018, 2020, 2022, Alden Torres
+Copyright (c) 2016, Andrei Kurushin
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
-#include "libtorrent/bandwidth_manager.hpp"
+#include "libtorrent/aux_/bandwidth_manager.hpp"
 
 #if TORRENT_USE_ASSERTS
 #include <climits>
 #endif
 
-namespace libtorrent {
+namespace libtorrent::aux {
 
 	bandwidth_manager::bandwidth_manager(int channel)
 		: m_queued_bytes(0)
@@ -86,7 +65,7 @@ namespace libtorrent {
 	// others will cut in front of the non-prioritized peers.
 	// this is used by web seeds
 	int bandwidth_manager::request_bandwidth(std::shared_ptr<bandwidth_socket> peer
-		, int const blk, int const priority, bandwidth_channel** chan, int const num_channels)
+		, int const blk, int const priority, span<bandwidth_channel*> channels)
 	{
 		INVARIANT_CHECK;
 		if (m_abort) return 0;
@@ -98,7 +77,7 @@ namespace libtorrent {
 		// being assigned bandwidth for an already outstanding request
 		TORRENT_ASSERT(!is_queued(peer.get()));
 
-		if (num_channels == 0)
+		if (channels.empty())
 		{
 			// the connection is not rate limited by any of its
 			// bandwidth channels, or it doesn't belong to any
@@ -109,10 +88,10 @@ namespace libtorrent {
 
 		int k = 0;
 		bw_request bwr(std::move(peer), blk, priority);
-		for (int i = 0; i < num_channels; ++i)
+		for (auto const& c : channels)
 		{
-			if (chan[i]->need_queueing(blk))
-				bwr.channel[k++] = chan[i];
+			if (c->need_queueing(blk))
+				bwr.channel[k++] = c;
 		}
 
 		if (k == 0) return blk;

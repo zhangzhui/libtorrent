@@ -1,33 +1,10 @@
 /*
 
-Copyright (c) 2017, Arvid Norberg
+Copyright (c) 2016, 2020, 2022, Arvid Norberg
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_STORE_BUFFER
@@ -91,10 +68,10 @@ namespace aux {
 struct store_buffer
 {
 	template <typename Fun>
-	bool get(torrent_location const loc, Fun f)
+	bool get(torrent_location const loc, Fun f) const
 	{
 		std::unique_lock<std::mutex> l(m_mutex);
-		auto it = m_store_buffer.find(loc);
+		auto const it = m_store_buffer.find(loc);
 		if (it != m_store_buffer.end())
 		{
 			f(it->second);
@@ -103,7 +80,22 @@ struct store_buffer
 		return false;
 	}
 
-	void insert(torrent_location const loc, char* buf)
+	template <typename Fun>
+	int get2(torrent_location const loc1, torrent_location const loc2, Fun f) const
+	{
+		std::unique_lock<std::mutex> l(m_mutex);
+		auto const it1 = m_store_buffer.find(loc1);
+		auto const it2 = m_store_buffer.find(loc2);
+		char const* buf1 = (it1 == m_store_buffer.end()) ? nullptr : it1->second;
+		char const* buf2 = (it2 == m_store_buffer.end()) ? nullptr : it2->second;
+
+		if (buf1 == nullptr && buf2 == nullptr)
+			return 0;
+
+		return f(buf1, buf2);
+	}
+
+	void insert(torrent_location const loc, char const* buf)
 	{
 		std::lock_guard<std::mutex> l(m_mutex);
 		m_store_buffer.insert({loc, buf});
@@ -117,10 +109,15 @@ struct store_buffer
 		m_store_buffer.erase(it);
 	}
 
+	std::size_t size() const
+	{
+		return m_store_buffer.size();
+	}
+
 private:
 
-	std::mutex m_mutex;
-	std::unordered_map<torrent_location, char*> m_store_buffer;
+	mutable std::mutex m_mutex;
+	std::unordered_map<torrent_location, char const*> m_store_buffer;
 };
 
 }

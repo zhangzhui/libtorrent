@@ -1,43 +1,31 @@
 /*
 
-Copyright (c) 2012, Arvid Norberg
+Copyright (c) 2013-2022, Arvid Norberg
+Copyright (c) 2016, 2018, 2021, Alden Torres
+Copyright (c) 2017, Pavel Pimenov
+Copyright (c) 2017-2019, Steven Siloti
+Copyright (c) 2019, Andrei Kurushin
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
+#include "setup_transfer.hpp" // for load_file
+#include "test_utils.hpp"
+#include "settings.hpp"
 #include "libtorrent/file_storage.hpp"
+#include "libtorrent/load_torrent.hpp"
 #include "libtorrent/aux_/path.hpp"
 #include "libtorrent/torrent_info.hpp"
 #include "libtorrent/create_torrent.hpp"
 #include "libtorrent/announce_entry.hpp"
+#include "libtorrent/disk_interface.hpp" // for default_block_size
 #include "libtorrent/aux_/escape_string.hpp" // for convert_path_to_posix
+#include "libtorrent/aux_/piece_picker.hpp"
 #include "libtorrent/hex.hpp" // to_hex
+#include "libtorrent/write_resume_data.hpp" // write_torrent_file
 
 #include <iostream>
 
@@ -46,16 +34,15 @@ using namespace lt;
 #ifndef TORRENT_DISABLE_MUTABLE_TORRENTS
 TORRENT_TEST(mutable_torrents)
 {
-	file_storage fs;
+	std::vector<lt::create_file_entry> fs;
 
-	fs.add_file("test/temporary.txt", 0x4000);
+	fs.emplace_back("test/temporary.txt", 0x4000);
 
-	lt::create_torrent t(fs, 0x4000);
+	lt::create_torrent t(std::move(fs), 0x4000);
 
 	// calculate the hash for all pieces
-	sha1_hash ph;
-	for (auto const i : fs.piece_range())
-		t.set_hash(i, ph);
+	for (auto const i : t.piece_range())
+		t.set_hash(i, sha1_hash::max());
 
 	t.add_collection("collection1");
 	t.add_collection("collection2");
@@ -63,13 +50,8 @@ TORRENT_TEST(mutable_torrents)
 	t.add_similar_torrent(sha1_hash("abababababababababab"));
 	t.add_similar_torrent(sha1_hash("babababababababababa"));
 
-	std::vector<char> tmp;
-	std::back_insert_iterator<std::vector<char>> out(tmp);
-
-	entry tor = t.generate();
-	bencode(out, tor);
-
-	torrent_info ti(tmp, from_span);
+	std::vector<char> const buf = t.generate_buf();
+	lt::add_torrent_params atp = load_torrent_buffer(buf);
 
 	std::vector<sha1_hash> similar;
 	similar.push_back(sha1_hash("abababababababababab"));
@@ -79,8 +61,8 @@ TORRENT_TEST(mutable_torrents)
 	collections.push_back("collection1");
 	collections.push_back("collection2");
 
-	TEST_CHECK(similar == ti.similar_torrents());
-	TEST_CHECK(collections == ti.collections());
+	TEST_CHECK(similar == atp.ti->similar_torrents());
+	TEST_CHECK(collections == atp.ti->collections());
 }
 #endif
 
@@ -88,21 +70,43 @@ namespace {
 
 struct test_torrent_t
 {
+	test_torrent_t(char const* f, std::function<void(lt::add_torrent_params)> atp = {}) // NOLINT
+		: file(f), test(std::move(atp)) {}
+
 	char const* file;
+	std::function<void(lt::add_torrent_params atp)> test;
 };
 
 using namespace lt;
 
-static test_torrent_t test_torrents[] =
+#if defined(TORRENT_WINDOWS) || defined(TORRENT_OS2)
+#define SEPARATOR "\\"
+#else
+#define SEPARATOR "/"
+#endif
+
+static test_torrent_t const test_torrents[] =
 {
-	{ "base.torrent" },
+	{ "base.torrent"},
 	{ "empty_path.torrent" },
 	{ "parent_path.torrent" },
 	{ "hidden_parent_path.torrent" },
 	{ "single_multi_file.torrent" },
-	{ "slash_path.torrent" },
-	{ "slash_path2.torrent" },
-	{ "slash_path3.torrent" },
+	{ "slash_path.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 1);
+			TEST_EQUAL(atp.ti->files().file_path(file_index_t{0}), "temp" SEPARATOR "bar");
+		}
+	},
+	{ "slash_path2.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 1);
+			TEST_EQUAL(atp.ti->files().file_path(file_index_t{0}), "temp" SEPARATOR "abc....def" SEPARATOR "bar");
+		}
+	},
+	{ "slash_path3.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 1);
+			TEST_EQUAL(atp.ti->files().file_path(file_index_t{0}), "temp....abc");
+		}
+	},
 	{ "backslash_path.torrent" },
 	{ "url_list.torrent" },
 	{ "url_list2.torrent" },
@@ -110,29 +114,272 @@ static test_torrent_t test_torrents[] =
 	{ "httpseed.torrent" },
 	{ "empty_httpseed.torrent" },
 	{ "long_name.torrent" },
-	{ "whitespace_url.torrent" },
-	{ "duplicate_files.torrent" },
-	{ "pad_file.torrent" },
-	{ "creation_date.torrent" },
-	{ "no_creation_date.torrent" },
-	{ "url_seed.torrent" },
-	{ "url_seed_multi.torrent" },
-	{ "url_seed_multi_single_file.torrent" },
-	{ "url_seed_multi_space.torrent" },
-	{ "url_seed_multi_space_nolist.torrent" },
-	{ "root_hash.torrent" },
+	{ "whitespace_url.torrent", [](lt::add_torrent_params atp) {
+			// make sure we trimmed the url
+			TEST_CHECK(atp.trackers.size() > 0);
+			if (atp.trackers.size() > 0)
+				TEST_CHECK(atp.trackers[0] == "udp://test.com/announce");
+		}
+	},
+	{ "duplicate_files.torrent", [](lt::add_torrent_params atp) {
+			// make sure we disambiguated the files
+			TEST_EQUAL(atp.ti->num_files(), 2);
+			TEST_CHECK(atp.ti->files().file_path(file_index_t{0}) == combine_path(combine_path("temp", "foo"), "bar.txt"));
+			TEST_CHECK(atp.ti->files().file_path(file_index_t{1}) == combine_path(combine_path("temp", "foo"), "bar.1.txt"));
+		}
+	},
+	{ "pad_file.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 2);
+			TEST_EQUAL(bool(atp.ti->files().file_flags(file_index_t{0}) & file_storage::flag_pad_file), false);
+			TEST_EQUAL(bool(atp.ti->files().file_flags(file_index_t{1}) & file_storage::flag_pad_file), true);
+		}
+	},
+	{ "creation_date.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->creation_date(), 1234567);
+		}
+	},
+	{ "no_creation_date.torrent", [](lt::add_torrent_params atp) {
+			TEST_CHECK(!atp.ti->creation_date());
+		}
+	},
+	{ "url_seed.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.url_seeds.size(), 1);
+			TEST_EQUAL(atp.url_seeds[0], "http://test.com/file");
+#if TORRENT_ABI_VERSION == 1
+			// when using load_torrent, the web seeds are not stored in
+			// the torrent_info object, just the add_torrent_params object
+			TEST_EQUAL(atp.ti->http_seeds().size(), 0);
+			TEST_EQUAL(atp.ti->url_seeds().size(), 0);
+#endif
+		}
+	},
+	{ "url_seed_multi.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.url_seeds.size(), 1);
+			TEST_EQUAL(atp.url_seeds[0], "http://test.com/file/");
+#if TORRENT_ABI_VERSION == 1
+			// when using load_torrent, the web seeds are not stored in
+			// the torrent_info object, just the add_torrent_params object
+			TEST_EQUAL(atp.ti->http_seeds().size(), 0);
+			TEST_EQUAL(atp.ti->url_seeds().size(), 0);
+#endif
+		}
+	},
+	{ "url_seed_multi_single_file.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.url_seeds.size(), 1);
+			TEST_EQUAL(atp.url_seeds[0], "http://test.com/file/temp/foo/bar.txt");
+		}
+	},
+	{ "url_seed_multi_space.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.url_seeds.size(), 1);
+			TEST_EQUAL(atp.url_seeds[0], "http://test.com/test%20file/foo%20bar/");
+#if TORRENT_ABI_VERSION == 1
+			// when using load_torrent, the web seeds are not stored in
+			// the torrent_info object, just the add_torrent_params object
+			TEST_EQUAL(atp.ti->http_seeds().size(), 0);
+			TEST_EQUAL(atp.ti->url_seeds().size(), 0);
+#endif
+		}
+	},
+	{ "url_seed_multi_space_nolist.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.url_seeds.size(), 1);
+			TEST_EQUAL(atp.url_seeds[0], "http://test.com/test%20file/foo%20bar/");
+#if TORRENT_ABI_VERSION == 1
+			// when using load_torrent, the web seeds are not stored in
+			// the torrent_info object, just the add_torrent_params object
+			TEST_EQUAL(atp.ti->http_seeds().size(), 0);
+			TEST_EQUAL(atp.ti->url_seeds().size(), 0);
+#endif
+		}
+	},
 	{ "empty_path_multi.torrent" },
-	{ "duplicate_web_seeds.torrent" },
-	{ "invalid_name2.torrent" },
-	{ "invalid_name3.torrent" },
-	{ "symlink1.torrent" },
+	{ "duplicate_web_seeds.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.url_seeds.size(), 3);
+		}
+	},
+	{ "invalid_name2.torrent", [](lt::add_torrent_params atp) {
+			// if, after all invalid characters are removed from the name, it ends up
+			// being empty, it's set to the info-hash. Some torrents also have an empty name
+			// in which case it's also set to the info-hash
+			TEST_EQUAL(atp.ti->name(), "b61560c2918f463768cd122b6d2fdd47b77bdb35");
+		}
+	},
+	{ "invalid_name3.torrent", [](lt::add_torrent_params atp) {
+			// windows does not allow trailing spaces in filenames
+#ifdef TORRENT_WINDOWS
+			TEST_EQUAL(atp.ti->name(), "foobar");
+#else
+			TEST_EQUAL(atp.ti->name(), "foobar ");
+#endif
+		}
+	},
+	{ "symlink1.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 2);
+			TEST_EQUAL(atp.ti->files().symlink(file_index_t{1}), "temp" SEPARATOR "a" SEPARATOR "b" SEPARATOR "bar");
+		}
+	},
+	{ "symlink2.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 5);
+			TEST_EQUAL(atp.ti->files().symlink(file_index_t{0}), "Some.framework" SEPARATOR "Versions" SEPARATOR "A" SEPARATOR "SDL2");
+			TEST_EQUAL(atp.ti->files().symlink(file_index_t{4}), "Some.framework" SEPARATOR "Versions" SEPARATOR "A");
+		}
+	},
 	{ "unordered.torrent" },
-	{ "symlink_zero_size.torrent" },
-	{ "pad_file_no_path.torrent" },
+	{ "symlink_zero_size.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 2);
+			TEST_EQUAL(atp.ti->files().symlink(1_file), "temp" SEPARATOR "a" SEPARATOR "b" SEPARATOR "bar");
+		}
+	},
+	{ "pad_file_no_path.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 2);
+			TEST_EQUAL(atp.ti->files().file_path(file_index_t{1}), combine_path(".pad", "2124"));
+		}
+	},
 	{ "large.torrent" },
-	{ "absolute_filename.torrent" },
-	{ "invalid_filename.torrent" },
-	{ "invalid_filename2.torrent" },
+	{ "absolute_filename.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 2);
+			TEST_EQUAL(atp.ti->files().file_path(file_index_t{0}), combine_path("temp", "abcde"));
+			TEST_EQUAL(atp.ti->files().file_path(file_index_t{1}), combine_path("temp", "foobar"));
+		}
+	},
+	{ "invalid_filename.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 2);
+		}
+	},
+	{ "invalid_filename2.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 3);
+		}
+	},
+	{ "overlapping_symlinks.torrent", [](lt::add_torrent_params atp) {
+			TEST_CHECK(atp.ti->num_files() > 3);
+			TEST_EQUAL(atp.ti->files().symlink(file_index_t{0}), "SDL2.framework" SEPARATOR "Versions" SEPARATOR "Current" SEPARATOR "Headers");
+			TEST_EQUAL(atp.ti->files().symlink(file_index_t{1}), "SDL2.framework" SEPARATOR "Versions" SEPARATOR "Current" SEPARATOR "Resources");
+			TEST_EQUAL(atp.ti->files().symlink(file_index_t{2}), "SDL2.framework" SEPARATOR "Versions" SEPARATOR "Current" SEPARATOR "SDL2");
+		}
+	},
+	{ "v2.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 1);
+			TEST_EQUAL(atp.ti->files().file_path(file_index_t{ 0 }), "test64K"_sv);
+			TEST_EQUAL(atp.ti->files().file_size(file_index_t{ 0 }), 65536);
+			TEST_EQUAL(aux::to_hex(atp.ti->files().root(file_index_t{ 0 })), "60aae9c7b428f87e0713e88229e18f0adf12cd7b22a0dd8a92bb2485eb7af242"_sv);
+			TEST_EQUAL(atp.ti->info_hashes().has_v1(), true);
+			TEST_EQUAL(atp.ti->info_hashes().has_v2(), true);
+			TEST_EQUAL(aux::to_hex(atp.ti->info_hashes().v2), "597b180c1a170a585dfc5e85d834d69013ceda174b8f357d5bb1a0ca509faf0a"_sv);
+			TEST_CHECK(atp.ti->v2());
+			TEST_CHECK(atp.ti->v1());
+		}
+	},
+	{ "v2_multipiece_file.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 1);
+			TEST_EQUAL(atp.ti->files().file_path(file_index_t{ 0 }), "test1MB"_sv);
+			TEST_EQUAL(atp.ti->files().file_size(file_index_t{ 0 }), 1048576);
+			TEST_EQUAL(aux::to_hex(atp.ti->files().root(file_index_t{ 0 })), "515ea9181744b817744ded9d2e8e9dc6a8450c0b0c52e24b5077f302ffbd9008"_sv);
+			TEST_EQUAL(atp.ti->info_hashes().has_v1(), true);
+			TEST_EQUAL(atp.ti->info_hashes().has_v2(), true);
+			TEST_EQUAL(aux::to_hex(atp.ti->info_hashes().v2), "108ac2c3718ce722e6896edc56c4afa98f1d711ecaace7aad74fca418ebd03de"_sv);
+		}
+	},
+	{ "v2_only.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 1);
+			TEST_EQUAL(atp.ti->files().file_path(file_index_t{ 0 }), "test1MB"_sv);
+			TEST_EQUAL(atp.ti->files().file_size(file_index_t{ 0 }), 1048576);
+			TEST_EQUAL(aux::to_hex(atp.ti->files().root(file_index_t{ 0 })), "515ea9181744b817744ded9d2e8e9dc6a8450c0b0c52e24b5077f302ffbd9008"_sv);
+			TEST_EQUAL(atp.ti->info_hashes().has_v1(), false);
+			TEST_EQUAL(atp.ti->info_hashes().has_v2(), true);
+			TEST_EQUAL(aux::to_hex(atp.ti->info_hashes().v2), "95e04d0c4bad94ab206efa884666fd89777dbe4f7bd9945af1829037a85c6192"_sv);
+			TEST_CHECK(atp.ti->v2());
+			TEST_CHECK(!atp.ti->v1());
+		}
+	},
+	{ "v2_invalid_filename.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->num_files(), 1);
+			TEST_EQUAL(atp.ti->files().file_path(file_index_t{0}), "_estMB"_sv);
+		}
+	},
+	{ "v2_multiple_files.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.merkle_trees.empty(), false);
+			TEST_EQUAL(atp.ti->num_files(), 5);
+			TEST_CHECK(atp.ti->v2());
+			atp.ti->free_piece_layers();
+			TEST_CHECK(atp.ti->v2());
+			TEST_EQUAL(atp.ti->v2_piece_hashes_verified(), false);
+		}
+	},
+	{ "v2_symlinks.torrent", [](lt::add_torrent_params atp) {
+			TEST_CHECK(atp.ti->num_files() > 3);
+			TEST_EQUAL(atp.ti->files().symlink(0_file), "SDL2.framework" SEPARATOR "Versions" SEPARATOR "Current" SEPARATOR "Headers");
+			TEST_EQUAL(atp.ti->files().symlink(1_file), "SDL2.framework" SEPARATOR "Versions" SEPARATOR "Current" SEPARATOR "Resources");
+			TEST_EQUAL(atp.ti->files().symlink(2_file), "SDL2.framework" SEPARATOR "Versions" SEPARATOR "Current" SEPARATOR "SDL2");
+		}
+	},
+	{ "v2_hybrid.torrent", [](lt::add_torrent_params atp) {
+			TEST_CHECK(atp.ti->info_hashes().has_v1());
+			TEST_CHECK(atp.ti->info_hashes().has_v2());
+		}
+	},
+	{ "empty-files-1.torrent", [](lt::add_torrent_params atp) {
+			TEST_CHECK(atp.ti->info_hashes().has_v1());
+			TEST_CHECK(atp.ti->info_hashes().has_v2());
+		}
+	},
+	{ "empty-files-2.torrent", [](lt::add_torrent_params atp) {
+			TEST_CHECK(atp.ti->info_hashes().has_v1());
+			TEST_CHECK(atp.ti->info_hashes().has_v2());
+		}
+	},
+	{ "empty-files-3.torrent", [](lt::add_torrent_params atp) {
+			TEST_CHECK(atp.ti->info_hashes().has_v1());
+			TEST_CHECK(atp.ti->info_hashes().has_v2());
+		}
+	},
+	{ "empty-files-4.torrent", [](lt::add_torrent_params atp) {
+			TEST_CHECK(atp.ti->info_hashes().has_v1());
+			TEST_CHECK(atp.ti->info_hashes().has_v2());
+		}
+	},
+	{ "empty-files-5.torrent", [](lt::add_torrent_params atp) {
+			TEST_CHECK(atp.ti->info_hashes().has_v1());
+			TEST_CHECK(atp.ti->info_hashes().has_v2());
+		}
+	},
+	{ "v2_no_piece_layers.torrent", [](lt::add_torrent_params atp) {
+			// it's OK to not have a piece layers field.
+			// It's just like adding a magnet link
+			TEST_CHECK(!atp.ti->info_hashes().has_v1());
+			TEST_CHECK(atp.ti->info_hashes().has_v2());
+		}
+	},
+	{ "v2_incomplete_piece_layer.torrent", [](lt::add_torrent_params atp) {
+			// it's OK for some files to not have a piece layer.
+			// It's just like adding a magnet link
+			TEST_CHECK(!atp.ti->info_hashes().has_v1());
+			TEST_CHECK(atp.ti->info_hashes().has_v2());
+		}
+	},
+	{ "similar.torrent", [](lt::add_torrent_params atp) {
+			TEST_CHECK((atp.ti->similar_torrents() == std::vector<lt::sha1_hash>{sha1_hash("aaaaaaaaaaaaaaaaaaaa")}));
+		}
+	},
+	{ "similar2.torrent", [](lt::add_torrent_params atp) {
+			TEST_CHECK((atp.ti->similar_torrents() == std::vector<lt::sha1_hash>{sha1_hash("aaaaaaaaaaaaaaaaaaaa")}));
+		}
+	},
+	{ "collection.torrent", [](lt::add_torrent_params atp) {
+			TEST_CHECK((atp.ti->collections() == std::vector<std::string>{"bar", "foo"}));
+		}
+	},
+	{ "collection2.torrent", [](lt::add_torrent_params atp) {
+			TEST_CHECK((atp.ti->collections() == std::vector<std::string>{"bar", "foo"}));
+		}
+	},
+	{ "dht_nodes.torrent", [](lt::add_torrent_params atp) {
+			using np = std::pair<std::string, int>;
+			TEST_CHECK((atp.dht_nodes == std::vector<np>{np("127.0.0.1", 6881), np("192.168.1.1", 6881)}));
+		}
+	},
+	{ "large_piece_size.torrent", [](lt::add_torrent_params atp) {
+			TEST_EQUAL(atp.ti->piece_length(), (32767 * 0x4000));
+		}
+	},
 };
 
 struct test_failing_torrent_t
@@ -157,29 +404,46 @@ test_failing_torrent_t test_error_torrents[] =
 	{ "missing_path_list.torrent", errors::torrent_missing_name },
 	{ "invalid_pieces.torrent", errors::torrent_missing_pieces },
 	{ "unaligned_pieces.torrent", errors::torrent_invalid_hashes },
-	{ "invalid_root_hash.torrent", errors::torrent_invalid_hashes },
-	{ "invalid_root_hash2.torrent", errors::torrent_missing_pieces },
-	{ "invalid_merkle.torrent", errors::no_files_in_torrent},
 	{ "invalid_file_size.torrent", errors::torrent_invalid_length },
 	{ "invalid_symlink.torrent", errors::torrent_invalid_name },
 	{ "many_pieces.torrent", errors::too_many_pieces_in_torrent },
 	{ "no_files.torrent", errors::no_files_in_torrent},
+	{ "zero.torrent", errors::torrent_invalid_length},
+	{ "zero2.torrent", errors::torrent_invalid_length},
+	{ "v2_mismatching_metadata.torrent", errors::torrent_inconsistent_files},
+	{ "v2_no_power2_piece.torrent", errors::torrent_missing_piece_length},
+	{ "v2_invalid_file.torrent", errors::torrent_file_parse_failed},
+	{ "v2_deep_recursion.torrent", bdecode_errors::depth_exceeded},
+	{ "v2_non_multiple_piece_layer.torrent", errors::torrent_invalid_piece_layer},
+	{ "v2_piece_layer_invalid_file_hash.torrent", errors::torrent_invalid_piece_layer},
+	{ "v2_invalid_piece_layer.torrent", errors::torrent_invalid_piece_layer},
+	{ "v2_invalid_piece_layer_root.torrent", errors::torrent_invalid_piece_layer},
+	{ "v2_unknown_piece_layer_entry.torrent", errors::torrent_invalid_piece_layer},
+	{ "v2_invalid_piece_layer_size.torrent", errors::torrent_invalid_piece_layer},
+	{ "v2_bad_file_alignment.torrent", errors::torrent_inconsistent_files},
+	{ "v2_unordered_files.torrent", errors::invalid_bencoding},
+	{ "v2_overlong_integer.torrent", errors::invalid_bencoding},
+	{ "v2_missing_file_root_invalid_symlink.torrent", errors::torrent_missing_pieces_root},
+	{ "v2_large_file.torrent", errors::torrent_invalid_length},
+	{ "v2_large_offset.torrent", errors::too_many_pieces_in_torrent},
+	{ "v2_piece_size.torrent", errors::torrent_missing_piece_length},
+	{ "v2_invalid_pad_file.torrent", errors::torrent_invalid_pad_file},
+	{ "v2_zero_root.torrent", errors::torrent_missing_pieces_root},
+	{ "v2_zero_root_small.torrent", errors::torrent_missing_pieces_root},
+	{ "duplicate_files2.torrent", errors::too_many_duplicate_filenames},
 };
 
 } // anonymous namespace
 
 // TODO: test remap_files
-// TODO: merkle torrents. specifically torrent_info::add_merkle_nodes and torrent with "root hash"
 // TODO: torrent with 'p' (padfile) attribute
 // TODO: torrent with 'h' (hidden) attribute
 // TODO: torrent with 'x' (executable) attribute
 // TODO: torrent with 'l' (symlink) attribute
-// TODO: creating a merkle torrent (torrent_info::build_merkle_list)
 // TODO: torrent with multiple trackers in multiple tiers, making sure we
 // shuffle them (how do you test shuffling?, load it multiple times and make
 // sure it's in different order at least once)
 // TODO: torrents with a zero-length name
-// TODO: torrents with a merkle tree and add_merkle_nodes
 // TODO: torrent with a non-dictionary info-section
 // TODO: torrents with DHT nodes
 // TODO: torrent with url-list as a single string
@@ -187,11 +451,26 @@ test_failing_torrent_t test_error_torrents[] =
 // TODO: torrent with a comment
 // TODO: torrent with an SSL cert
 // TODO: torrent with attributes (executable and hidden)
-// TODO: torrent_info::add_tracker
 // TODO: torrent_info constructor that takes an invalid bencoded buffer
 // TODO: verify_encoding with a string that triggers character replacement
 
-TORRENT_TEST(url_list_and_httpseeds)
+#if TORRENT_ABI_VERSION < 4
+TORRENT_TEST(add_tracker)
+{
+	torrent_info ti(info_hash_t(sha1_hash("                   ")));
+	TEST_EQUAL(ti.trackers().size(), 0);
+
+	ti.add_tracker("http://test.com/announce");
+	TEST_EQUAL(ti.trackers().size(), 1);
+
+	announce_entry ae = ti.trackers()[0];
+	TEST_EQUAL(ae.url, "http://test.com/announce");
+
+	ti.clear_trackers();
+	TEST_EQUAL(ti.trackers().size(), 0);
+}
+
+TORRENT_TEST(url_list_duplicate)
 {
 	entry info;
 	info["pieces"] = "aaaaaaaaaaaaaaaaaaaa";
@@ -201,54 +480,38 @@ TORRENT_TEST(url_list_and_httpseeds)
 	info["length"] = 3245;
 	entry::list_type l;
 	l.push_back(entry("http://foo.com/bar1"));
-	l.push_back(entry("http://foo.com/bar1"));
+	l.push_back(entry("http://foo.com/bar1")); // <- duplicate
 	l.push_back(entry("http://foo.com/bar2"));
 	entry const e(l);
 	entry torrent;
 	torrent["url-list"] = e;
-	torrent["httpseeds"] = e;
 	torrent["info"] = info;
-	std::vector<char> buf;
-	bencode(std::back_inserter(buf), torrent);
+	std::vector<char> const buf = bencode(torrent);
 	torrent_info ti(buf, from_span);
-	TEST_EQUAL(ti.web_seeds().size(), 4);
+	TEST_EQUAL(ti.web_seeds().size(), 2);
 }
 
 TORRENT_TEST(add_url_seed)
 {
-	torrent_info ti(sha1_hash("                   "));
+	torrent_info ti(info_hash_t(sha1_hash("                   ")));
 	TEST_EQUAL(ti.web_seeds().size(), 0);
 
 	ti.add_url_seed("http://test.com");
 
 	TEST_EQUAL(ti.web_seeds().size(), 1);
 	web_seed_entry we = ti.web_seeds()[0];
-	TEST_EQUAL(we.type, web_seed_entry::url_seed);
-	TEST_EQUAL(we.url, "http://test.com");
-}
-
-TORRENT_TEST(add_http_seed)
-{
-	torrent_info ti(sha1_hash("                   "));
-	TEST_EQUAL(ti.web_seeds().size(), 0);
-
-	ti.add_http_seed("http://test.com");
-
-	TEST_EQUAL(ti.web_seeds().size(), 1);
-	web_seed_entry we = ti.web_seeds()[0];
-	TEST_EQUAL(we.type, web_seed_entry::http_seed);
 	TEST_EQUAL(we.url, "http://test.com");
 }
 
 TORRENT_TEST(set_web_seeds)
 {
-	torrent_info ti(sha1_hash("                   "));
+	torrent_info ti(info_hash_t(sha1_hash("                   ")));
 	TEST_EQUAL(ti.web_seeds().size(), 0);
 
 	std::vector<web_seed_entry> seeds;
-	web_seed_entry e1("http://test1.com", web_seed_entry::url_seed);
+	web_seed_entry e1("http://test1.com");
 	seeds.push_back(e1);
-	web_seed_entry e2("http://test2com", web_seed_entry::http_seed);
+	web_seed_entry e2("http://test2com");
 	seeds.push_back(e2);
 
 	ti.set_web_seeds(seeds);
@@ -256,16 +519,11 @@ TORRENT_TEST(set_web_seeds)
 	TEST_EQUAL(ti.web_seeds().size(), 2);
 	TEST_CHECK(ti.web_seeds() == seeds);
 }
-
-#ifdef TORRENT_WINDOWS
-#define SEPARATOR "\\"
-#else
-#define SEPARATOR "/"
 #endif
 
-TORRENT_TEST(sanitize_long_path)
+TORRENT_TEST(sanitize_path_truncate)
 {
-	// test sanitize_append_path_element
+	using lt::aux::sanitize_append_path_element;
 
 	std::string path;
 	sanitize_append_path_element(path,
@@ -293,9 +551,30 @@ TORRENT_TEST(sanitize_long_path)
 		"abcdefghi_abcdefghi_abcdefghi_abcdefghi_.test");
 }
 
+TORRENT_TEST(sanitize_path_truncate_utf)
+{
+	using lt::aux::sanitize_append_path_element;
+
+	std::string path;
+	// msvc doesn't like unicode string literals, so we encode it as UTF-8 explicitly
+	sanitize_append_path_element(path,
+		"abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi_"
+		"abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi_"
+		"abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi_"
+		"abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi_"
+		"abcdefghi_abcdefghi_abcdefghi_abcdefghi" "\xE2" "\x80" "\x94" "abcde.jpg");
+	TEST_EQUAL(path,
+		"abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi_"
+		"abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi_"
+		"abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi_"
+		"abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi_"
+		"abcdefghi_abcdefghi_abcdefghi_abcdefghi" "\xE2" "\x80" "\x94" ".jpg");
+}
+
 TORRENT_TEST(sanitize_path_trailing_dots)
 {
 	std::string path;
+	using lt::aux::sanitize_append_path_element;
 	sanitize_append_path_element(path, "a");
 	sanitize_append_path_element(path, "abc...");
 	sanitize_append_path_element(path, "c");
@@ -333,6 +612,7 @@ TORRENT_TEST(sanitize_path_trailing_dots)
 
 TORRENT_TEST(sanitize_path_trailing_spaces)
 {
+	using lt::aux::sanitize_append_path_element;
 	std::string path;
 	sanitize_append_path_element(path, "a");
 	sanitize_append_path_element(path, "abc   ");
@@ -362,6 +642,7 @@ TORRENT_TEST(sanitize_path_trailing_spaces)
 
 TORRENT_TEST(sanitize_path)
 {
+	using lt::aux::sanitize_append_path_element;
 	std::string path;
 	sanitize_append_path_element(path, "\0\0\xed\0\x80");
 	TEST_EQUAL(path, "_");
@@ -549,6 +830,7 @@ TORRENT_TEST(sanitize_path)
 
 TORRENT_TEST(sanitize_path_zeroes)
 {
+	using lt::aux::sanitize_append_path_element;
 	std::string path;
 	sanitize_append_path_element(path, "\0foo");
 	TEST_EQUAL(path, "_");
@@ -560,6 +842,7 @@ TORRENT_TEST(sanitize_path_zeroes)
 
 TORRENT_TEST(sanitize_path_colon)
 {
+	using lt::aux::sanitize_append_path_element;
 	std::string path;
 	sanitize_append_path_element(path, "foo:bar");
 #ifdef TORRENT_WINDOWS
@@ -571,6 +854,8 @@ TORRENT_TEST(sanitize_path_colon)
 
 TORRENT_TEST(verify_encoding)
 {
+	using aux::verify_encoding;
+
 	// verify_encoding
 	std::string test = "\b?filename=4";
 	TEST_CHECK(verify_encoding(test));
@@ -626,34 +911,48 @@ TORRENT_TEST(verify_encoding)
 	test = "filename\xf8\x9f\x9f\x9f\x9f""foobar";
 	TEST_CHECK(!verify_encoding(test));
 	std::printf("%s\n", test.c_str());
-	TEST_CHECK(test == "filename_____foobar");
+	TEST_CHECK(test == "filename_foobar");
 
 	// redundant (overlong) 2-byte sequence
 	// ascii code 0x2e encoded with a leading 0
 	test = "filename\xc0\xae";
 	TEST_CHECK(!verify_encoding(test));
 	std::printf("%s\n", test.c_str());
-	TEST_CHECK(test == "filename__");
+	TEST_CHECK(test == "filename_");
 
 	// redundant (overlong) 3-byte sequence
 	// ascii code 0x2e encoded with two leading 0s
 	test = "filename\xe0\x80\xae";
 	TEST_CHECK(!verify_encoding(test));
 	std::printf("%s\n", test.c_str());
-	TEST_CHECK(test == "filename___");
+	TEST_CHECK(test == "filename_");
 
 	// redundant (overlong) 4-byte sequence
 	// ascii code 0x2e encoded with three leading 0s
 	test = "filename\xf0\x80\x80\xae";
 	TEST_CHECK(!verify_encoding(test));
 	std::printf("%s\n", test.c_str());
-	TEST_CHECK(test == "filename____");
+	TEST_CHECK(test == "filename_");
 
 	// missing byte header
 	test = "filename\xed\0\x80";
 	TEST_CHECK(!verify_encoding(test));
 	fprintf(stdout, "%s\n", test.c_str());
 	TEST_CHECK(test == "filename_");
+}
+
+namespace {
+void sanity_check(std::shared_ptr<torrent_info const> const& ti)
+{
+	// construct a piece_picker to get some more test coverage. Perhaps
+	// loading the torrent is fine, but if we can't construct a piece_picker
+	// for it, it's still no good.
+	aux::piece_picker pp(ti->total_size(), ti->piece_length());
+
+	TEST_CHECK(ti->piece_length() <= file_storage::max_piece_size);
+	TEST_EQUAL(ti->v1(), ti->info_hashes().has_v1());
+	TEST_EQUAL(ti->v2(), ti->info_hashes().has_v2());
+}
 }
 
 TORRENT_TEST(parse_torrents)
@@ -669,9 +968,8 @@ TORRENT_TEST(parse_torrents)
 	entry torrent;
 	torrent["info"] = info;
 
-	std::vector<char> buf;
-	bencode(std::back_inserter(buf), torrent);
-	torrent_info ti1(buf, from_span);
+	std::vector<char> const buf1 = bencode(torrent);
+	torrent_info ti1(buf1, from_span);
 	std::cout << ti1.name() << std::endl;
 	TEST_CHECK(ti1.name() == "test1");
 
@@ -681,9 +979,8 @@ TORRENT_TEST(parse_torrents)
 	info["name.utf-8"] = "/test1/test2/test3";
 #endif
 	torrent["info"] = info;
-	buf.clear();
-	bencode(std::back_inserter(buf), torrent);
-	torrent_info ti2(buf, from_span);
+	std::vector<char> const buf2 = bencode(torrent);
+	torrent_info ti2(buf2, from_span);
 	std::cout << ti2.name() << std::endl;
 #ifdef TORRENT_WINDOWS
 	TEST_EQUAL(ti2.name(), "c_test1test2test3");
@@ -693,156 +990,49 @@ TORRENT_TEST(parse_torrents)
 
 	info["name.utf-8"] = "test2/../test3/.././../../test4";
 	torrent["info"] = info;
-	buf.clear();
-	bencode(std::back_inserter(buf), torrent);
-	torrent_info ti3(buf, from_span);
+	std::vector<char> const buf3 = bencode(torrent);
+	torrent_info ti3(buf3, from_span);
 	std::cout << ti3.name() << std::endl;
 	TEST_EQUAL(ti3.name(), "test2..test3.......test4");
 
 	std::string root_dir = parent_path(current_working_directory());
-	for (auto const t : test_torrents)
+	for (auto const& t : test_torrents)
 	{
 		std::printf("loading %s\n", t.file);
 		std::string filename = combine_path(combine_path(root_dir, "test_torrents")
 			, t.file);
-		error_code ec;
-		auto ti = std::make_shared<torrent_info>(filename, ec);
-		TEST_CHECK(!ec);
-		if (ec) std::printf(" loading(\"%s\") -> failed %s\n", filename.c_str()
-			, ec.message().c_str());
+		lt::add_torrent_params atp = lt::load_torrent_file(filename);
+		sanity_check(atp.ti);
 
-		if (t.file == "whitespace_url.torrent"_sv)
-		{
-			// make sure we trimmed the url
-			TEST_CHECK(ti->trackers().size() > 0);
-			if (ti->trackers().size() > 0)
-				TEST_CHECK(ti->trackers()[0].url == "udp://test.com/announce");
-		}
-		else if (t.file == "duplicate_files.torrent"_sv)
-		{
-			// make sure we disambiguated the files
-			TEST_EQUAL(ti->num_files(), 2);
-			TEST_CHECK(ti->files().file_path(file_index_t{0}) == combine_path(combine_path("temp", "foo"), "bar.txt"));
-			TEST_CHECK(ti->files().file_path(file_index_t{1}) == combine_path(combine_path("temp", "foo"), "bar.1.txt"));
-		}
-		else if (t.file == "pad_file.torrent"_sv)
-		{
-			TEST_EQUAL(ti->num_files(), 2);
-			TEST_EQUAL(bool(ti->files().file_flags(file_index_t{0}) & file_storage::flag_pad_file), false);
-			TEST_EQUAL(bool(ti->files().file_flags(file_index_t{1}) & file_storage::flag_pad_file), true);
-		}
-		else if (t.file == "creation_date.torrent"_sv)
-		{
-			TEST_EQUAL(ti->creation_date(), 1234567);
-		}
-		else if (t.file == "duplicate_web_seeds.torrent"_sv)
-		{
-			TEST_EQUAL(ti->web_seeds().size(), 3);
-		}
-		else if (t.file == "no_creation_date.torrent"_sv)
-		{
-			TEST_CHECK(!ti->creation_date());
-		}
-		else if (t.file == "url_seed.torrent"_sv)
-		{
-			TEST_EQUAL(ti->web_seeds().size(), 1);
-			TEST_EQUAL(ti->web_seeds()[0].url, "http://test.com/file");
-#if TORRENT_ABI_VERSION == 1
-			TEST_EQUAL(ti->http_seeds().size(), 0);
-			TEST_EQUAL(ti->url_seeds().size(), 1);
-			TEST_EQUAL(ti->url_seeds()[0], "http://test.com/file");
+#if TORRENT_ABI_VERSION < 4
+		// trackers are loaded into atp.trackers
+		TEST_CHECK(atp.ti->trackers().empty());
+
+		// web seeds are loaded into atp.url_seeds
+		TEST_CHECK(atp.ti->web_seeds().empty());
 #endif
-		}
-		else if (t.file == "url_seed_multi.torrent"_sv)
-		{
-			TEST_EQUAL(ti->web_seeds().size(), 1);
-			TEST_EQUAL(ti->web_seeds()[0].url, "http://test.com/file/");
-#if TORRENT_ABI_VERSION == 1
-			TEST_EQUAL(ti->http_seeds().size(), 0);
-			TEST_EQUAL(ti->url_seeds().size(), 1);
-			TEST_EQUAL(ti->url_seeds()[0], "http://test.com/file/");
-#endif
-		}
-		else if (t.file == "url_seed_multi_single_file.torrent"_sv)
-		{
-			TEST_EQUAL(ti->web_seeds().size(), 1);
-			TEST_EQUAL(ti->web_seeds()[0].url, "http://test.com/file/temp/foo/bar.txt");
-		}
-		else if (t.file == "url_seed_multi_space.torrent"_sv
-			|| t.file == "url_seed_multi_space_nolist.torrent"_sv)
-		{
-			TEST_EQUAL(ti->web_seeds().size(), 1);
-			TEST_EQUAL(ti->web_seeds()[0].url, "http://test.com/test%20file/foo%20bar/");
-#if TORRENT_ABI_VERSION == 1
-			TEST_EQUAL(ti->http_seeds().size(), 0);
-			TEST_EQUAL(ti->url_seeds().size(), 1);
-			TEST_EQUAL(ti->url_seeds()[0], "http://test.com/test%20file/foo%20bar/");
-#endif
-		}
-		else if (t.file == "invalid_name2.torrent"_sv)
-		{
-			// if, after all invalid characters are removed from the name, it ends up
-			// being empty, it's set to the info-hash. Some torrents also have an empty name
-			// in which case it's also set to the info-hash
-			TEST_EQUAL(ti->name(), "b61560c2918f463768cd122b6d2fdd47b77bdb35");
-		}
-		else if (t.file == "invalid_name3.torrent"_sv)
-		{
-			// windows does not allow trailing spaces in filenames
-#ifdef TORRENT_WINDOWS
-			TEST_EQUAL(ti->name(), "foobar");
-#else
-			TEST_EQUAL(ti->name(), "foobar ");
-#endif
-		}
-		else if (t.file == "slash_path.torrent"_sv)
-		{
-			TEST_EQUAL(ti->num_files(), 1);
-			TEST_EQUAL(ti->files().file_path(file_index_t{0}), "temp" SEPARATOR "bar");
-		}
-		else if (t.file == "slash_path2.torrent"_sv)
-		{
-			TEST_EQUAL(ti->num_files(), 1);
-			TEST_EQUAL(ti->files().file_path(file_index_t{0}), "temp" SEPARATOR "abc....def" SEPARATOR "bar");
-		}
-		else if (t.file == "slash_path3.torrent"_sv)
-		{
-			TEST_EQUAL(ti->num_files(), 1);
-			TEST_EQUAL(ti->files().file_path(file_index_t{0}), "temp....abc");
-		}
-		else if (t.file == "symlink_zero_size.torrent"_sv)
-		{
-			TEST_EQUAL(ti->num_files(), 2);
-			TEST_EQUAL(ti->files().symlink(file_index_t(1)), combine_path("foo", "bar"));
-		}
-		else if (t.file == "pad_file_no_path.torrent"_sv)
-		{
-			TEST_EQUAL(ti->num_files(), 2);
-			TEST_EQUAL(ti->files().file_path(file_index_t{1}), combine_path(".pad", "0"));
-		}
-		else if (t.file == "absolute_filename.torrent"_sv)
-		{
-			TEST_EQUAL(ti->num_files(), 2);
-			TEST_EQUAL(ti->files().file_path(file_index_t{0}), combine_path("temp", "abcde"));
-			TEST_EQUAL(ti->files().file_path(file_index_t{1}), combine_path("temp", "foobar"));
-		}
-		else if (t.file == "invalid_filename.torrent"_sv)
-		{
-			TEST_EQUAL(ti->num_files(), 2);
-		}
-		else if (t.file == "invalid_filename2.torrent"_sv)
-		{
-			TEST_EQUAL(ti->num_files(), 3);
-		}
+
+		// piece layers are loaded into atp.merkle_trees and
+		// atp.merkle_trees_mask
+		TEST_CHECK(!atp.ti->v2_piece_hashes_verified());
+
+		auto ti = atp.ti;
+		if (t.test) t.test(std::move(atp));
 
 		file_storage const& fs = ti->files();
-		for (file_index_t idx{0}; idx != file_index_t(fs.num_files()); ++idx)
+		for (file_index_t const idx : fs.file_range())
 		{
 			piece_index_t const first = ti->map_file(idx, 0, 0).piece;
 			piece_index_t const last = ti->map_file(idx, std::max(fs.file_size(idx)-1, std::int64_t(0)), 0).piece;
 			file_flags_t const flags = fs.file_flags(idx);
+#if TORRENT_ABI_VERSION < 4
 			sha1_hash const ih = fs.hash(idx);
-			std::printf("  %11" PRId64 " %c%c%c%c [ %4d, %4d ] %7u %s %s %s%s\n"
+#endif
+			std::printf("  %11" PRId64 " %c%c%c%c [ %4d, %4d ] %7u "
+#if TORRENT_ABI_VERSION < 4
+				"%s "
+#endif
+				"%s %s%s\n"
 				, fs.file_size(idx)
 				, (flags & file_storage::flag_pad_file)?'p':'-'
 				, (flags & file_storage::flag_executable)?'x':'-'
@@ -850,23 +1040,49 @@ TORRENT_TEST(parse_torrents)
 				, (flags & file_storage::flag_symlink)?'l':'-'
 				, static_cast<int>(first), static_cast<int>(last)
 				, std::uint32_t(fs.mtime(idx))
+#if TORRENT_ABI_VERSION < 4
 				, ih != sha1_hash(nullptr) ? aux::to_hex(ih).c_str() : ""
+#endif
 				, fs.file_path(idx).c_str()
 				, flags & file_storage::flag_symlink ? "-> ": ""
 				, flags & file_storage::flag_symlink ? fs.symlink(idx).c_str() : "");
 		}
 	}
+}
 
-	for (int i = 0; i < int(sizeof(test_error_torrents)/sizeof(test_error_torrents[0])); ++i)
+TORRENT_TEST(parse_invalid_torrents)
+{
+	std::string const root_dir = parent_path(current_working_directory());
+	for (auto const& e : test_error_torrents)
 	{
 		error_code ec;
-		std::printf("loading %s\n", test_error_torrents[i].file);
-		auto ti = std::make_shared<torrent_info>(combine_path(
-			combine_path(root_dir, "test_torrents"), test_error_torrents[i].file), ec);
+		std::printf("loading %s\n", e.file);
+		std::string const filename = combine_path(combine_path(root_dir, "test_torrents")
+			, e.file);
+
+		auto ti = std::make_shared<torrent_info>(filename, ec);
 		std::printf("E:        \"%s\"\nexpected: \"%s\"\n", ec.message().c_str()
-			, test_error_torrents[i].error.message().c_str());
-		TEST_CHECK(ec.message() == test_error_torrents[i].error.message());
-		TEST_EQUAL(ti->is_valid(), false);
+			, e.error.message().c_str());
+		// Some checks only happen in the load_torrent_*() functions, not in the
+		// torrent_info constructor. For these, it's OK for ec to not report an
+		// error
+		if (e.error != errors::torrent_invalid_piece_layer || ec)
+		{
+			TEST_EQUAL(ec.message(), e.error.message());
+			TEST_EQUAL(ti->is_valid(), false);
+		}
+
+		try
+		{
+			add_torrent_params atp = load_torrent_file(filename);
+			TORRENT_ASSERT(!e.error);
+		}
+		catch (system_error const& err)
+		{
+			std::printf("E:        \"%s\"\nexpected: \"%s\"\n", err.code().message().c_str()
+				, e.error.message().c_str());
+			TEST_EQUAL(err.code().message(), e.error.message());
+		}
 	}
 }
 
@@ -886,7 +1102,7 @@ std::vector<lt::aux::vector<file_t, lt::file_index_t>> const test_cases
 		{"test/temporary.txt", 0x4000, {}, "test/temporary.txt"},
 		{"test/Temporary.txt", 0x4000, {}, "test/Temporary.1.txt"},
 		{"test/TeMPorArY.txT", 0x4000, {}, "test/TeMPorArY.2.txT"},
-		// a file with the same name in a seprate directory is fine
+		// a file with the same name in a separate directory is fine
 		{"test/test/TEMPORARY.TXT", 0x4000, {}, "test/test/TEMPORARY.TXT"},
 	},
 	{
@@ -896,6 +1112,25 @@ std::vector<lt::aux::vector<file_t, lt::file_index_t>> const test_cases
 		// duplicate of b.exe
 		{"test/B.exe", 0x4000, {}, "test/B.2.exe"},
 		{"test/filler", 0x4000, {}, "test/filler"},
+	},
+	{
+		{"test/a/b/c/d/e/f/g/h/i/j/k/l/m", 0x4000, {}, "test/a/b/c/d/e/f/g/h/i/j/k/l/m"},
+		{"test/a", 0x4000, {}, "test/a.1"},
+		{"test/a/b", 0x4000, {}, "test/a/b.1"},
+		{"test/a/b/c", 0x4000, {}, "test/a/b/c.1"},
+		{"test/a/b/c/d", 0x4000, {}, "test/a/b/c/d.1"},
+		{"test/a/b/c/d/e", 0x4000, {}, "test/a/b/c/d/e.1"},
+		{"test/a/b/c/d/e/f", 0x4000, {}, "test/a/b/c/d/e/f.1"},
+		{"test/a/b/c/d/e/f/g", 0x4000, {}, "test/a/b/c/d/e/f/g.1"},
+		{"test/a/b/c/d/e/f/g/h", 0x4000, {}, "test/a/b/c/d/e/f/g/h.1"},
+		{"test/a/b/c/d/e/f/g/h/i", 0x4000, {}, "test/a/b/c/d/e/f/g/h/i.1"},
+		{"test/a/b/c/d/e/f/g/h/i/j", 0x4000, {}, "test/a/b/c/d/e/f/g/h/i/j.1"},
+	},
+	{
+		// it doesn't matter whether the file comes before the directory,
+		// directories take precedence
+		{"test/a", 0x4000, {}, "test/a.1"},
+		{"test/a/b", 0x4000, {}, "test/a/b"},
 	},
 	{
 		{"test/A/tmp", 0x4000, {}, "test/A/tmp"},
@@ -951,28 +1186,23 @@ std::vector<lt::aux::vector<file_t, lt::file_index_t>> const test_cases
 
 void test_resolve_duplicates(aux::vector<file_t, file_index_t> const& test)
 {
-	file_storage fs;
-	for (auto const& f : test) fs.add_file(f.filename, f.size, f.flags);
+	std::vector<lt::create_file_entry> fs;
+	for (auto const& f : test) fs.emplace_back(f.filename, f.size, f.flags);
 
-	lt::create_torrent t(fs, 0x4000);
+	// This test creates torrents with duplicate (identical) filenames, which
+	// isn't supported by v2 torrents, so we can only test this with v1 torrents
+	lt::create_torrent t(std::move(fs), 0x4000, create_torrent::v1_only);
 
-	// calculate the hash for all pieces
-	sha1_hash ph;
-	for (auto const i : fs.piece_range())
-		t.set_hash(i, ph);
+	for (auto const i : t.piece_range())
+		t.set_hash(i, sha1_hash::max());
 
-	std::vector<char> tmp;
-	std::back_insert_iterator<std::vector<char>> out(tmp);
-
-	entry tor = t.generate();
-	bencode(out, tor);
-
+	std::vector<char> const tmp = t.generate_buf();
 	torrent_info ti(tmp, from_span);
-	for (auto const i : fs.file_range())
+	for (auto const i : t.file_range())
 	{
 		std::string p = ti.files().file_path(i);
 		convert_path_to_posix(p);
-		std::printf("%s == %s\n", p.c_str(), test[i].expected_filename.to_string().c_str());
+		std::printf("%s == %s\n", p.c_str(), std::string(test[i].expected_filename).c_str());
 
 		TEST_EQUAL(p, test[i].expected_filename);
 	}
@@ -1006,6 +1236,19 @@ TORRENT_TEST(empty_file2)
 	}
 }
 
+TORRENT_TEST(load_torrent_empty_file)
+{
+	try
+	{
+		auto atp = load_torrent_buffer({});
+		TEST_ERROR("expected exception thrown");
+	}
+	catch (system_error const& e)
+	{
+		std::printf("Expected error: %s\n", e.code().message().c_str());
+	}
+}
+
 TORRENT_TEST(copy)
 {
 	using namespace lt;
@@ -1021,12 +1264,14 @@ TORRENT_TEST(copy)
 		"sample/text_file.txt",
 	};
 
+#if TORRENT_ABI_VERSION < 4
 	aux::vector<sha1_hash, file_index_t> file_hashes =
 	{
 		sha1_hash(nullptr),
 		sha1_hash(nullptr),
 		sha1_hash("abababababababababab")
 	};
+#endif
 
 	file_storage const& fs = a->files();
 	for (auto const i : fs.file_range())
@@ -1036,17 +1281,13 @@ TORRENT_TEST(copy)
 		TEST_EQUAL(p, expected_files[i]);
 		std::printf("%s\n", p.c_str());
 
+#if TORRENT_ABI_VERSION < 4
 		TEST_EQUAL(a->files().hash(i), file_hashes[i]);
+#endif
 	}
 
 	// copy the torrent_info object
 	std::shared_ptr<torrent_info> b = std::make_shared<torrent_info>(*a);
-
-	// clear out the  buffer for a, just to make sure b doesn't have any
-	// references into it by mistake
-	int s = a->metadata_size();
-	std::memset(a->metadata().get(), 0, std::size_t(s));
-
 	a.reset();
 
 	TEST_EQUAL(b->num_files(), 3);
@@ -1059,7 +1300,9 @@ TORRENT_TEST(copy)
 		TEST_EQUAL(p, expected_files[i]);
 		std::printf("%s\n", p.c_str());
 
+#if TORRENT_ABI_VERSION < 4
 		TEST_EQUAL(fs2.hash(i), file_hashes[i]);
+#endif
 	}
 }
 
@@ -1070,11 +1313,184 @@ struct A
 
 TORRENT_TEST(copy_ptr)
 {
-	copy_ptr<A> a(new A{4});
-	copy_ptr<A> b(a);
+	aux::copy_ptr<A> a(new A{4});
+	aux::copy_ptr<A> b(a);
 
 	TEST_EQUAL(a->val, b->val);
 	TEST_CHECK(&*a != &*b);
 	a->val = 5;
 	TEST_EQUAL(b->val, 4);
 }
+
+#if TORRENT_ABI_VERSION < 4
+TORRENT_TEST(torrent_info_with_hashes_roundtrip)
+{
+	std::string const root_dir = parent_path(current_working_directory());
+	std::string const filename = combine_path(combine_path(root_dir, "test_torrents"), "v2_only.torrent");
+
+	error_code ec;
+	std::vector<char> data;
+	TEST_CHECK(load_file(filename, data, ec) == 0);
+
+	auto ti = std::make_shared<torrent_info>(data, ec, from_span);
+	TEST_CHECK(!ec);
+	if (ec) std::printf(" loading(\"%s\") -> failed %s\n", filename.c_str()
+		, ec.message().c_str());
+
+	TEST_CHECK(ti->v2());
+	TEST_CHECK(!ti->v1());
+	TEST_EQUAL(ti->v2_piece_hashes_verified(), true);
+
+	add_torrent_params atp;
+	atp.ti = ti;
+	atp.save_path = ".";
+
+	session ses(settings());
+	torrent_handle h = ses.add_torrent(atp);
+
+	TEST_CHECK(ti->v2());
+	TEST_CHECK(!ti->v1());
+
+	{
+		auto ti2 = h.torrent_file();
+		TEST_CHECK(ti2->v2());
+		TEST_CHECK(!ti2->v1());
+		TEST_EQUAL(ti2->v2_piece_hashes_verified(), false);
+	}
+
+	ti = h.torrent_file_with_hashes();
+
+	TEST_CHECK(ti->v2());
+	TEST_CHECK(!ti->v1());
+	TEST_EQUAL(ti->v2_piece_hashes_verified(), true);
+
+	std::vector<char> out_buffer = serialize(*ti);
+
+	TEST_EQUAL(out_buffer, data);
+}
+#endif
+
+TORRENT_TEST(write_torrent_file_session_roundtrip)
+{
+	std::string const root_dir = combine_path(parent_path(current_working_directory()), "test_torrents");
+
+	auto const files = {
+		"base.torrent",
+		"empty_path.torrent",
+		"parent_path.torrent",
+		"hidden_parent_path.torrent",
+		"single_multi_file.torrent",
+		"slash_path.torrent",
+		"slash_path2.torrent",
+		"slash_path3.torrent",
+		"backslash_path.torrent",
+		"long_name.torrent",
+		"duplicate_files.torrent",
+		"pad_file.torrent",
+		"creation_date.torrent",
+		"no_creation_date.torrent",
+		"url_seed.torrent",
+		"url_seed_multi_single_file.torrent",
+		"empty_path_multi.torrent",
+		"invalid_name2.torrent",
+		"invalid_name3.torrent",
+		"symlink1.torrent",
+		"symlink2.torrent",
+		"unordered.torrent",
+		"symlink_zero_size.torrent",
+		"pad_file_no_path.torrent",
+		"large.torrent",
+		"absolute_filename.torrent",
+		"invalid_filename.torrent",
+		"invalid_filename2.torrent",
+		"overlapping_symlinks.torrent",
+		"v2.torrent",
+		"v2_multipiece_file.torrent",
+		"v2_only.torrent",
+		"v2_invalid_filename.torrent",
+		"v2_multiple_files.torrent",
+		"v2_symlinks.torrent",
+		"v2_hybrid.torrent",
+		"empty-files-1.torrent",
+		"empty-files-2.torrent",
+		"empty-files-3.torrent",
+		"empty-files-4.torrent",
+		"empty-files-5.torrent",
+		"similar.torrent",
+		"collection.torrent",
+		"collection2.torrent",
+		"similar.torrent",
+		"similar2.torrent",
+		"dht_nodes.torrent",
+	};
+
+	for (auto const& name : files)
+	{
+		std::string const filename = combine_path(root_dir, name);
+
+		std::printf("loading(\"%s\")\n", name);
+		error_code ec;
+		std::vector<char> data;
+		TEST_CHECK(load_file(filename, data, ec) == 0);
+
+		auto ti = std::make_shared<torrent_info>(data, ec, from_span);
+		TEST_CHECK(!ec);
+		if (ec) std::printf(" -> failed %s\n", ec.message().c_str());
+
+		add_torrent_params atp;
+		atp.ti = ti;
+		atp.save_path = ".";
+
+		session ses(settings());
+		torrent_handle h = ses.add_torrent(atp);
+
+		h.save_resume_data(torrent_handle::save_info_dict);
+		alert const* a = wait_for_alert(ses, save_resume_data_alert::alert_type);
+
+		TORRENT_ASSERT(a);
+		{
+			auto const& p = static_cast<save_resume_data_alert const*>(a)->params;
+			entry e = write_torrent_file(p, write_flags::include_dht_nodes);
+			std::vector<char> const out_buffer = bencode(e);
+
+			TEST_CHECK(out_buffer == write_torrent_file_buf(p, write_flags::include_dht_nodes));
+
+			if (out_buffer != data)
+			{
+				std::cout << "GOT:\n";
+				for (char b : out_buffer)
+					std::cout << (std::isprint(std::uint8_t(b)) ? b : '.');
+				std::cout << '\n';
+
+				std::cout << "EXPECTED:\n";
+				for (char b : data)
+					std::cout << (std::isprint(std::uint8_t(b)) ? b : '.');
+				std::cout << '\n';
+			}
+			TEST_CHECK(out_buffer == data);
+		}
+
+		{
+			add_torrent_params p = load_torrent_file(filename);
+			entry e = write_torrent_file(p, write_flags::include_dht_nodes);
+			std::vector<char> const out_buffer = bencode(e);
+
+			TEST_CHECK(out_buffer == write_torrent_file_buf(p, write_flags::include_dht_nodes));
+
+			if (out_buffer != data)
+			{
+				std::cout << "GOT:\n";
+				for (char b : out_buffer)
+					std::cout << (std::isprint(std::uint8_t(b)) ? b : '.');
+				std::cout << '\n';
+
+				std::cout << "EXPECTED:\n";
+				for (char b : data)
+					std::cout << (std::isprint(std::uint8_t(b)) ? b : '.');
+				std::cout << '\n';
+			}
+			TEST_CHECK(out_buffer == data);
+		}
+	}
+}
+

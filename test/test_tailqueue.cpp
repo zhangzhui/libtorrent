@@ -1,51 +1,29 @@
 /*
 
-Copyright (c) 2012, Arvid Norberg
+Copyright (c) 2014-2017, 2020-2021, Arvid Norberg
+Copyright (c) 2018, 2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
-#include "libtorrent/tailqueue.hpp"
+#include "libtorrent/aux_/tailqueue.hpp"
 
 using namespace lt;
 
 namespace {
 
-struct test_node : tailqueue_node<test_node>
+struct test_node : aux::tailqueue_node<test_node>
 {
 	explicit test_node(char n) : name(n) {}
 	char name;
 };
 
-void check_chain(tailqueue<test_node>& chain, char const* expected)
+void check_chain(aux::tailqueue<test_node>& chain, char const* expected)
 {
-	tailqueue_iterator<test_node> i = chain.iterate();
+	aux::tailqueue_iterator<test_node> i = chain.iterate();
 
 	while (i.get())
 	{
@@ -60,7 +38,7 @@ void check_chain(tailqueue<test_node>& chain, char const* expected)
 	TEST_EQUAL(expected[0], 0);
 }
 
-void free_chain(tailqueue<test_node>& q)
+void free_chain(aux::tailqueue<test_node>& q)
 {
 	test_node* chain = static_cast<test_node*>(q.get_all());
 	while(chain)
@@ -71,7 +49,7 @@ void free_chain(tailqueue<test_node>& q)
 	}
 }
 
-void build_chain(tailqueue<test_node>& q, char const* str)
+void build_chain(aux::tailqueue<test_node>& q, char const* str)
 {
 	free_chain(q);
 
@@ -89,14 +67,14 @@ void build_chain(tailqueue<test_node>& q, char const* str)
 
 TORRENT_TEST(tailqueue)
 {
-	tailqueue<test_node> t1;
-	tailqueue<test_node> t2;
+	aux::tailqueue<test_node> t1;
+	aux::tailqueue<test_node> t2;
 
 	// test prepend
 	build_chain(t1, "abcdef");
 	build_chain(t2, "12345");
 
-	t1.prepend(t2);
+	t1.prepend(std::move(t2));
 	check_chain(t1, "12345abcdef");
 	check_chain(t2, "");
 
@@ -104,7 +82,7 @@ TORRENT_TEST(tailqueue)
 	build_chain(t1, "abcdef");
 	build_chain(t2, "12345");
 
-	t1.append(t2);
+	t1.append(std::move(t2));
 	check_chain(t1, "abcdef12345");
 	check_chain(t2, "");
 

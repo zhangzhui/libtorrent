@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2017-2020, 2022, Arvid Norberg
+Copyright (c) 2017, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_PATH_HPP_INCLUDED
@@ -40,11 +18,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/config.hpp"
 #include "libtorrent/string_view.hpp"
 #include "libtorrent/span.hpp"
-#include "libtorrent/aux_/storage_utils.hpp" // for iovec_t
 
 #include "libtorrent/aux_/disable_warnings_push.hpp"
-
-#include <boost/noncopyable.hpp>
 
 #ifdef TORRENT_WINDOWS
 // windows part
@@ -52,8 +27,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <winioctl.h>
 #include <sys/types.h>
 #else
-// posix part
-#define _FILE_OFFSET_BITS 64
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -69,8 +42,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <sys/types.h>
 #include <dirent.h> // for DIR
 
-#undef _FILE_OFFSET_BITS
-
 #endif
 
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
@@ -78,8 +49,15 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/assert.hpp"
 #include "libtorrent/time.hpp"
+#include "libtorrent/flags.hpp"
 
 namespace libtorrent {
+
+	using file_attributes_t = flags::bitfield_flag<std::uint32_t, struct file_attribute_tag>;
+	using file_status_flag_t = flags::bitfield_flag<std::uint32_t, struct file_status_flag_tag>;
+
+	// internal flags for stat_file
+	constexpr file_status_flag_t dont_follow_links = 0_bit;
 
 	struct file_status
 	{
@@ -87,29 +65,16 @@ namespace libtorrent {
 		std::uint64_t atime = 0;
 		std::uint64_t mtime = 0;
 		std::uint64_t ctime = 0;
-		enum {
-#if defined TORRENT_WINDOWS
-			fifo = 0x1000, // named pipe (fifo)
-			character_special = 0x2000,  // character special
-			directory = 0x4000,  // directory
-			regular_file = 0x8000  // regular
-#else
-			fifo = 0010000, // named pipe (fifo)
-			character_special = 0020000,  // character special
-			directory = 0040000,  // directory
-			block_special = 0060000,  // block special
-			regular_file = 0100000,  // regular
-			link = 0120000,  // symbolic link
-			socket = 0140000  // socket
-#endif
-		} modes_t;
-		int mode = 0;
+
+		static constexpr file_attributes_t directory = 0_bit;
+		static constexpr file_attributes_t hidden = 1_bit;
+		static constexpr file_attributes_t executable = 2_bit;
+		static constexpr file_attributes_t symlink = 3_bit;
+		file_attributes_t mode = file_attributes_t{};
 	};
 
-	// internal flags for stat_file
-	enum { dont_follow_links = 1 };
 	TORRENT_EXTRA_EXPORT void stat_file(std::string const& f, file_status* s
-		, error_code& ec, int flags = 0);
+		, error_code& ec, file_status_flag_t flags = {});
 	TORRENT_EXTRA_EXPORT void rename(std::string const& f
 		, std::string const& newf, error_code& ec);
 	TORRENT_EXTRA_EXPORT void create_directories(std::string const& f
@@ -120,35 +85,31 @@ namespace libtorrent {
 		, error_code& ec);
 	TORRENT_EXTRA_EXPORT void remove(std::string const& f, error_code& ec);
 	TORRENT_EXTRA_EXPORT bool exists(std::string const& f, error_code& ec);
-	TORRENT_EXTRA_EXPORT bool exists(std::string const& f);
-	TORRENT_EXTRA_EXPORT std::int64_t file_size(std::string const& f);
 	TORRENT_EXTRA_EXPORT bool is_directory(std::string const& f
 		, error_code& ec);
-	TORRENT_EXTRA_EXPORT void recursive_copy(std::string const& old_path
-		, std::string const& new_path, error_code& ec);
-	TORRENT_EXTRA_EXPORT void copy_file(std::string const& f
-		, std::string const& newf, error_code& ec);
-	TORRENT_EXTRA_EXPORT void move_file(std::string const& f
-		, std::string const& newf, error_code& ec);
 
 	// file is expected to exist, link will be created to point to it. If hard
 	// links are not supported by the filesystem or OS, the file will be copied.
 	TORRENT_EXTRA_EXPORT void hard_link(std::string const& file
 		, std::string const& link, error_code& ec);
 
-	TORRENT_EXTRA_EXPORT std::string split_path(std::string const& f
-		, bool only_first_part = false);
-	TORRENT_EXTRA_EXPORT char const* next_path_element(char const* p);
+	// split out a path segment from the left side or right side
+	TORRENT_EXTRA_EXPORT std::pair<string_view, string_view> rsplit_path(string_view p);
+	TORRENT_EXTRA_EXPORT std::pair<string_view, string_view> lsplit_path(string_view p);
+	TORRENT_EXTRA_EXPORT std::pair<string_view, string_view> lsplit_path(string_view p, std::size_t pos);
+
 	TORRENT_EXTRA_EXPORT std::string extension(std::string const& f);
 	TORRENT_EXTRA_EXPORT std::string remove_extension(std::string const& f);
-	TORRENT_EXTRA_EXPORT void replace_extension(std::string& f, std::string const& ext);
 	TORRENT_EXTRA_EXPORT bool is_root_path(std::string const& f);
-	TORRENT_EXTRA_EXPORT bool compare_path(std::string const& lhs, std::string const& rhs);
+	TORRENT_EXTRA_EXPORT bool path_equal(std::string const& lhs, std::string const& rhs);
+
+	// compare each path element individually
+	TORRENT_EXTRA_EXPORT int path_compare(string_view lhs, string_view lfile
+		, string_view rhs, string_view rfile);
 
 	// internal used by create_torrent.hpp
 	TORRENT_EXTRA_EXPORT std::string parent_path(std::string const& f);
 	TORRENT_EXTRA_EXPORT bool has_parent_path(std::string const& f);
-	TORRENT_EXTRA_EXPORT char const* filename_cstr(char const* f);
 
 	// internal used by create_torrent.hpp
 	TORRENT_EXTRA_EXPORT std::string filename(std::string const& f);
@@ -156,6 +117,8 @@ namespace libtorrent {
 		, string_view rhs);
 	TORRENT_EXTRA_EXPORT void append_path(std::string& branch
 		, string_view leaf);
+	TORRENT_EXTRA_EXPORT std::string lexically_relative(string_view base
+		, string_view target);
 
 	// internal used by create_torrent.hpp
 	TORRENT_EXTRA_EXPORT std::string complete(string_view f);
@@ -183,8 +146,6 @@ namespace libtorrent {
 // internal export should be used at unit tests only
 	TORRENT_EXTRA_EXPORT std::string convert_from_native_path(char const* s);
 #endif
-
-	TORRENT_EXTRA_EXPORT int bufs_size(span<iovec_t const> bufs);
 }
 
 #endif // TORRENT_PATH_HPP_INCLUDED

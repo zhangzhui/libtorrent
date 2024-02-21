@@ -1,47 +1,27 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2014-2021, Arvid Norberg
+Copyright (c) 2016, 2019-2021, Alden Torres
+Copyright (c) 2020, Paul-Louis Ageneau
+Copyright (c) 2021, Denis Kuzmenok
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/bitfield.hpp"
-#include "libtorrent/peer_connection.hpp"
-#include "libtorrent/torrent.hpp"
+#include "libtorrent/aux_/peer_connection.hpp"
+#include "libtorrent/aux_/torrent.hpp"
 #include "libtorrent/aux_/socket_type.hpp"
 #include "libtorrent/peer_info.hpp" // for peer_info flags
-#include "libtorrent/request_blocks.hpp"
-#include "libtorrent/alert_manager.hpp"
+#include "libtorrent/aux_/request_blocks.hpp"
+#include "libtorrent/aux_/alert_manager.hpp"
 #include "libtorrent/aux_/has_block.hpp"
 
 #include <vector>
 
-namespace libtorrent {
+namespace libtorrent::aux {
 
 	int source_rank(peer_source_flags_t const source_bitmask)
 	{
@@ -83,8 +63,7 @@ namespace libtorrent {
 
 		// in time critical mode, only have 1 outstanding request at a time
 		// via normal requests
-		int const desired_queue_size = time_critical_mode
-			? 1 : c.desired_queue_size();
+		int const desired_queue_size = c.desired_queue_size();
 
 		int num_requests = desired_queue_size
 			- int(c.download_queue().size())
@@ -94,7 +73,7 @@ namespace libtorrent {
 		if (c.should_log(peer_log_alert::info))
 		{
 			c.peer_log(peer_log_alert::info, "PIECE_PICKER"
-				, "dlq: %d rqq: %d target: %d req: %d engame: %d"
+				, "dlq: %d rqq: %d target: %d req: %d endgame: %d"
 				, int(c.download_queue().size()), int(c.request_queue().size())
 				, desired_queue_size, num_requests, c.endgame());
 		}
@@ -116,22 +95,30 @@ namespace libtorrent {
 			&& !time_critical_mode
 			&& t.settings().get_int(settings_pack::whole_pieces_threshold) > 0)
 		{
+			// if our download rate lets us download a whole piece in
+			// "whole_pieces_threshold" seconds, we prefer to pick an entire piece.
+			// If we can download multiple whole pieces, we prefer to download that
+			// many contiguous pieces.
+
+			// download_rate times the whole piece threshold (seconds) gives the
+			// number of bytes downloaded in one window of that threshold, divided
+			// by the piece size give us the number of (whole) pieces downloaded
+			// in the window.
+			int const contiguous_pieces =
+				std::min(c.statistics().download_payload_rate()
+				* t.settings().get_int(settings_pack::whole_pieces_threshold)
+				, 8 * 1024 * 1024)
+				/ t.torrent_file().piece_length();
+
 			int const blocks_per_piece = t.torrent_file().piece_length() / t.block_size();
-			prefer_contiguous_blocks
-				= (c.statistics().download_payload_rate()
-				> t.torrent_file().piece_length()
-				/ t.settings().get_int(settings_pack::whole_pieces_threshold))
-				? blocks_per_piece : 0;
+
+			prefer_contiguous_blocks = contiguous_pieces * blocks_per_piece;
 		}
 
 		// if we prefer whole pieces, the piece picker will pick at least
 		// the number of blocks we want, but it will try to make the picked
 		// blocks be from whole pieces, possibly by returning more blocks
 		// than we requested.
-#if TORRENT_USE_ASSERTS
-		error_code ec;
-		TORRENT_ASSERT(c.remote() == c.get_socket()->remote_endpoint(ec) || ec);
-#endif
 
 		aux::session_interface& ses = t.session();
 
@@ -194,8 +181,7 @@ namespace libtorrent {
 		bool const dont_pick_busy_blocks
 			= ((ses.settings().get_bool(settings_pack::strict_end_game_mode)
 				&& p.get_download_queue_size() < p.num_want_left())
-				|| dq.size() + rq.size() > 0)
-				&& !time_critical_mode;
+				|| dq.size() + rq.size() > 0);
 
 		// this is filled with an interesting piece
 		// that some other peer is currently downloading
@@ -204,13 +190,6 @@ namespace libtorrent {
 		for (piece_block const& pb : interesting_pieces)
 		{
 			if (prefer_contiguous_blocks == 0 && num_requests <= 0) break;
-
-			if (time_critical_mode && p.piece_priority(pb.piece_index) != top_priority)
-			{
-				// assume the subsequent pieces are not prio 7 and
-				// be done
-				break;
-			}
 
 			int num_block_requests = p.num_peers(pb);
 			if (num_block_requests > 0)
@@ -239,8 +218,7 @@ namespace libtorrent {
 				|| std::find_if(rq.begin(), rq.end(), aux::has_block(pb)) != rq.end())
 			{
 #if TORRENT_USE_ASSERTS
-				std::vector<pending_block>::const_iterator j
-					= std::find_if(dq.begin(), dq.end(), aux::has_block(pb));
+				auto const j = std::find_if(dq.begin(), dq.end(), aux::has_block(pb));
 				if (j != dq.end()) TORRENT_ASSERT(j->timed_out || j->not_wanted);
 #endif
 #ifndef TORRENT_DISABLE_LOGGING

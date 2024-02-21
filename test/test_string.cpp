@@ -1,45 +1,28 @@
 /*
 
-Copyright (c) 2012, Arvid Norberg
+Copyright (c) 2013-2020, 2022, Arvid Norberg
+Copyright (c) 2015, Mikhail Titov
+Copyright (c) 2016, 2018, 2020, Alden Torres
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2017, Pavel Pimenov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
 #include "libtorrent/aux_/escape_string.hpp"
 #include "libtorrent/hex.hpp"
-#include "libtorrent/string_util.hpp"
+#include "libtorrent/aux_/string_util.hpp"
 #include "libtorrent/aux_/string_ptr.hpp"
 #include <iostream>
 #include <cstring> // for strcmp
 #include "libtorrent/aux_/escape_string.hpp" // for trim
 
 using namespace lt;
+using namespace lt::aux;
 
 TORRENT_TEST(maybe_url_encode)
 {
@@ -206,6 +189,32 @@ TORRENT_TEST(to_string)
 	TEST_CHECK(to_string(-999999999999999999).data() == std::string("-999999999999999999"));
 }
 
+namespace {
+
+template <size_t N>
+std::vector<char> to_vec(char const (&str)[N])
+{
+	return std::vector<char>(&str[0], &str[N - 1]);
+}
+
+std::string to_str(std::vector<char> const& v)
+{
+	return std::string(v.begin(), v.end());
+}
+
+// convert the standard base64 alphabet to the i2p alphabet
+std::string transcode_alphabet(std::string in)
+{
+	std::string ret;
+	std::transform(in.begin(), in.end(), std::back_inserter(ret), [](char const c) {
+		if (c == '+') return '-';
+		if (c == '/') return '~';
+		return c;
+	});
+	return ret;
+}
+}
+
 TORRENT_TEST(base64)
 {
 	// base64 test vectors from http://www.faqs.org/rfcs/rfc4648.html
@@ -216,6 +225,20 @@ TORRENT_TEST(base64)
 	TEST_CHECK(base64encode("foob") == "Zm9vYg==");
 	TEST_CHECK(base64encode("fooba") == "Zm9vYmE=");
 	TEST_CHECK(base64encode("foobar") == "Zm9vYmFy");
+#if TORRENT_USE_I2P
+	TEST_CHECK(base64decode_i2p("") == to_vec(""));
+	TEST_CHECK(base64decode_i2p("Zg==") == to_vec("f"));
+	TEST_CHECK(base64decode_i2p("Zm8=") == to_vec("fo"));
+	TEST_CHECK(base64decode_i2p("Zm9v") == to_vec("foo"));
+	TEST_CHECK(base64decode_i2p("Zm9vYg==") == to_vec("foob"));
+	TEST_CHECK(base64decode_i2p("Zm9vYmE=") == to_vec("fooba"));
+	TEST_CHECK(base64decode_i2p("Zm9vYmFy") == to_vec("foobar"));
+
+	std::vector<char> test;
+	for (int i = 0; i < 255; ++i)
+		test.push_back(char(i));
+	TEST_CHECK(base64decode_i2p(transcode_alphabet(base64encode(to_str(test)))) == test);
+#endif
 }
 
 TORRENT_TEST(base32)
@@ -223,24 +246,20 @@ TORRENT_TEST(base32)
 	// base32 test vectors from http://www.faqs.org/rfcs/rfc4648.html
 
 #if TORRENT_USE_I2P
-	TEST_CHECK(base32encode("") == "");
-	TEST_CHECK(base32encode("f") == "MY======");
-	TEST_CHECK(base32encode("fo") == "MZXQ====");
-	TEST_CHECK(base32encode("foo") == "MZXW6===");
-	TEST_CHECK(base32encode("foob") == "MZXW6YQ=");
-	TEST_CHECK(base32encode("fooba") == "MZXW6YTB");
-	TEST_CHECK(base32encode("foobar") == "MZXW6YTBOI======");
-
-	// base32 for i2p
-	TEST_CHECK(base32encode("fo", string::no_padding) == "MZXQ");
-	TEST_CHECK(base32encode("foob", string::i2p) == "mzxw6yq");
-	TEST_CHECK(base32encode("foobar", string::lowercase) == "mzxw6ytboi======");
+	// i2p uses lower case and no padding
+	TEST_CHECK(base32encode_i2p(""_sv) == "");
+	TEST_CHECK(base32encode_i2p("f"_sv) == "my");
+	TEST_CHECK(base32encode_i2p("fo"_sv) == "mzxq");
+	TEST_CHECK(base32encode_i2p("foo"_sv) == "mzxw6");
+	TEST_CHECK(base32encode_i2p("foob"_sv) == "mzxw6yq");
+	TEST_CHECK(base32encode_i2p("fooba"_sv) == "mzxw6ytb");
+	TEST_CHECK(base32encode_i2p("foobar"_sv) == "mzxw6ytboi");
 
 	std::string test;
 	for (int i = 0; i < 255; ++i)
 		test += char(i);
 
-	TEST_CHECK(base32decode(base32encode(test)) == test);
+	TEST_CHECK(base32decode(base32encode_i2p(test)) == test);
 #endif // TORRENT_USE_I2P
 
 	TEST_CHECK(base32decode("") == "");
@@ -325,40 +344,29 @@ TORRENT_TEST(path)
 	std::string path = "a\\b\\c";
 	convert_path_to_posix(path);
 	TEST_EQUAL(path, "a/b/c");
-
-#if TORRENT_ABI_VERSION == 1
-	// resolve_file_url
-
-#ifdef TORRENT_WINDOWS
-	std::string p = "c:/blah/foo/bar\\";
-	convert_path_to_windows(p);
-	TEST_EQUAL(p, "c:\\blah\\foo\\bar\\");
-	TEST_EQUAL(resolve_file_url("file:///c:/blah/foo/bar"), "c:\\blah\\foo\\bar");
-	TEST_EQUAL(resolve_file_url("file:///c:/b%3fah/foo/bar"), "c:\\b?ah\\foo\\bar");
-	TEST_EQUAL(resolve_file_url("file://\\c:\\b%3fah\\foo\\bar"), "c:\\b?ah\\foo\\bar");
-#else
-	TEST_EQUAL(resolve_file_url("file:///c/blah/foo/bar"), "/c/blah/foo/bar");
-	TEST_EQUAL(resolve_file_url("file:///c/b%3fah/foo/bar"), "/c/b?ah/foo/bar");
-#endif
-#endif
 }
 
 namespace {
 
 void test_parse_interface(char const* input
-	, std::vector<listen_interface_t> expected
-	, std::string output)
+	, std::vector<listen_interface_t> const expected
+	, std::vector<std::string> const expected_e
+	, string_view const output)
 {
 	std::printf("parse interface: %s\n", input);
-	auto const list = parse_listen_interfaces(input);
+	std::vector<std::string> err;
+	auto const list = parse_listen_interfaces(input, err);
 	TEST_EQUAL(list.size(), expected.size());
-	if (list.size() == expected.size())
-	{
-		TEST_CHECK(std::equal(list.begin(), list.end(), expected.begin()
-			, [&](listen_interface_t const& lhs, listen_interface_t const& rhs)
-			{ return lhs.device == rhs.device && lhs.port == rhs.port && lhs.ssl == rhs.ssl; }));
-	}
+	TEST_CHECK(list == expected);
+	TEST_CHECK(err == expected_e);
+#if TORRENT_ABI_VERSION == 1 \
+	|| !defined TORRENT_DISABLE_LOGGING
 	TEST_EQUAL(print_listen_interfaces(list), output);
+	std::cout << "RESULT: " << print_listen_interfaces(list) << '\n';
+#endif
+	TORRENT_UNUSED(output);
+	for (auto const& e : err)
+		std::cout << "ERR: \"" << e << "\"\n";
 }
 
 } // anonymous namespace
@@ -367,57 +375,107 @@ TORRENT_TEST(parse_list)
 {
 	std::vector<std::string> list;
 	parse_comma_separated_string("  a,b, c, d ,e \t,foobar\n\r,[::1]", list);
-	TEST_EQUAL(list.size(), 7);
-	TEST_EQUAL(list[0], "a");
-	TEST_EQUAL(list[1], "b");
-	TEST_EQUAL(list[2], "c");
-	TEST_EQUAL(list[3], "d");
-	TEST_EQUAL(list[4], "e");
-	TEST_EQUAL(list[5], "foobar");
-	TEST_EQUAL(list[6], "[::1]");
+	TEST_CHECK((list == std::vector<std::string>{"a", "b", "c", "d", "e", "foobar", "[::1]"}));
+}
 
+TORRENT_TEST(parse_interface)
+{
 	test_parse_interface("  a:4,b:35, c : 1000s, d: 351 ,e \t:42,foobar:1337s\n\r,[2001::1]:6881"
-		, {{"a", 4, false}, {"b", 35, false}, {"c", 1000, true}, {"d", 351, false}
-			, {"e", 42, false}, {"foobar", 1337, true}, {"2001::1", 6881, false}}
+		, {{"a", 4, false, false}, {"b", 35, false, false}
+		, {"c", 1000, true, false}
+		, {"d", 351, false, false}
+		, {"e", 42, false, false}
+		, {"foobar", 1337, true, false}
+		, {"2001::1", 6881, false, false}}
+		, {}
 		, "a:4,b:35,c:1000s,d:351,e:42,foobar:1337s,[2001::1]:6881");
 
 	// IPv6 address
 	test_parse_interface("[2001:ffff::1]:6882s"
-		, {{"2001:ffff::1", 6882, true}}
+		, {{"2001:ffff::1", 6882, true, false}}
+		, {}
 		, "[2001:ffff::1]:6882s");
 
 	// IPv4 address
 	test_parse_interface("127.0.0.1:6882"
-		, {{"127.0.0.1", 6882, false}}
+		, {{"127.0.0.1", 6882, false, false}}
+		, {}
 		, "127.0.0.1:6882");
 
 	// maximum padding
 	test_parse_interface("  nic\r\n:\t 12\r s "
-		, {{"nic", 12, true}}
+		, {{"nic", 12, true, false}}
+		, {}
 		, "nic:12s");
 
 	// negative tests
-	test_parse_interface("nic:99999999999999999999999", {}, "");
-	test_parse_interface("nic:  -3", {}, "");
-	test_parse_interface("nic:  ", {}, "");
-	test_parse_interface("nic :", {}, "");
-	test_parse_interface("nic ", {}, "");
-	test_parse_interface("nic s", {}, "");
+	test_parse_interface("nic:99999999999999999999999", {}, {"nic:99999999999999999999999"}, "");
+	test_parse_interface("nic:  -3", {}, {"nic:  -3"}, "");
+	test_parse_interface("nic:  ", {}, {"nic:"}, "");
+	test_parse_interface("nic :", {}, {"nic :"}, "");
+	test_parse_interface("nic ", {}, {"nic"}, "");
+	test_parse_interface("nic s", {}, {"nic s"}, "");
 
 	// parse interface with port 0
-	test_parse_interface("127.0.0.1:0"
-		, {{"127.0.0.1", 0, false}}, "127.0.0.1:0");
+	test_parse_interface("127.0.0.1:0", {{"127.0.0.1", 0, false, false}}
+		, {}, "127.0.0.1:0");
+
+	// SSL flag
+	test_parse_interface("127.0.0.1:1234s", {{"127.0.0.1", 1234, true, false}}
+		, {}, "127.0.0.1:1234s");
+	// local flag
+	test_parse_interface("127.0.0.1:1234l", {{"127.0.0.1", 1234, false, true}}
+		, {}, "127.0.0.1:1234l");
+
+	// both
+	test_parse_interface("127.0.0.1:1234ls", {{"127.0.0.1", 1234, true, true}}
+		, {}, "127.0.0.1:1234sl");
+
+	// IPv6 error
+	test_parse_interface("[aaaa::1", {}, {"[aaaa::1"}, "");
+	test_parse_interface("[aaaa::1]", {}, {"[aaaa::1]"}, "");
+	test_parse_interface("[aaaa::1]:", {}, {"[aaaa::1]:"}, "");
+	test_parse_interface("[aaaa::1]:s", {}, {"[aaaa::1]:s"}, "");
+	test_parse_interface("[aaaa::1] :6881", {}, {"[aaaa::1] :6881"}, "");
+	test_parse_interface("[aaaa::1]:6881", {{"aaaa::1", 6881, false, false}}, {}, "[aaaa::1]:6881");
+
+	// unterminated [
+	test_parse_interface("[aaaa::1,foobar:0", {{"foobar", 0, false, false}}, {"[aaaa::1"}, "foobar:0");
+
+	// multiple errors
+	test_parse_interface("foo:,bar", {}, {"foo:", "bar"}, "");
+
+	// quoted elements
+	test_parse_interface("\"abc,.\",bar", {}, {"abc,.", "bar"}, "");
+
+	// silent error
+	test_parse_interface("\"", {}, {"\""}, "");
+
+	// multiple errors and one correct
+	test_parse_interface("foo,bar,0.0.0.0:6881", {{"0.0.0.0", 6881, false, false}}, {"foo", "bar"}, "0.0.0.0:6881");
+}
+
+TORRENT_TEST(split_string_quotes)
+{
+	TEST_CHECK(split_string_quotes("a b"_sv, ' ') == std::make_pair("a"_sv, "b"_sv));
+	TEST_CHECK(split_string_quotes("\"a b\" c"_sv, ' ') == std::make_pair("\"a b\""_sv, "c"_sv));
+	TEST_CHECK(split_string_quotes("\"a b\"foobar c"_sv, ' ') == std::make_pair("\"a b\"foobar"_sv, "c"_sv));
+	TEST_CHECK(split_string_quotes("a\nb foobar"_sv, ' ') == std::make_pair("a\nb"_sv, "foobar"_sv));
+	TEST_CHECK(split_string_quotes("a b\"foo\"bar"_sv, '"') == std::make_pair("a b"_sv, "foo\"bar"_sv));
+	TEST_CHECK(split_string_quotes("a"_sv, ' ') == std::make_pair("a"_sv, ""_sv));
+	TEST_CHECK(split_string_quotes("\"a b"_sv, ' ') == std::make_pair("\"a b"_sv, ""_sv));
+	TEST_CHECK(split_string_quotes(""_sv, ' ') == std::make_pair(""_sv, ""_sv));
 }
 
 TORRENT_TEST(split_string)
 {
 	TEST_CHECK(split_string("a b"_sv, ' ') == std::make_pair("a"_sv, "b"_sv));
-	TEST_CHECK(split_string("\"a b\" c"_sv, ' ') == std::make_pair("\"a b\""_sv, "c"_sv));
-	TEST_CHECK(split_string("\"a b\"foobar c"_sv, ' ') == std::make_pair("\"a b\"foobar"_sv, "c"_sv));
+	TEST_CHECK(split_string("\"a b\" c"_sv, ' ') == std::make_pair("\"a"_sv, "b\" c"_sv));
+	TEST_CHECK(split_string("\"a b\"foobar c"_sv, ' ') == std::make_pair("\"a"_sv, "b\"foobar c"_sv));
 	TEST_CHECK(split_string("a\nb foobar"_sv, ' ') == std::make_pair("a\nb"_sv, "foobar"_sv));
 	TEST_CHECK(split_string("a b\"foo\"bar"_sv, '"') == std::make_pair("a b"_sv, "foo\"bar"_sv));
 	TEST_CHECK(split_string("a"_sv, ' ') == std::make_pair("a"_sv, ""_sv));
-	TEST_CHECK(split_string("\"a b"_sv, ' ') == std::make_pair("\"a b"_sv, ""_sv));
+	TEST_CHECK(split_string("\"a b"_sv, ' ') == std::make_pair("\"a"_sv, "b"_sv));
 	TEST_CHECK(split_string(""_sv, ' ') == std::make_pair(""_sv, ""_sv));
 }
 
@@ -454,41 +512,6 @@ TORRENT_TEST(i2p_url)
 	TEST_CHECK(!is_i2p_url("http://i2p/foo bar"));
 }
 #endif
-
-TORRENT_TEST(string_hash_no_case)
-{
-	string_hash_no_case hsh;
-
-	// make sure different strings yield different hashes
-	TEST_CHECK(hsh("ab") != hsh("ba"));
-
-	// make sure case is ignored
-	TEST_EQUAL(hsh("Ab"), hsh("ab"));
-	TEST_EQUAL(hsh("Ab"), hsh("aB"));
-
-	// make sure zeroes in strings are supported
-	TEST_CHECK(hsh(std::string("\0a", 2)) != hsh(std::string("\0b", 2)));
-	TEST_EQUAL(hsh(std::string("\0a", 2)), hsh(std::string("\0a", 2)));
-}
-
-TORRENT_TEST(string_eq_no_case)
-{
-	string_eq_no_case cmp;
-	TEST_CHECK(cmp("ab", "ba") == false);
-	TEST_CHECK(cmp("", ""));
-	TEST_CHECK(cmp("abc", "abc"));
-
-	// make sure different lengths are correctly treated as different
-	TEST_CHECK(cmp("abc", "ab") == false);
-
-	// make sure case is ignored
-	TEST_CHECK(cmp("Ab", "ab"));
-	TEST_CHECK(cmp("Ab", "aB"));
-
-	// make sure zeros are supported
-	TEST_CHECK(cmp(std::string("\0a", 2), std::string("\0b", 2)) == false);
-	TEST_CHECK(cmp(std::string("\0a", 2), std::string("\0a", 2)));
-}
 
 TORRENT_TEST(string_ptr_zero_termination)
 {
@@ -529,3 +552,13 @@ TORRENT_TEST(string_ptr_move_assign)
 	TEST_CHECK(*p2 == nullptr);
 }
 
+TORRENT_TEST(strip_string)
+{
+	TEST_EQUAL(strip_string("   ab"), "ab");
+	TEST_EQUAL(strip_string("   ab    "), "ab");
+	TEST_EQUAL(strip_string("       "), "");
+	TEST_EQUAL(strip_string(""), "");
+	TEST_EQUAL(strip_string("a     b"), "a     b");
+	TEST_EQUAL(strip_string("   a     b   "), "a     b");
+	TEST_EQUAL(strip_string(" \t \t ab\t\t\t"), "ab");
+}

@@ -3,6 +3,7 @@
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 
 #include "boost_python.hpp"
+#include "gil.hpp"
 #include <libtorrent/torrent_status.hpp>
 #include <libtorrent/torrent_info.hpp>
 #include <libtorrent/bitfield.hpp>
@@ -21,7 +22,6 @@ void bind_torrent_status()
     scope status = class_<torrent_status>("torrent_status")
         .def(self == self)
         .def_readonly("handle", &torrent_status::handle)
-        .def_readonly("info_hash", &torrent_status::info_hash)
         .add_property("torrent_file", &get_torrent_file)
         .def_readonly("state", &torrent_status::state)
 #if TORRENT_ABI_VERSION == 1
@@ -61,6 +61,7 @@ void bind_torrent_status()
         .add_property("verified_pieces", make_getter(&torrent_status::verified_pieces, by_value()))
         .def_readonly("num_pieces", &torrent_status::num_pieces)
         .def_readonly("total_done", &torrent_status::total_done)
+        .def_readonly("total", &torrent_status::total)
         .def_readonly("total_wanted_done", &torrent_status::total_wanted_done)
         .def_readonly("total_wanted", &torrent_status::total_wanted)
         .def_readonly("distributed_full_copies", &torrent_status::distributed_full_copies)
@@ -100,7 +101,10 @@ void bind_torrent_status()
         .def_readonly("completed_time", &torrent_status::completed_time)
         .def_readonly("last_seen_complete", &torrent_status::last_seen_complete)
         .add_property("queue_position", make_getter(&torrent_status::queue_position, by_value()))
+#if TORRENT_ABI_VERSION < 3
         .def_readonly("need_save_resume", &torrent_status::need_save_resume)
+#endif
+        .add_property("need_save_resume_data", make_getter(&torrent_status::need_save_resume_data, by_value()))
 #if TORRENT_ABI_VERSION == 1
         .def_readonly("ip_filter_applies", &torrent_status::ip_filter_applies)
 #endif
@@ -111,7 +115,10 @@ void bind_torrent_status()
         .def_readonly("announcing_to_trackers", &torrent_status::announcing_to_trackers)
         .def_readonly("announcing_to_lsd", &torrent_status::announcing_to_lsd)
         .def_readonly("announcing_to_dht", &torrent_status::announcing_to_dht)
+#if TORRENT_ABI_VERSION < 3
         .def_readonly("info_hash", &torrent_status::info_hash)
+#endif
+        .def_readonly("info_hashes", &torrent_status::info_hashes)
         .add_property("last_upload", make_getter(&torrent_status::last_upload, by_value()))
         .add_property("last_download", make_getter(&torrent_status::last_download, by_value()))
         .add_property("active_duration", make_getter(&torrent_status::active_duration, by_value()))
@@ -129,7 +136,9 @@ void bind_torrent_status()
         .value("downloading", torrent_status::downloading)
         .value("finished", torrent_status::finished)
         .value("seeding", torrent_status::seeding)
+#if TORRENT_ABI_VERSION == 1
         .value("allocating", torrent_status::allocating)
+#endif
         .value("checking_resume_data", torrent_status::checking_resume_data)
         .export_values()
         ;

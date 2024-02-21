@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # vim: tabstop=8 expandtab shiftwidth=4 softtabstop=4
 from __future__ import print_function
 
@@ -19,8 +19,7 @@ import hashlib
 # to set up the test, build the example directory in release
 # and stage client_test and connection_tester to the examples directory:
 #
-#   bjam -j8 link=static release debug-symbols=on stage_client_test \
-#       stage_connection_tester
+#   bjam link=static release debug-symbols=on stage
 #
 # make sure gnuplot is installed.
 

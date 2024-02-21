@@ -12,6 +12,7 @@
 #endif
 
 #include "libtorrent/config.hpp"
+#include "libtorrent/aux_/utf8.hpp"
 
 #include "print.hpp"
 
@@ -96,7 +97,7 @@ std::string const& progress_bar(int progress, int width, color_code c
 		std::snprintf(code, sizeof(code), "\x1b[3%dm", c);
 		bar = code;
 		std::fill_n(std::back_inserter(bar), progress_chars, fill);
-		std::fill_n(std::back_inserter(bar), width - progress_chars, bg);
+		std::fill_n(std::back_inserter(bar), std::size_t(width) - progress_chars, bg);
 		bar += esc("39");
 	}
 	else
@@ -128,12 +129,6 @@ std::string const& progress_bar(int progress, int width, color_code c
 	return bar;
 }
 
-int get_piece(lt::bitfield const& p, int index)
-{
-	if (index < 0 || index >= p.size()) return 0;
-	return p.get_bit(index) ? 1 : 0;
-}
-
 std::string const& piece_bar(lt::bitfield const& p, int width)
 {
 #ifdef _WIN32
@@ -146,7 +141,10 @@ std::string const& piece_bar(lt::bitfield const& p, int width)
 	double const piece_per_char = p.size() / double(width);
 	static std::string bar;
 	bar.clear();
-	bar.reserve(width * 6);
+
+	if (width <= 0) return bar;
+
+	bar.reserve(std::size_t(width) * 6);
 	bar += "[";
 	if (p.size() == 0)
 	{
@@ -171,7 +169,8 @@ std::string const& piece_bar(lt::bitfield const& p, int width)
 		int end = (std::max)(int(piece + piece_per_char), int(piece) + 1);
 		for (int k = int(piece); k < end; ++k, ++num_pieces)
 			if (p[k]) ++num_have;
-		int const c = int(std::ceil(num_have / float((std::max)(num_pieces, 1)) * (table_size - 1)));
+		int const denom = (std::max)(num_pieces, 1);
+		int const c = (num_have + denom - 1) / denom * (table_size - 1);
 
 #ifndef _WIN32
 		color[i & 1] = c;
@@ -203,54 +202,57 @@ std::string const& piece_bar(lt::bitfield const& p, int width)
 	return bar;
 }
 
-#ifndef _WIN32
-// this function uses the block characters that splits up the glyph in 4
-// segments and provide all combinations of a segment lit or not. This allows us
-// to print 4 pieces per character.
-std::string piece_matrix(lt::bitfield const& p, int width, int* height)
+namespace {
+int get_piece(lt::bitfield const& p, int index)
 {
-	// print two rows of pieces at a time
+	if (index < 0 || index >= p.size()) return 0;
+	return p.get_bit(index) ? 1 : 0;
+}
+}
+
+#ifndef _WIN32
+// this function uses the braille characters to print 8 pieces per character
+std::string piece_matrix(lt::bitfield const& p, int const width, int* height)
+{
+	if (width <= 0) return {};
+
+	// print 8 rows of pieces at a time
 	int piece = 0;
 	++*height;
 	std::string ret;
-	ret.reserve((p.size() + width * 2 - 1) / width / 2 * 4);
+	ret.reserve(std::size_t((p.size() + width * 2 - 1) / width / 2 * 4));
+	// each character covers 2 pieces in width
+	int const row_span = width * 2;
 	while (piece < p.size())
 	{
+		if (piece > 0)
+			ret += "\n";
 		for (int i = 0; i < width; ++i)
 		{
-			// each character has 4 pieces. store them in a byte to use for lookups
-			int const c = get_piece(p, piece)
-				| (get_piece(p, piece+1) << 1)
-				| (get_piece(p, width*2+piece) << 2)
-				| (get_piece(p, width*2+piece+1) << 3);
+			// braille dots are mapped to the following bits, in the lower byte
+			// of the unicode codepoint:
+			// 0 3
+			// 1 4
+			// 2 5
+			// 6 7
+			// each character has 8 pieces. store them in a byte to use for
+			// lookups
+			std::int32_t const c = get_piece(p, piece) // bit 0
+				| (get_piece(p, row_span+piece) << 1) // bit 1
+				| (get_piece(p, row_span*2+piece) << 2) // bit 2
+				| (get_piece(p, piece+1) << 3) // bit 3
+				| (get_piece(p, row_span+piece+1) << 4) // bit 4
+				| (get_piece(p, row_span*2+piece+1) << 5) // bit 5
+				| (get_piece(p, row_span*3+piece) << 6) // bit 6
+				| (get_piece(p, row_span*3+piece+1) << 7); // bit 7
 
-			// we have 4 bits, 16 different combinations
-			static char const* const chars[] =
-			{
-				" ",      // no bit is set             0000
-				"\u2598", // upper left                0001
-				"\u259d", // upper right               0010
-				"\u2580", // both top bits             0011
-				"\u2596", // lower left                0100
-				"\u258c", // both left bits            0101
-				"\u259e", // upper right, lower left   0110
-				"\u259b", // left and upper sides      0111
-				"\u2597", // lower right               1000
-				"\u259a", // lower right, upper left   1001
-				"\u2590", // right side                1010
-				"\u259c", // lower right, top side     1011
-				"\u2584", // both lower bits           1100
-				"\u2599", // both lower, top left      1101
-				"\u259f", // both lower, top right     1110
-				"\x1b[7m \x1b[27m" // all bits are set (full block)
-			};
-
-			ret += chars[c];
+			std::int32_t const codepoint = 0x2800 | c;
+			lt::aux::append_utf8_codepoint(ret, codepoint);
 			piece += 2;
 		}
-		ret += "\x1b[K\n";
+		ret += "\x1b[K";
 		++*height;
-		piece += width * 2; // skip another row, as we've already printed it
+		piece += row_span * 4; // skip 4 rows, as we've already printed them
 	}
 	return ret;
 }
@@ -266,6 +268,8 @@ std::string piece_matrix(lt::bitfield const& p, int width, int* height)
 	ret.reserve((p.size() + width * 2 - 1) / width);
 	while (piece < p.size())
 	{
+		if (piece > 0)
+			ret += '\n';
 		for (int i = 0; i < width; ++i)
 		{
 			// each character has 8 pieces. store them in a byte to use for lookups
@@ -284,7 +288,6 @@ std::string piece_matrix(lt::bitfield const& p, int width, int* height)
 			ret += chars[c];
 			++piece;
 		}
-		ret += '\n';
 		++*height;
 		piece += width * 2; // skip another row, as we've already printed it
 	}

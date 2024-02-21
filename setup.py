@@ -1,6 +1,6 @@
-#!/usr/bin/env python
-
+#!/usr/bin/env python3
 import os
+import runpy
 
-os.chdir('bindings/python')
-exec(open('setup.py').read())
+os.chdir("bindings/python")
+runpy.run_path("setup.py")

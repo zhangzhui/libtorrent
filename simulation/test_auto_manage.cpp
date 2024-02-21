@@ -1,40 +1,19 @@
 /*
 
-Copyright (c) 2015, Arvid Norberg
+Copyright (c) 2015-2021, Arvid Norberg
+Copyright (c) 2018, Steven Siloti
+Copyright (c) 2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session.hpp"
 #include "libtorrent/torrent_handle.hpp"
 #include "libtorrent/settings_pack.hpp"
 #include "libtorrent/alert_types.hpp"
-#include "libtorrent/deadline_timer.hpp"
+#include "libtorrent/aux_/deadline_timer.hpp"
 #include "settings.hpp"
 #include "utils.hpp"
 #include "create_torrent.hpp"
@@ -519,7 +498,7 @@ TORRENT_TEST(checking_announce)
 					++num_announce;
 			}
 
-			TEST_EQUAL(num_announce, 1);
+			TEST_EQUAL(num_announce, 2);
 
 			int num_started = 0;
 			for (torrent_handle const& h : ses.get_torrents())
@@ -610,6 +589,8 @@ TORRENT_TEST(stop_when_ready)
 			lt::time_point start_time = alerts[0]->timestamp();
 
 			int num_paused = 0;
+			int num_seeding = 0;
+			time_point seeding_time;
 			for (alert* a : alerts)
 			{
 				std::printf("%-3d %s\n", int(duration_cast<lt::seconds>(a->timestamp()
@@ -618,21 +599,25 @@ TORRENT_TEST(stop_when_ready)
 				if (alert_cast<torrent_paused_alert>(a))
 				{
 					++num_paused;
+					TEST_EQUAL(num_seeding, 1);
+					TEST_CHECK(a->timestamp() == seeding_time);
 				}
 
 				if (state_changed_alert* sc = alert_cast<state_changed_alert>(a))
 				{
 					if (sc->state == torrent_status::seeding)
 					{
-						// once we turn into beeing a seed. we should have been paused
-						// already.
-						TEST_EQUAL(num_paused, 1);
+						++num_seeding;
+						seeding_time = a->timestamp();
 					}
 				}
 				// there should not have been any announces. the torrent should have
 				// been stopped *before* announcing.
 				TEST_CHECK(alert_cast<tracker_announce_alert>(a) == nullptr);
 			}
+
+			TEST_EQUAL(num_paused, 1);
+			TEST_EQUAL(num_seeding, 1);
 
 			for (torrent_handle const& h : ses.get_torrents())
 			{
@@ -656,7 +641,7 @@ TORRENT_TEST(resume_reject_when_paused)
 {
 	run_test(
 		[](settings_pack& sett) {
-			sett.set_int(settings_pack::alert_mask, alert::all_categories);
+			sett.set_int(settings_pack::alert_mask, alert_category::all);
 		},
 
 		[](lt::session& ses) {
@@ -729,7 +714,7 @@ TORRENT_TEST(no_resume_when_paused)
 {
 	run_test(
 		[](settings_pack& sett) {
-			sett.set_int(settings_pack::alert_mask, alert::all_categories);
+			sett.set_int(settings_pack::alert_mask, alert_category::all);
 		},
 
 		[](lt::session& ses) {
@@ -797,7 +782,7 @@ TORRENT_TEST(no_resume_when_started)
 {
 	run_test(
 		[](settings_pack& sett) {
-			sett.set_int(settings_pack::alert_mask, alert::all_categories);
+			sett.set_int(settings_pack::alert_mask, alert_category::all);
 		},
 
 		[](lt::session& ses) {

@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2008-2018, Arvid Norberg
+Copyright (c) 2008-2021, Arvid Norberg
+Copyright (c) 2016-2018, 2020-2021, Alden Torres
+Copyright (c) 2017, Pavel Pimenov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include <cctype>
@@ -37,16 +16,22 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <cinttypes>
 
 #include "libtorrent/config.hpp"
-#include "libtorrent/http_parser.hpp"
+#include "libtorrent/aux_/http_parser.hpp"
 #include "libtorrent/hex.hpp" // for hex_to_int
 #include "libtorrent/assert.hpp"
-#include "libtorrent/parse_url.hpp" // for parse_url_components
-#include "libtorrent/string_util.hpp" // for ensure_trailing_slash, to_lower
+#include "libtorrent/aux_/parse_url.hpp" // for parse_url_components
+#include "libtorrent/aux_/string_util.hpp" // for ensure_trailing_slash, to_lower
 #include "libtorrent/aux_/escape_string.hpp" // for read_until
 #include "libtorrent/time.hpp" // for seconds32
 #include "libtorrent/aux_/numeric_cast.hpp"
 
-namespace libtorrent {
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-warning-option"
+#pragma clang diagnostic ignored "-Wunsafe-buffer-usage"
+#endif
+
+namespace libtorrent::aux {
 
 	bool is_ok_status(int http_status)
 	{
@@ -135,17 +120,29 @@ namespace libtorrent {
 	std::string const& http_parser::header(string_view const key) const
 	{
 		static std::string const empty;
+		// at least GCC-5.4 for ARM (on travis) has a libstdc++ whose debug map$
+		// doesn't seem to support transparent comparators$
+#if ! defined _GLIBCXX_DEBUG
 		auto const i = m_header.find(key);
+#else
+		auto const i = m_header.find(std::string(key));
+#endif
 		if (i == m_header.end()) return empty;
 		return i->second;
 	}
 
-	boost::optional<seconds32> http_parser::header_duration(string_view const key) const
+	std::optional<seconds32> http_parser::header_duration(string_view const key) const
 	{
+		// at least GCC-5.4 for ARM (on travis) has a libstdc++ whose debug map$
+		// doesn't seem to support transparent comparators$
+#if ! defined _GLIBCXX_DEBUG
 		auto const i = m_header.find(key);
-		if (i == m_header.end()) return boost::none;
+#else
+		auto const i = m_header.find(std::string(key));
+#endif
+		if (i == m_header.end()) return std::nullopt;
 		auto const val = std::atol(i->second.c_str());
-		if (val <= 0) return boost::none;
+		if (val <= 0) return std::nullopt;
 		return seconds32(val);
 	}
 
@@ -376,7 +373,8 @@ restart_response:
 					int header_size;
 					if (parse_chunk_header(buf, &chunk_size, &header_size))
 					{
-						if (chunk_size < 0)
+						if (chunk_size < 0
+							|| chunk_size > std::numeric_limits<std::int64_t>::max() - m_cur_chunk_end - header_size)
 						{
 							m_state = error_state;
 							error = true;
@@ -563,7 +561,7 @@ restart_response:
 
 	span<char const> http_parser::get_body() const
 	{
-		TORRENT_ASSERT(m_state == read_body);
+		if (m_state != read_body) return {};
 		std::int64_t const received = m_recv_pos - m_body_start_pos;
 
 		std::int64_t const body_length = m_chunked_encoding && !m_chunked_ranges.empty()
@@ -609,14 +607,30 @@ restart_response:
 		{
 			auto const chunk_start = i.first;
 			auto const chunk_end = i.second;
-			TORRENT_ASSERT(i.second - i.first < std::numeric_limits<int>::max());
-			TORRENT_ASSERT(chunk_end - offset <= buffer.size());
+			if (chunk_end - offset > buffer.size()
+				|| (i.second - i.first) >= std::numeric_limits<int>::max())
+			{
+				// invalid chunk header. Return the body we've parsed out so far
+				return buffer.first(write_ptr - buffer.data());
+			}
 			span<char> chunk = buffer.subspan(
 				aux::numeric_cast<std::ptrdiff_t>(chunk_start - offset)
 				, aux::numeric_cast<std::ptrdiff_t>(chunk_end - chunk_start));
+#if defined __GNUC__ && __GNUC__ >= 7
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
 			std::memmove(write_ptr, chunk.data(), std::size_t(chunk.size()));
+#if defined __GNUC__ && __GNUC__ >= 7
+#pragma GCC diagnostic pop
+#endif
 			write_ptr += chunk.size();
 		}
 		return buffer.first(write_ptr - buffer.data());
 	}
 }
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # vim: tabstop=8 expandtab shiftwidth=4 softtabstop=4
 
 from __future__ import print_function
@@ -129,7 +129,11 @@ for i in range(0, 6):
 
 
 def plot_fun(script):
-    ret = os.system('gnuplot "%s" 2>/dev/null' % script)
+    try:
+        ret = os.system('gnuplot "%s" 2>/dev/null' % script)
+    except Exception as e:
+        print('please install gnuplot: sudo apt install gnuplot')
+        raise e
     if ret != 0 and ret != 256:
         print('gnuplot failed: %d\n' % ret)
         raise Exception("abort")
@@ -160,7 +164,7 @@ def gen_report(name, unit, lines, short_unit, generation, log_file, options):
         pass
 
     script = os.path.join(output_dir, '%s_%04d.gnuplot' % (name, generation))
-    out = open(script, 'wb')
+    out = open(script, 'w')
     print("set term png size 1200,700", file=out)
     print('set output "%s"' % filename, file=out)
     if 'allow-negative' not in options:
@@ -414,28 +418,24 @@ reports = [
 
     ('disk_time', '% of total disk job time', '%%', 'proportion of time spent by the disk thread',
      ['disk.disk_read_time', 'disk.disk_write_time', 'disk.disk_hash_time'], {'type': stacked}),
-    ('disk_cache_hits', 'blocks (16kiB)', '', '', [
-     'disk.num_blocks_read', 'disk.num_blocks_cache_hits'], {'type': stacked}),
-    ('disk_cache', 'blocks (16kiB)', '', 'disk cache size and usage', [
-     'disk.disk_blocks_in_use', 'disk.read_cache_blocks', 'disk.write_cache_blocks', 'disk.pinned_blocks']),
-    ('disk_readback',
-     '% of written blocks',
-     '%%',
-     'portion of written blocks that had to be read back for hash verification',
-     ['disk.num_read_back']),
-    ('disk_queue',
-     'number of queued disk jobs',
-     '',
-     'num disk jobs',
+    ('disk_queue', 'blocks (16kiB)', '', 'disk store-buffer size',
      ['disk.num_write_jobs',
       'disk.num_read_jobs',
       'disk.num_jobs',
       'disk.queued_disk_jobs',
       'disk.blocked_disk_jobs']),
     ('disk fences', 'num', '', 'number of jobs currently blocked by a fence job', ['disk.blocked_disk_jobs']),
-    # ('fence jobs', 'num', '', 'active fence jobs per type', ['move_storage', 'release_files', 'delete_files',
-    #  'check_fastresume', 'save_resume_data', 'rename_file', 'stop_torrent', 'file_priority', 'clear_piece'],
-    #  {'type':stacked}),
+    ('fence jobs', 'num', '', 'active fence jobs per type', [
+        'disk.num_fenced_move_storage',
+        'disk.num_fenced_release_files',
+        'disk.num_fenced_delete_files',
+        'disk.num_fenced_check_fastresume',
+        'disk.num_fenced_save_resume_data',
+        'disk.num_fenced_rename_file',
+        'disk.num_fenced_stop_torrent',
+        'disk.num_fenced_file_priority',
+        'disk.num_fenced_clear_piece'],
+     {'type':stacked}),
     ('disk threads', 'num', '', 'number of disk threads currently writing',
      ['disk.num_writing_threads', 'disk.num_running_threads']),
     # ('mixed mode', 'rate', 'B/s', 'rates by transport protocol',
@@ -528,14 +528,6 @@ reports = [
         'sock_bufs.socket_recv_size20' \
     ], {'type': stacked, 'colors': 'gradient18'}),
 
-    ('ARC', 'num pieces', '', '', [ \
-        'disk.arc_mru_ghost_size', \
-        'disk.arc_mru_size', \
-        'disk.arc_volatile_size', \
-        'disk.arc_mfu_size', \
-        'disk.arc_mfu_ghost_size' \
-    ], {'allow-negative': True}),
-
     ('request latency', 'us', '', 'latency from receiving requests to sending response', ['disk.request_latency']),
     ('incoming messages', 'num', '', 'number of received bittorrent messages, by type', [ \
         'ses.num_incoming_choke', \
@@ -626,6 +618,9 @@ reports = [
     ], {'type': stacked}),
     ('async_accept', 'number of outstanding accept calls', '', '', [ \
         'ses.num_outstanding_accept' \
+    ]),
+    ('queued_trackers', 'number of queued tracker announces', '', '', [ \
+        'tracker.num_queued_tracker_announces' \
     ]),
 
     # ('picker_full_partials_distribution', 'full pieces', '', '', ['num full partial pieces'],

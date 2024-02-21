@@ -1,36 +1,18 @@
 /*
 
-Copyright (c) 2014, Arvid Norberg
+Copyright (c) 2014-2022, Arvid Norberg
+Copyright (c) 2015, Jakob Petsovits
+Copyright (c) 2016, Eugene Shalygin
+Copyright (c) 2017-2018, Alden Torres
+Copyright (c) 2017, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session.hpp"
+#include "libtorrent/session_params.hpp"
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/create_torrent.hpp"
 #include "libtorrent/torrent_info.hpp"
@@ -38,6 +20,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "setup_transfer.hpp"
 #include "settings.hpp"
 #include "test.hpp"
+#include "test_utils.hpp"
 #include "settings.hpp"
 
 #include <iostream>
@@ -61,19 +44,22 @@ void test_remap_files(storage_mode_t storage_mode = storage_mode_sparse)
 
 	// create a torrent with 2 files, remap them into 3 files and make sure
 	// the file priorities don't break things
-	static std::array<const int, 2> const file_sizes{{100000, 100000}};
 	int const piece_size = 0x8000;
-	auto t = make_torrent(file_sizes, piece_size);
+	auto orig_files = make_files({{0x8000 * 2, false}, {0x8000, false}});
+	auto t = make_torrent(std::move(orig_files), piece_size);
 
-	static std::array<const int, 3> const remap_file_sizes
-		{{10000, 10000, int(t->total_size() - 20000)}};
+	static std::array<const int, 2> const remap_file_sizes
+		{{0x8000, 0x8000 * 2}};
 
 	file_storage fs = make_file_storage(remap_file_sizes, piece_size, "multifile-");
 
 	t->remap_files(fs);
 
-	auto const alert_mask = alert::all_categories
-		& ~alert::stats_notification;
+	auto const alert_mask = alert_category::all
+#if TORRENT_ABI_VERSION <= 2
+		& ~alert_category::stats
+#endif
+	;
 
 	session_proxy p1;
 
@@ -90,17 +76,25 @@ void test_remap_files(storage_mode_t storage_mode = storage_mode_sparse)
 
 	torrent_handle tor1 = ses.add_torrent(params);
 
+	// prevent race conditions of adding pieces while checking
+	lt::torrent_status st = tor1.status();
+	for (int i = 0; i < 40; ++i)
+	{
+		st = tor1.status();
+		if (st.state != torrent_status::checking_files
+			&& st.state != torrent_status::checking_resume_data)
+			break;
+		std::this_thread::sleep_for(lt::milliseconds(100));
+	}
+	TEST_CHECK(st.state != torrent_status::checking_files
+		&& st.state != torrent_status::checking_resume_data);
+	TEST_CHECK(st.num_pieces == 0);
+
 	// write pieces
 	for (auto const i : fs.piece_range())
 	{
 		std::vector<char> const piece = generate_piece(i, fs.piece_size(i));
-		tor1.add_piece(i, piece.data());
-	}
-
-	// read pieces
-	for (auto const i : fs.piece_range())
-	{
-		tor1.read_piece(i);
+		tor1.add_piece(i, std::move(piece));
 	}
 
 	// wait for all alerts to come back and verify the data against the expected
@@ -147,6 +141,7 @@ void test_remap_files(storage_mode_t storage_mode = storage_mode_sparse)
 				auto const idx = pf->piece_index;
 				TEST_CHECK(passed[idx] == false);
 				passed[idx] = true;
+				tor1.read_piece(idx);
 			}
 		}
 	}
@@ -155,10 +150,10 @@ void test_remap_files(storage_mode_t storage_mode = storage_mode_sparse)
 	TEST_CHECK(all_of(files));
 	TEST_CHECK(all_of(passed));
 
-	// just because we can read them back throught libtorrent, doesn't mean the
+	// just because we can read them back through libtorrent, doesn't mean the
 	// files have hit disk yet (because of the cache). Retry a few times to try
 	// to pick up the files
-	for (file_index_t i(0); i < file_index_t(int(remap_file_sizes.size())); ++i)
+	for (auto i = 0_file; i < file_index_t(int(remap_file_sizes.size())); ++i)
 	{
 		std::string name = fs.file_path(i);
 		for (int j = 0; j < 10 && !exists(name); ++j)
@@ -173,7 +168,7 @@ void test_remap_files(storage_mode_t storage_mode = storage_mode_sparse)
 
 	print_alerts(ses, "ses");
 
-	torrent_status st = tor1.status();
+	st = tor1.status();
 	TEST_EQUAL(st.is_seeding, true);
 
 	std::printf("\ntesting force recheck\n\n");

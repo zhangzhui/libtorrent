@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2008, Arvid Norberg
+Copyright (c) 2005, 2008, 2010, 2012-2022, Arvid Norberg
+Copyright (c) 2017, Andrei Kurushin
+Copyright (c) 2018, Steven Siloti
+Copyright (c) 2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include <iostream>
@@ -37,7 +17,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <cstdlib> // for exit()
 #include "libtorrent/address.hpp"
 #include "libtorrent/socket.hpp"
-#include "setup_transfer.hpp" // for _g_test_failures
+#include "setup_transfer.hpp" // for unit_test::g_test_failures
 #include "test.hpp"
 #include "dht_server.hpp" // for stop_dht
 #include "peer_server.hpp" // for stop_peer
@@ -46,12 +26,12 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/assert.hpp"
 #include "libtorrent/aux_/path.hpp"
-#include "libtorrent/random.hpp"
+#include "libtorrent/aux_/random.hpp"
 #include "libtorrent/aux_/escape_string.hpp"
 #include <csignal>
 
 #ifdef _WIN32
-#include "libtorrent/aux_/windows.hpp" // fot SetErrorMode
+#include "libtorrent/aux_/windows.hpp" // for SetErrorMode
 #include <io.h> // for _dup and _dup2
 #include <process.h> // for _getpid
 #include <crtdbg.h>
@@ -73,14 +53,18 @@ namespace {
 // out, such as the log
 int old_stdout = -1;
 int old_stderr = -1;
+#ifdef _WIN32
+bool redirect_stdout = !IsDebuggerPresent();
+#else
 bool redirect_stdout = true;
+#endif
 // sanitizer output will go to stderr and we won't get an opportunity to print
 // it, so don't redirect stderr by default
 bool redirect_stderr = false;
 bool keep_files = false;
 
 // the current tests file descriptor
-unit_test_t* current_test = nullptr;
+unit_test::unit_test_t* current_test = nullptr;
 
 void output_test_log_to_terminal()
 {
@@ -128,7 +112,7 @@ LONG WINAPI seh_exception_handler(LPEXCEPTION_POINTERS p)
 	strcpy(stack_text, "<stack traces disabled>");
 #endif
 
-	int const code = p->ExceptionRecord->ExceptionCode;
+	DWORD const code = p->ExceptionRecord->ExceptionCode;
 	char const* name = "<unknown exception>";
 	switch (code)
 	{
@@ -164,7 +148,7 @@ LONG WINAPI seh_exception_handler(LPEXCEPTION_POINTERS p)
 	exit(code);
 }
 
-#else
+#endif
 
 [[noreturn]] void sig_handler(int sig)
 {
@@ -197,16 +181,30 @@ LONG WINAPI seh_exception_handler(LPEXCEPTION_POINTERS p)
 		SIG(SIGSYS);
 #endif
 #undef SIG
-	};
-	std::printf("signal: (%d) %s caught:\n%s\n"
-		, sig, name, stack_text);
+	}
+	std::printf("signal: (%d) %s caught:\n%s\n", sig, name, stack_text);
 
 	output_test_log_to_terminal();
 
-	exit(128 + sig);
+	std::exit(128 + sig);
 }
 
-#endif // _WIN32
+[[noreturn]] void term_handler()
+{
+	char stack_text[10000];
+#if TORRENT_USE_ASSERTS \
+	|| defined TORRENT_ASIO_DEBUGGING \
+	|| defined TORRENT_PROFILE_CALLS \
+	|| defined TORRENT_DEBUG_BUFFERS
+	print_backtrace(stack_text, sizeof(stack_text), 30);
+#elif defined __FUNCTION__
+	strcpy(stack_text, __FUNCTION__);
+#else
+	strcpy(stack_text, "<stack traces disabled>");
+#endif
+	std::printf("\n\nterminate called:\n%s\n\n\n", stack_text);
+	std::exit(-1);
+}
 
 void print_usage(char const* executable)
 {
@@ -246,7 +244,7 @@ void change_directory(std::string const& f, error_code& ec)
 
 struct unit_directory_guard
 {
-	std::string dir;
+	explicit unit_directory_guard(std::string d) : dir(std::move(d)) {}
 	unit_directory_guard(unit_directory_guard const&) = delete;
 	unit_directory_guard& operator=(unit_directory_guard const&) = delete;
 	~unit_directory_guard()
@@ -273,7 +271,11 @@ struct unit_directory_guard
 #endif
 		if (ec) std::cerr << "Failed to remove unit test directory: " << ec.message() << "\n";
 	}
+private:
+	std::string dir;
 };
+
+namespace unit_test {
 
 void EXPORT reset_output()
 {
@@ -291,6 +293,8 @@ void EXPORT reset_output()
 		// this is best effort, it's not the end of the world if we fail
 		std::cerr << "ftruncate of temporary test output file failed: " << strerror(errno) << "\n";
 	}
+}
+
 }
 
 int EXPORT main(int argc, char const* argv[])
@@ -312,9 +316,9 @@ int EXPORT main(int argc, char const* argv[])
 		if (argv[0] == "-l"_sv || argv[0] == "--list"_sv)
 		{
 			std::printf("TESTS:\n");
-			for (int i = 0; i < _g_num_unit_tests; ++i)
+			for (int i = 0; i < ::unit_test::g_num_unit_tests; ++i)
 			{
-				std::printf(" - %s\n", _g_unit_tests[i].name);
+				std::printf(" - %s\n", ::unit_test::g_unit_tests[i].name);
 			}
 			return 0;
 		}
@@ -370,7 +374,9 @@ int EXPORT main(int argc, char const* argv[])
 	_CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
 #endif
 
-#else
+#endif
+
+	std::set_terminate(term_handler);
 
 	signal(SIGSEGV, &sig_handler);
 #ifdef SIGBUS
@@ -384,8 +390,6 @@ int EXPORT main(int argc, char const* argv[])
 	signal(SIGSYS, &sig_handler);
 #endif
 
-#endif // _WIN32
-
 	int process_id = -1;
 #ifdef _WIN32
 	process_id = _getpid();
@@ -394,10 +398,9 @@ int EXPORT main(int argc, char const* argv[])
 #endif
 	std::string const root_dir = current_working_directory();
 	std::string const unit_dir_prefix = combine_path(root_dir, "test_tmp_" + std::to_string(process_id) + "_");
-	std::printf("test: %s\ncwd_prefix = \"%s\"\nrnd = %x\n"
-		, executable, unit_dir_prefix.c_str(), lt::random(0xffffffff));
+	std::printf("test: %s\ncwd_prefix = \"%s\"\n", executable, unit_dir_prefix.c_str());
 
-	if (_g_num_unit_tests == 0)
+	if (unit_test::g_num_unit_tests == 0)
 	{
 		std::printf("\x1b[31mTEST_ERROR: no unit tests registered\x1b[0m\n");
 		return 1;
@@ -407,9 +410,9 @@ int EXPORT main(int argc, char const* argv[])
 	if (redirect_stderr) old_stderr = dup(fileno(stderr));
 
 	int num_run = 0;
-	for (int i = 0; i < _g_num_unit_tests; ++i)
+	for (int i = 0; i < unit_test::g_num_unit_tests; ++i)
 	{
-		if (filter && tests_to_run.count(_g_unit_tests[i].name) == 0)
+		if (filter && tests_to_run.count(unit_test::g_unit_tests[i].name) == 0)
 			continue;
 
 		std::string const unit_dir = unit_dir_prefix + std::to_string(i);
@@ -430,15 +433,13 @@ int EXPORT main(int argc, char const* argv[])
 			return 1;
 		}
 
-		std::printf("cwd: %s\n", unit_dir.c_str());
-		unit_test_t& t = _g_unit_tests[i];
+		auto& t = ::unit_test::g_unit_tests[i];
 
 		if (redirect_stdout || redirect_stderr)
 		{
 			// redirect test output to a temporary file
 			fflush(stdout);
 			fflush(stderr);
-
 			FILE* f = tmpfile();
 			if (f != nullptr)
 			{
@@ -466,19 +467,24 @@ int EXPORT main(int argc, char const* argv[])
 		setbuf(stdout, nullptr);
 		setbuf(stderr, nullptr);
 
-		_g_test_idx = i;
+		::unit_test::g_test_idx = i;
 		current_test = &t;
+
+		std::printf("cwd: %s\n", unit_dir.c_str());
+		std::printf("test-case: %s\n", t.name);
+		std::mt19937 rng(0x82daf973);
+		lt::aux::random_engine() = rng;
+		std::printf("rnd = %x\n", lt::aux::random(0xffffffff));
 
 #ifndef BOOST_NO_EXCEPTIONS
 		try
 		{
 #endif
 
-#if defined TORRENT_BUILD_SIMULATOR
+			std::srand(unsigned(std::hash<std::string>{}(executable)) + unsigned(i));
 			lt::aux::random_engine().seed(0x82daf973);
-#endif
 
-			_g_test_failures = 0;
+			::unit_test::g_test_failures = 0;
 			(*t.fun)();
 #ifndef BOOST_NO_EXCEPTIONS
 		}
@@ -489,28 +495,28 @@ int EXPORT main(int argc, char const* argv[])
 				, e.code().value()
 				, e.code().category().name()
 				, e.code().message().c_str());
-			report_failure(buf, __FILE__, __LINE__);
+			unit_test::report_failure(buf, __FILE__, __LINE__);
 		}
 		catch (std::exception const& e)
 		{
 			char buf[200];
 			std::snprintf(buf, sizeof(buf), "TEST_ERROR: Terminated with exception: \"%s\"", e.what());
-			report_failure(buf, __FILE__, __LINE__);
+			unit_test::report_failure(buf, __FILE__, __LINE__);
 		}
 		catch (...)
 		{
-			report_failure("TEST_ERROR: Terminated with unknown exception", __FILE__, __LINE__);
+			unit_test::report_failure("TEST_ERROR: Terminated with unknown exception", __FILE__, __LINE__);
 		}
 #endif
 
 		if (!tests_to_run.empty()) tests_to_run.erase(t.name);
 
-		if (_g_test_failures > 0)
+		if (::unit_test::g_test_failures > 0)
 		{
 			output_test_log_to_terminal();
 		}
 
-		t.num_failures = _g_test_failures;
+		t.num_failures = ::unit_test::g_test_failures;
 		t.run = true;
 		++num_run;
 
@@ -549,6 +555,6 @@ int EXPORT main(int argc, char const* argv[])
 	if (redirect_stdout) fflush(stdout);
 	if (redirect_stderr) fflush(stderr);
 
-	return print_failures() ? 333 : 0;
+	return unit_test::print_failures() ? 333 : 0;
 }
 

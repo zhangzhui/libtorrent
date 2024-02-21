@@ -1,33 +1,14 @@
 /*
 
-Copyright (c) 2015-2018, Arvid Norberg
+Copyright (c) 2015-2020, 2022, Arvid Norberg
+Copyright (c) 2016-2017, 2019-2020, Alden Torres
+Copyright (c) 2016-2017, Andrei Kurushin
+Copyright (c) 2016-2017, Steven Siloti
+Copyright (c) 2017, Pavel Pimenov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/bdecode.hpp"
@@ -38,16 +19,27 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <cstring> // for memset
 #include <cstdio> // for snprintf
 #include <cinttypes> // for PRId64 et.al.
+#include <algorithm> // for any_of
 
 #ifndef BOOST_SYSTEM_NOEXCEPT
 #define BOOST_SYSTEM_NOEXCEPT throw()
 #endif
 
+#ifdef __clang__
+// disable these warnings until this class is re-worked in a way clang likes
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-warning-option"
+#pragma clang diagnostic ignored "-Wunsafe-buffer-usage"
+#endif
+
 namespace libtorrent {
 
-	using detail::bdecode_token;
+	using aux::bdecode_token;
 
 namespace {
+
+	static_assert(int('0') == 48, "this code relies on ASCII compatible source encoding");
+	static_assert(int('9') == 57, "this code relies on ASCII compatible source encoding");
 
 	bool numeric(char c) { return c >= '0' && c <= '9'; }
 
@@ -119,21 +111,45 @@ namespace {
 		return (&t)[1].offset - t.offset;
 	}
 
-	} // anonymous namespace
+} // anonymous namespace
+
+namespace aux {
+	void escape_string(std::string& ret, char const* str, int len)
+	{
+		if (std::any_of(str, str + len, [](char const c) { return c < 32 || c >= 127; } ))
+		{
+			for (int i = 0; i < len; ++i)
+			{
+				char tmp[3];
+				std::snprintf(tmp, sizeof(tmp), "%02x", std::uint8_t(str[i]));
+				ret += tmp;
+			}
+		}
+		else
+		{
+			ret.assign(str, std::size_t(len));
+		}
+	}
+}
 
 
-	// reads the string between start and end, or up to the first occurrance of
+
+	// reads the string between start and end, or up to the first occurrence of
 	// 'delimiter', whichever comes first. This string is interpreted as an
 	// integer which is assigned to 'val'. If there's a non-delimiter and
 	// non-digit in the range, a parse error is reported in 'ec'. If the value
 	// cannot be represented by the variable 'val' and overflow error is reported
 	// by 'ec'.
+	// WARNING: the val is an out-parameter that is expected to be initialized
+	// to 0 or a *positive* number.
 	char const* parse_int(char const* start, char const* end, char delimiter
 		, std::int64_t& val, bdecode_errors::error_code_enum& ec)
 	{
+		TORRENT_ASSERT(val >= 0);
 		while (start < end && *start != delimiter)
 		{
-			if (!numeric(*start))
+			char const c = *start;
+			if (!numeric(c))
 			{
 				ec = bdecode_errors::expected_digit;
 				return start;
@@ -144,7 +160,7 @@ namespace {
 				return start;
 			}
 			val *= 10;
-			int digit = *start - '0';
+			int const digit = c - '0';
 			if (val > std::numeric_limits<std::int64_t>::max() - digit)
 			{
 				ec = bdecode_errors::overflow;
@@ -216,7 +232,7 @@ namespace {
 		(*this) = n;
 	}
 
-	bdecode_node& bdecode_node::operator=(bdecode_node const& n)
+	bdecode_node& bdecode_node::operator=(bdecode_node const& n) &
 	{
 		if (&n == this) return *this;
 		m_tokens = n.m_tokens;
@@ -244,9 +260,6 @@ namespace {
 		, m_buffer(buf)
 		, m_buffer_size(len)
 		, m_token_idx(idx)
-		, m_last_index(-1)
-		, m_last_token(-1)
-		, m_size(-1)
 	{
 		TORRENT_ASSERT(tokens != nullptr);
 		TORRENT_ASSERT(idx >= 0);
@@ -306,6 +319,7 @@ namespace {
 				}
 				break;
 			case bdecode_token::string:
+			case bdecode_token::long_string:
 				if (m_buffer[tokens[token].offset] == '0'
 					&& m_buffer[tokens[token].offset + 1] != ':')
 				{
@@ -372,6 +386,8 @@ namespace {
 	bdecode_node::type_t bdecode_node::type() const noexcept
 	{
 		if (m_token_idx == -1) return none_t;
+		if (m_root_tokens[m_token_idx].type == bdecode_token::long_string)
+			return bdecode_node::string_t;
 		return static_cast<bdecode_node::type_t>(m_root_tokens[m_token_idx].type);
 	}
 
@@ -386,6 +402,14 @@ namespace {
 		bdecode_token const& t = m_root_tokens[m_token_idx];
 		bdecode_token const& next = m_root_tokens[m_token_idx + t.next_item];
 		return {m_buffer + t.offset, static_cast<std::ptrdiff_t>(next.offset - t.offset)};
+	}
+
+	std::ptrdiff_t bdecode_node::data_offset() const noexcept
+	{
+		TORRENT_ASSERT_PRECOND(m_token_idx != -1);
+		if (m_token_idx == -1) return -1;
+		bdecode_token const& t = m_root_tokens[m_token_idx];
+		return t.offset;
 	}
 
 	bdecode_node bdecode_node::list_at(int i) const
@@ -469,7 +493,7 @@ namespace {
 		return ret;
 	}
 
-	std::pair<string_view, bdecode_node> bdecode_node::dict_at(int i) const
+	std::pair<bdecode_node, bdecode_node> bdecode_node::dict_at_node(int i) const
 	{
 		TORRENT_ASSERT(type() == dict_t);
 		TORRENT_ASSERT(m_token_idx != -1);
@@ -489,7 +513,8 @@ namespace {
 
 		while (item < i)
 		{
-			TORRENT_ASSERT(tokens[token].type == bdecode_token::string);
+			TORRENT_ASSERT(tokens[token].type == bdecode_token::string
+				|| tokens[token].type == bdecode_token::long_string);
 
 			// skip the key
 			token += tokens[token].next_item;
@@ -515,8 +540,14 @@ namespace {
 		TORRENT_ASSERT(tokens[token].type != bdecode_token::end);
 
 		return std::make_pair(
-			bdecode_node(tokens, m_buffer, m_buffer_size, token).string_value()
+			bdecode_node(tokens, m_buffer, m_buffer_size, token)
 			, bdecode_node(tokens, m_buffer, m_buffer_size, value_token));
+	}
+
+	std::pair<string_view, bdecode_node> bdecode_node::dict_at(int const i) const
+	{
+		auto const [key, value] = dict_at_node(i);
+		return {key.string_value(), value};
 	}
 
 	int bdecode_node::dict_size() const
@@ -569,7 +600,8 @@ namespace {
 		while (tokens[token].type != bdecode_token::end)
 		{
 			bdecode_token const& t = tokens[token];
-			TORRENT_ASSERT(t.type == bdecode_token::string);
+			TORRENT_ASSERT(t.type == bdecode_token::string
+				|| t.type == bdecode_token::long_string);
 			int const size = token_source_span(t) - t.start_offset();
 			if (int(key.size()) == size
 				&& std::equal(key.data(), key.data() + size, m_buffer
@@ -666,17 +698,27 @@ namespace {
 	{
 		TORRENT_ASSERT(type() == string_t);
 		bdecode_token const& t = m_root_tokens[m_token_idx];
-		std::size_t const size = aux::numeric_cast<std::size_t>(token_source_span(t) - t.start_offset());
-		TORRENT_ASSERT(t.type == bdecode_token::string);
+		auto const size = aux::numeric_cast<std::size_t>(token_source_span(t) - t.start_offset());
+		TORRENT_ASSERT(t.type == bdecode_token::string
+			|| t.type == bdecode_token::long_string);
 
 		return string_view(m_buffer + t.offset + t.start_offset(), size);
+	}
+
+	std::ptrdiff_t bdecode_node::string_offset() const
+	{
+		TORRENT_ASSERT(type() == string_t);
+		bdecode_token const& t = m_root_tokens[m_token_idx];
+		TORRENT_ASSERT(t.type == bdecode_token::string);
+		return t.offset + t.start_offset();
 	}
 
 	char const* bdecode_node::string_ptr() const
 	{
 		TORRENT_ASSERT(type() == string_t);
 		bdecode_token const& t = m_root_tokens[m_token_idx];
-		TORRENT_ASSERT(t.type == bdecode_token::string);
+		TORRENT_ASSERT(t.type == bdecode_token::string
+			|| t.type == bdecode_token::long_string);
 		return m_buffer + t.offset + t.start_offset();
 	}
 
@@ -684,7 +726,8 @@ namespace {
 	{
 		TORRENT_ASSERT(type() == string_t);
 		bdecode_token const& t = m_root_tokens[m_token_idx];
-		TORRENT_ASSERT(t.type == bdecode_token::string);
+		TORRENT_ASSERT(t.type == bdecode_token::string
+			|| t.type == bdecode_token::long_string);
 		return token_source_span(t) - t.start_offset();
 	}
 
@@ -906,13 +949,16 @@ namespace {
 					// the check above ensures that the buffer is long enough to hold
 					// the string's length which guarantees that start <= end
 
+					int const header = int(start - str_start);
+					TORRENT_ASSERT(header >= 0);
+
 					// the bdecode_token only has 8 bits to keep the header size
 					// in. If it overflows, fail!
-					if (start - str_start - 2 > detail::bdecode_token::max_header)
+					if (header > aux::bdecode_token::long_string_max_header)
 						TORRENT_FAIL_BDECODE(bdecode_errors::limit_exceeded);
 
 					ret.m_tokens.push_back({str_start - orig_start
-						, 1, bdecode_token::string, std::uint8_t(start - str_start)});
+						, 1, bdecode_token::string, std::uint32_t(header)});
 					start += len;
 					break;
 				}
@@ -922,7 +968,8 @@ namespace {
 				&& ret.m_tokens[stack[current_frame - 1].token].type == bdecode_token::dict)
 			{
 				// the next item we parse is the opposite
-				stack[current_frame - 1].state = ~stack[current_frame - 1].state;
+				// state is an unsigned 1-bit member. adding 1 will flip the bit
+				stack[current_frame - 1].state = (stack[current_frame - 1].state + 1) & 1;
 			}
 
 			// this terminates the top level node, we're done!
@@ -1016,23 +1063,6 @@ done:
 		return line_len;
 	}
 
-	void escape_string(std::string& ret, char const* str, int len)
-	{
-		for (int i = 0; i < len; ++i)
-		{
-			if (str[i] >= 32 && str[i] < 127)
-			{
-				ret += str[i];
-			}
-			else
-			{
-				char tmp[5];
-				std::snprintf(tmp, sizeof(tmp), "\\x%02x", std::uint8_t(str[i]));
-				ret += tmp;
-			}
-		}
-	}
-
 	void print_string(std::string& ret, string_view str, bool single_line)
 	{
 		int const len = int(str.size());
@@ -1058,15 +1088,15 @@ done:
 			ret += "'";
 			return;
 		}
-		if (single_line && len > 20)
+		if (single_line && len > 32)
 		{
-			escape_string(ret, str.data(), 9);
+			aux::escape_string(ret, str.data(), 25);
 			ret += "...";
-			escape_string(ret, str.data() + len - 9, 9);
+			aux::escape_string(ret, str.data() + len - 4, 4);
 		}
 		else
 		{
-			escape_string(ret, str.data(), len);
+			aux::escape_string(ret, str.data(), len);
 		}
 		ret += "'";
 	}
@@ -1137,3 +1167,7 @@ done:
 		return ret;
 	}
 }
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif

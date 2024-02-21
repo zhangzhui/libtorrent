@@ -1,47 +1,29 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg & Daniel Wallin
+Copyright (c) 2006, Daniel Wallin
+Copyright (c) 2013-2022, Arvid Norberg
+Copyright (c) 2015, Steven Siloti
+Copyright (c) 2015, Thomas Yuan
+Copyright (c) 2016-2017, 2021, Alden Torres
+Copyright (c) 2016-2017, Pavel Pimenov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include <libtorrent/kademlia/get_peers.hpp>
 #include <libtorrent/kademlia/node.hpp>
 #include <libtorrent/kademlia/dht_observer.hpp>
-#include <libtorrent/socket_io.hpp>
+#include <libtorrent/aux_/socket_io.hpp>
 #include <libtorrent/performance_counters.hpp>
-#include <libtorrent/broadcast_socket.hpp> // for is_v4
+#include <libtorrent/aux_/ip_helpers.hpp> // for is_v4
 
 #ifndef TORRENT_DISABLE_LOGGING
 #include <libtorrent/hex.hpp> // to_hex
 #endif
 
-namespace libtorrent { namespace dht {
+namespace libtorrent::dht {
 
 void get_peers_observer::reply(msg const& m)
 {
@@ -62,7 +44,7 @@ void get_peers_observer::reply(msg const& m)
 	{
 		std::vector<tcp::endpoint> peer_list;
 		if (n.list_size() == 1 && n.list_at(0).type() == bdecode_node::string_t
-			&& is_v4(m.addr))
+			&& aux::is_v4(m.addr))
 		{
 			// assume it's mainline format
 			char const* peers = n.list_at(0).string_ptr();
@@ -72,12 +54,12 @@ void get_peers_observer::reply(msg const& m)
 			log_peers(m, r, int((end - peers) / 6));
 #endif
 			while (end - peers >= 6)
-				peer_list.push_back(detail::read_v4_endpoint<tcp::endpoint>(peers));
+				peer_list.push_back(aux::read_v4_endpoint<tcp::endpoint>(peers));
 		}
 		else
 		{
 			// assume it's uTorrent/libtorrent format
-			peer_list = detail::read_endpoint_list<tcp::endpoint>(n);
+			peer_list = aux::read_endpoint_list<tcp::endpoint>(n);
 #ifndef TORRENT_DISABLE_LOGGING
 			log_peers(m, r, n.list_size());
 #endif
@@ -90,7 +72,7 @@ void get_peers_observer::reply(msg const& m)
 #ifndef TORRENT_DISABLE_LOGGING
 void get_peers_observer::log_peers(msg const& m, bdecode_node const& r, int const size) const
 {
-			auto logger = get_observer();
+			auto* logger = get_observer();
 			if (logger != nullptr && logger->should_log(dht_logger::traversal))
 			{
 				bdecode_node const id = r.dict_find_string("id");
@@ -101,7 +83,7 @@ void get_peers_observer::log_peers(msg const& m, bdecode_node const& r, int cons
 						, algorithm()->id()
 						, algorithm()->invoke_count()
 						, algorithm()->branch_factor()
-						, print_endpoint(m.addr).c_str()
+						, aux::print_endpoint(m.addr).c_str()
 						, aux::to_hex({id.string_ptr(), id.string_length()}).c_str()
 						, distance_exp(algorithm()->target(), node_id(id.string_ptr()))
 						, size);
@@ -117,11 +99,11 @@ void get_peers::got_peers(std::vector<tcp::endpoint> const& peers)
 get_peers::get_peers(
 	node& dht_node
 	, node_id const& target
-	, data_callback const& dcallback
-	, nodes_callback const& ncallback
+	, data_callback dcallback
+	, nodes_callback ncallback
 	, bool noseeds)
-	: find_data(dht_node, target, ncallback)
-	, m_data_callback(dcallback)
+	: find_data(dht_node, target, std::move(ncallback))
+	, m_data_callback(std::move(dcallback))
 	, m_noseeds(noseeds)
 {
 }
@@ -157,16 +139,16 @@ observer_ptr get_peers::new_observer(udp::endpoint const& ep
 #if TORRENT_USE_ASSERTS
 	if (o) o->m_in_constructor = false;
 #endif
-	return std::move(o);
+	return o;
 }
 
 obfuscated_get_peers::obfuscated_get_peers(
 	node& dht_node
-	, node_id const& info_hash
-	, data_callback const& dcallback
-	, nodes_callback const& ncallback
+	, node_id const& target
+	, data_callback dcallback
+	, nodes_callback ncallback
 	, bool noseeds)
-	: get_peers(dht_node, info_hash, dcallback, ncallback, noseeds)
+	: get_peers(dht_node, target, std::move(dcallback), std::move(ncallback), noseeds)
 	, m_obfuscated(true)
 {
 }
@@ -184,7 +166,7 @@ observer_ptr obfuscated_get_peers::new_observer(udp::endpoint const& ep
 #if TORRENT_USE_ASSERTS
 		if (o) o->m_in_constructor = false;
 #endif
-		return std::move(o);
+		return o;
 	}
 	else
 	{
@@ -193,7 +175,7 @@ observer_ptr obfuscated_get_peers::new_observer(udp::endpoint const& ep
 #if TORRENT_USE_ASSERTS
 		if (o) o->m_in_constructor = false;
 #endif
-		return std::move(o);
+		return o;
 	}
 }
 
@@ -203,27 +185,6 @@ bool obfuscated_get_peers::invoke(observer_ptr o)
 
 	node_id const& id = o->id();
 	int const shared_prefix = 160 - distance_exp(id, target());
-
-	// when we get close to the target zone in the DHT
-	// start using the correct info-hash, in order to
-	// start receiving peers
-	if (shared_prefix > m_node.m_table.depth() - 4)
-	{
-		m_obfuscated = false;
-		// clear the queried bits on all successful nodes in
-		// our node-list for this traversal algorithm, to
-		// allow the get_peers traversal to regress in case
-		// nodes further down end up being dead
-		for (auto const& node : m_results)
-		{
-			// don't re-request from nodes that didn't respond
-			if (node->flags & observer::flag_failed) continue;
-			// don't interrupt with queries that are already in-flight
-			if (!(node->flags & observer::flag_alive)) continue;
-			node->flags &= ~(observer::flag_queried | observer::flag_alive);
-		}
-		return get_peers::invoke(o);
-	}
 
 	entry e;
 	e["y"] = "q";
@@ -324,4 +285,4 @@ void obfuscated_get_peers_observer::reply(msg const& m)
 	done();
 }
 
-} } // namespace libtorrent::dht
+} // namespace libtorrent::dht

@@ -1,33 +1,15 @@
 /*
 
 Copyright (c) 2013, Steven Siloti
+Copyright (c) 2015, Thomas
+Copyright (c) 2013-2021, Arvid Norberg
+Copyright (c) 2015, Thomas Yuan
+Copyright (c) 2016-2017, Alden Torres
+Copyright (c) 2017, Pavel Pimenov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include <libtorrent/config.hpp>
@@ -97,10 +79,10 @@ void get_item::got_data(bdecode_node const& v,
 get_item::get_item(
 	node& dht_node
 	, node_id const& target
-	, data_callback const& dcallback
-	, nodes_callback const& ncallback)
-	: find_data(dht_node, target, ncallback)
-	, m_data_callback(dcallback)
+	, data_callback dcallback
+	, nodes_callback ncallback)
+	: find_data(dht_node, target, std::move(ncallback))
+	, m_data_callback(std::move(dcallback))
 	, m_immutable(true)
 {
 }
@@ -109,10 +91,10 @@ get_item::get_item(
 	node& dht_node
 	, public_key const& pk
 	, span<char const> salt
-	, data_callback const& dcallback
-	, nodes_callback const& ncallback)
-	: find_data(dht_node, item_target_id(salt, pk), ncallback)
-	, m_data_callback(dcallback)
+	, data_callback dcallback
+	, nodes_callback ncallback)
+	: find_data(dht_node, item_target_id(salt, pk), std::move(ncallback))
+	, m_data_callback(std::move(dcallback))
 	, m_data(pk, salt)
 	, m_immutable(false)
 {
@@ -127,7 +109,7 @@ observer_ptr get_item::new_observer(udp::endpoint const& ep
 #if TORRENT_USE_ASSERTS
 	if (o) o->m_in_constructor = false;
 #endif
-	return std::move(o);
+	return o;
 }
 
 bool get_item::invoke(observer_ptr o)

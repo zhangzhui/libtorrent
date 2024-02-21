@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2014-2016, Arvid Norberg, Alden Torres
+Copyright (c) 2016, Alden Torres
+Copyright (c) 2017-2021, Arvid Norberg
+Copyright (c) 2018, Pavel Pimenov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/config.hpp"
@@ -42,7 +21,28 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
-namespace libtorrent { namespace aux {
+namespace libtorrent {
+namespace aux {
+
+	// returns the index of the first set bit.
+	// Use std::log2p1 in C++20
+	int log2p1(std::uint32_t v)
+	{
+// http://graphics.stanford.edu/~seander/bithacks.html#IntegerLogDeBruijn
+		static const int MultiplyDeBruijnBitPosition[32] =
+		{
+			0, 9, 1, 10, 13, 21, 2, 29, 11, 14, 16, 18, 22, 25, 3, 30,
+			8, 12, 20, 28, 15, 17, 24, 7, 19, 27, 23, 6, 26, 5, 4, 31
+		};
+
+		v |= v >> 1; // first round down to one less than a power of 2
+		v |= v >> 2;
+		v |= v >> 4;
+		v |= v >> 8;
+		v |= v >> 16;
+
+		return MultiplyDeBruijnBitPosition[std::uint32_t(v * 0x07C4ACDDU) >> 27];
+	}
 
 	int count_leading_zeros_sw(span<std::uint32_t const> buf)
 	{
@@ -55,23 +55,7 @@ namespace libtorrent { namespace aux {
 		for (int i = 0; i < num; i++)
 		{
 			if (ptr[i] == 0) continue;
-			std::uint32_t v = aux::network_to_host(ptr[i]);
-
-			// http://graphics.stanford.edu/~seander/bithacks.html#IntegerLogObvious
-			static const int MultiplyDeBruijnBitPosition[32] =
-			{
-				0, 9, 1, 10, 13, 21, 2, 29, 11, 14, 16, 18, 22, 25, 3, 30,
-				8, 12, 20, 28, 15, 17, 24, 7, 19, 27, 23, 6, 26, 5, 4, 31
-			};
-
-			v |= v >> 1; // first round down to one less than a power of 2
-			v |= v >> 2;
-			v |= v >> 4;
-			v |= v >> 8;
-			v |= v >> 16;
-
-			return i * 32 + 31 - MultiplyDeBruijnBitPosition[
-				static_cast<std::uint32_t>(v * 0x07C4ACDDU) >> 27];
+			return i * 32 + 31 - log2p1(aux::network_to_host(ptr[i]));
 		}
 
 		return num * 32;

@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2018, Arvid Norberg
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2018-2020, Arvid Norberg
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_CONTAINER_WRAPPER_HPP
@@ -37,6 +15,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/assert.hpp"
 #include "libtorrent/index_range.hpp"
 #include "libtorrent/units.hpp"
+#include "libtorrent/aux_/numeric_cast.hpp"
 
 #include <type_traits>
 
@@ -50,26 +29,22 @@ namespace libtorrent { namespace aux {
 		// pull in constructors from Base class
 		using Base::Base;
 		container_wrapper() = default;
-		explicit container_wrapper(Base&& b) : Base(std::move(b)) {}
+		constexpr explicit container_wrapper(Base&& b) noexcept : Base(std::move(b)) {}
 
-		auto operator[](IndexType idx) const ->
-#if TORRENT_AUTO_RETURN_TYPES
-			decltype(auto)
-#else
-			decltype(this->Base::operator[](underlying_index()))
-#endif
+		explicit container_wrapper(IndexType const s)
+			: Base(numeric_cast<std::size_t>(static_cast<underlying_index>(s))) {}
+
+		container_wrapper(IndexType const s, T value)
+			: Base(numeric_cast<std::size_t>(static_cast<underlying_index>(s)), value) {}
+
+		decltype(auto) operator[](IndexType idx) const
 		{
 			TORRENT_ASSERT(idx >= IndexType(0));
 			TORRENT_ASSERT(idx < end_index());
 			return this->Base::operator[](std::size_t(static_cast<underlying_index>(idx)));
 		}
 
-		auto operator[](IndexType idx) ->
-#if TORRENT_AUTO_RETURN_TYPES
-			decltype(auto)
-#else
-			decltype(this->Base::operator[](underlying_index()))
-#endif
+		decltype(auto) operator[](IndexType idx)
 		{
 			TORRENT_ASSERT(idx >= IndexType(0));
 			TORRENT_ASSERT(idx < end_index());
@@ -79,7 +54,7 @@ namespace libtorrent { namespace aux {
 		IndexType end_index() const
 		{
 			TORRENT_ASSERT(this->size() <= std::size_t((std::numeric_limits<underlying_index>::max)()));
-			return IndexType(static_cast<underlying_index>(this->size()));
+			return IndexType(numeric_cast<underlying_index>(this->size()));
 		}
 
 		// returns an object that can be used in a range-for to iterate over all

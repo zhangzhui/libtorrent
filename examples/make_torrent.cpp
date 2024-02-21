@@ -1,39 +1,18 @@
 /*
 
-Copyright (c) 2006-2017, Arvid Norberg
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2004, 2008-2013, 2015-2017, 2019-2020, Arvid Norberg
+Copyright (c) 2016, Alden Torres
+Copyright (c) 2017, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/entry.hpp"
 #include "libtorrent/bencode.hpp"
 #include "libtorrent/torrent_info.hpp"
-#include "libtorrent/storage.hpp"
 #include "libtorrent/create_torrent.hpp"
 
 #include <functional>
@@ -46,6 +25,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <direct.h> // for _getcwd
 #endif
 
+namespace {
+
 using namespace std::placeholders;
 
 std::vector<char> load_file(std::string const& filename)
@@ -57,7 +38,7 @@ std::vector<char> load_file(std::string const& filename)
 	size_t const size = size_t(in.tellg());
 	in.seekg(0, std::ios_base::beg);
 	std::vector<char> ret(size);
-	in.read(ret.data(), ret.size());
+	in.read(ret.data(), int(ret.size()));
 	return ret;
 }
 
@@ -70,7 +51,7 @@ std::string branch_path(std::string const& f)
 #endif
 	if (f == "/") return "";
 
-	int len = int(f.size());
+	auto len = f.size();
 	// if the last character is / or \ ignore it
 	if (f[len-1] == '/' || f[len-1] == '\\') --len;
 	while (len > 0) {
@@ -108,7 +89,7 @@ bool file_filter(std::string const& f)
 	return true;
 }
 
-void print_usage()
+[[noreturn]] void print_usage()
 {
 	std::cerr << R"(usage: make_torrent FILE [OPTIONS]
 
@@ -117,21 +98,16 @@ or directory and writes it to standard out
 
 
 OPTIONS:
--m file       generate a merkle hash tree torrent.
-              merkle torrents require client support
-              the resulting full merkle tree is written to
-              the specified file
 -w url        adds a web seed to the torrent with
               the specified url
 -t url        adds the specified tracker to the
               torrent. For multiple trackers, specify more
-              -t options
+              -t options. Specify a dash character "-" as a tracker to indicate
+              the following trackers should be in a higher tier.
 -c comment    sets the comment to the specified string
 -C creator    sets the created-by field to the specified string
--p bytes      enables padding files. Files larger
-              than bytes will be piece-aligned
 -s bytes      specifies a piece size for the torrent
-              This has to be a multiple of 16 kiB
+              This has to be a power of 2, minimum 16kiB
 -l            Don't follow symlinks, instead encode them as
               links in the torrent file
 -o file       specifies the output filename of the torrent file
@@ -145,35 +121,31 @@ OPTIONS:
 -L collection add a collection name to this torrent. Other torrents
               in the same collection is expected to share files
               with this one.
--M            make the torrent compatible with mutable torrents
-              this means aligning large files and pad them in order
-              for piece hashes to uniquely indentify a file without
-              overlap
+-2            Only generate V2 metadata
+-T            Include file timestamps in the .torrent file.
 )";
+	std::exit(1);
 }
+
+} // anonymous namespace
 
 int main(int argc_, char const* argv_[]) try
 {
-	lt::span<char const*> args(argv_, size_t(argc_));
+	lt::span<char const*> args(argv_, argc_);
 	std::string creator_str = "libtorrent";
 	std::string comment_str;
 
-	if (args.size() < 2) {
-		print_usage();
-		return 1;
-	}
+	if (args.size() < 2) print_usage();
 
 	std::vector<std::string> web_seeds;
 	std::vector<std::string> trackers;
 	std::vector<std::string> collections;
 	std::vector<lt::sha1_hash> similar;
-	int pad_file_limit = -1;
 	int piece_size = 0;
 	lt::create_flags_t flags = {};
 	std::string root_cert;
 
 	std::string outfile;
-	std::string merklefile;
 #ifdef TORRENT_WINDOWS
 	// don't ever write binary data to the console on windows
 	// it will just be interpreted as text and corrupted
@@ -184,28 +156,24 @@ int main(int argc_, char const* argv_[]) try
 	args = args.subspan(2);
 
 	for (; !args.empty(); args = args.subspan(1)) {
-		if (args[0][0] != '-') {
-			print_usage();
-			return 1;
-		}
+		if (args[0][0] != '-') print_usage();
 
 		char const flag = args[0][1];
 
 		switch (flag)
 		{
-			case 'M':
-				flags |= lt::create_torrent::mutable_torrent_support;
-				pad_file_limit = 0x4000;
-				continue;
 			case 'l':
 				flags |= lt::create_torrent::symlinks;
 				continue;
+			case '2':
+				flags |= lt::create_torrent::v2_only;
+				continue;
+			case 'T':
+				flags |= lt::create_torrent::modification_time;
+				continue;
 		}
 
-		if (args.size() < 2) {
-			print_usage();
-			return 1;
-		}
+		if (args.size() < 2) print_usage();
 
 		switch (flag)
 		{
@@ -217,20 +185,11 @@ int main(int argc_, char const* argv_[]) try
 			case 'c': comment_str = args[1]; break;
 			case 'r': root_cert = args[1]; break;
 			case 'L': collections.push_back(args[1]); break;
-			case 'p':
-				pad_file_limit = atoi(args[1]);
-				flags |= lt::create_torrent::optimize_alignment;
-				break;
-			case 'm':
-				merklefile = args[1];
-				flags |= lt::create_torrent::merkle;
-				break;
 			case 'S': {
 				if (strlen(args[1]) != 40) {
 					std::cerr << "invalid info-hash for -S. "
 						"Expected 40 hex characters\n";
 					print_usage();
-					return 1;
 				}
 				std::stringstream hash(args[1]);
 				lt::sha1_hash ih;
@@ -238,19 +197,16 @@ int main(int argc_, char const* argv_[]) try
 				if (hash.fail()) {
 					std::cerr << "invalid info-hash for -S\n";
 					print_usage();
-					return 1;
 				}
 				similar.push_back(ih);
 				break;
 			}
 			default:
 				print_usage();
-				return 1;
 		}
 		args = args.subspan(1);
 	}
 
-	lt::file_storage fs;
 #ifdef TORRENT_WINDOWS
 	if (full_path[1] != ':')
 #else
@@ -279,17 +235,18 @@ int main(int argc_, char const* argv_[]) try
 #endif
 	}
 
-	lt::add_files(fs, full_path, file_filter, flags);
-	if (fs.num_files() == 0) {
+	std::vector<lt::create_file_entry> fs
+		= lt::list_files(full_path, file_filter, flags);
+	if (fs.empty()) {
 		std::cerr << "no files specified.\n";
 		return 1;
 	}
 
-	lt::create_torrent t(fs, piece_size, pad_file_limit, flags);
+	lt::create_torrent t(std::move(fs), piece_size, flags);
 	int tier = 0;
 	for (std::string const& tr : trackers) {
-		t.add_tracker(tr, tier);
-		++tier;
+		if (tr == "-") ++tier;
+		else t.add_tracker(tr, tier);
 	}
 
 	for (std::string const& ws : web_seeds)
@@ -319,25 +276,17 @@ int main(int argc_, char const* argv_[]) try
 	}
 
 	// create the torrent and print it to stdout
-	std::vector<char> torrent;
-	lt::bencode(back_inserter(torrent), t.generate());
+	std::vector<char> const torrent = t.generate_buf();
 	if (!outfile.empty()) {
 		std::fstream out;
 		out.exceptions(std::ifstream::failbit);
 		out.open(outfile.c_str(), std::ios_base::out | std::ios_base::binary);
-		out.write(torrent.data(), torrent.size());
+		out.write(torrent.data(), int(torrent.size()));
 	}
 	else {
-		std::cout.write(torrent.data(), torrent.size());
+		std::cout.write(torrent.data(), int(torrent.size()));
 	}
 
-	if (!merklefile.empty()) {
-		std::fstream merkle;
-		merkle.exceptions(std::ifstream::failbit);
-		merkle.open(merklefile.c_str(), std::ios_base::out | std::ios_base::binary);
-		auto const& tree = t.merkle_tree();
-		merkle.write(reinterpret_cast<char const*>(tree.data()), tree.size() * 20);
-	}
 	return 0;
 }
 catch (std::exception& e) {

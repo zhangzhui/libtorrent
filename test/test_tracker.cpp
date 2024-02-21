@@ -1,53 +1,39 @@
 /*
 
-Copyright (c) 2010, Arvid Norberg
+Copyright (c) 2011-2022, Arvid Norberg
+Copyright (c) 2015, Mikhail Titov
+Copyright (c) 2016-2018, 2020-2021, Alden Torres
+Copyright (c) 2016, terry zhao
+Copyright (c) 2017-2018, Steven Siloti
+Copyright (c) 2018, d-komarov
+Copyright (c) 2020-2021, Paul-Louis Ageneau
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
-#include "setup_transfer.hpp"
+#include "setup_transfer.hpp"  // for supports_ipv6
+#include "test_utils.hpp"
 #include "udp_tracker.hpp"
 #include "settings.hpp"
+#include "test_utils.hpp"
 #include "libtorrent/alert.hpp"
 #include "libtorrent/peer_info.hpp" // for peer_list_entry
-#include "libtorrent/broadcast_socket.hpp" // for supports_ipv6
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/session.hpp"
+#include "libtorrent/session_params.hpp"
 #include "libtorrent/error_code.hpp"
-#include "libtorrent/tracker_manager.hpp"
-#include "libtorrent/http_tracker_connection.hpp" // for parse_tracker_response
+#include "libtorrent/aux_/tracker_manager.hpp"
+#include "libtorrent/aux_/http_tracker_connection.hpp" // for parse_tracker_response
+#include "libtorrent/aux_/websocket_tracker_connection.hpp" // for parse_websocket_tracker_response
 #include "libtorrent/torrent_info.hpp"
 #include "libtorrent/announce_entry.hpp"
-#include "libtorrent/torrent.hpp"
 #include "libtorrent/aux_/path.hpp"
+#include "libtorrent/aux_/socket_io.hpp"
 
-#include <fstream>
+#include <array>
 
 using namespace lt;
 
@@ -69,15 +55,15 @@ TORRENT_TEST(parse_hostname_peers)
 		"2:ip13:test_hostname4:porti1000eed"
 		"7:peer id20:bbbbabaababababababa2:ip12:another_host4:porti1001eeee";
 	error_code ec;
-	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+	aux::tracker_response resp = aux::parse_tracker_response(response
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.peers.size(), 2);
 	if (resp.peers.size() == 2)
 	{
-		peer_entry const& e0 = resp.peers[0];
-		peer_entry const& e1 = resp.peers[1];
+		aux::peer_entry const& e0 = resp.peers[0];
+		aux::peer_entry const& e1 = resp.peers[1];
 		TEST_EQUAL(e0.hostname, "test_hostname");
 		TEST_EQUAL(e0.port, 1000);
 		TEST_EQUAL(e0.pid, peer_id("aaaaaaaaaaaaaaaaaaaa"));
@@ -93,15 +79,15 @@ TORRENT_TEST(parse_peers4)
 	char const response[] = "d5:peers12:\x01\x02\x03\x04\x30\x10"
 		"\x09\x08\x07\x06\x20\x10" "e";
 	error_code ec;
-	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+	aux::tracker_response resp = aux::parse_tracker_response(response
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.peers4.size(), 2);
 	if (resp.peers.size() == 2)
 	{
-		ipv4_peer_entry const& e0 = resp.peers4[0];
-		ipv4_peer_entry const& e1 = resp.peers4[1];
+		aux::ipv4_peer_entry const& e0 = resp.peers4[0];
+		aux::ipv4_peer_entry const& e1 = resp.peers4[1];
 		TEST_CHECK(e0.ip == addr4("1.2.3.4").to_bytes());
 		TEST_EQUAL(e0.port, 0x3010);
 
@@ -157,12 +143,12 @@ TORRENT_TEST(parse_i2p_peers)
 		0xc2, 0x8a, 0x22, 0x6b, 0x47, 0xc1, 0xd1, 0x52, 0x61, 0x66,
 		0xa0, 0x75, 0xab, 0x65 };
 	error_code ec;
-	tracker_response resp = parse_tracker_response(
+	aux::tracker_response resp = aux::parse_tracker_response(
 		{ reinterpret_cast<char const*>(response), sizeof(response) }
-		, ec, tracker_request::i2p, sha1_hash());
+		, ec, aux::tracker_request::i2p, sha1_hash());
 
 	TEST_EQUAL(ec, error_code());
-	TEST_EQUAL(resp.peers.size(), 11);
+	TEST_EQUAL(resp.i2p_peers.size(), 11);
 
 	if (resp.peers.size() == 11)
 	{
@@ -178,8 +164,8 @@ TORRENT_TEST(parse_interval)
 {
 	char const response[] = "d8:intervali1042e12:min intervali10e5:peers0:e";
 	error_code ec;
-	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+	aux::tracker_response resp = aux::parse_tracker_response(response
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.peers.size(), 0);
@@ -192,8 +178,8 @@ TORRENT_TEST(parse_warning)
 {
 	char const response[] = "d5:peers0:15:warning message12:test messagee";
 	error_code ec;
-	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+	aux::tracker_response resp = aux::parse_tracker_response(response
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.peers.size(), 0);
@@ -204,8 +190,8 @@ TORRENT_TEST(parse_failure_reason)
 {
 	char const response[] = "d5:peers0:14:failure reason12:test messagee";
 	error_code ec;
-	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+	aux::tracker_response resp = aux::parse_tracker_response(response
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, errors::tracker_failure);
 	TEST_EQUAL(resp.peers.size(), 0);
@@ -217,8 +203,8 @@ TORRENT_TEST(parse_scrape_response)
 	char const response[] = "d5:filesd20:aaaaaaaaaaaaaaaaaaaad"
 		"8:completei1e10:incompletei2e10:downloadedi3e11:downloadersi6eeee";
 	error_code ec;
-	tracker_response resp = parse_tracker_response(response
-		, ec, true, sha1_hash("aaaaaaaaaaaaaaaaaaaa"));
+	aux::tracker_response resp = aux::parse_tracker_response(response
+		, ec, aux::tracker_request::scrape_request, sha1_hash("aaaaaaaaaaaaaaaaaaaa"));
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.complete, 1);
@@ -232,8 +218,8 @@ TORRENT_TEST(parse_scrape_response_with_zero)
 	char const response[] = "d5:filesd20:aaa\0aaaaaaaaaaaaaaaad"
 		"8:completei4e10:incompletei5e10:downloadedi6eeee";
 	error_code ec;
-	tracker_response resp = parse_tracker_response(response
-		, ec, true, sha1_hash("aaa\0aaaaaaaaaaaaaaaa"));
+	aux::tracker_response resp = aux::parse_tracker_response(response
+		, ec, aux::tracker_request::scrape_request, sha1_hash("aaa\0aaaaaaaaaaaaaaaa"));
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.complete, 4);
@@ -246,8 +232,8 @@ TORRENT_TEST(parse_external_ip)
 {
 	char const response[] = "d5:peers0:11:external ip4:\x01\x02\x03\x04" "e";
 	error_code ec;
-	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+	aux::tracker_response resp = aux::parse_tracker_response(response
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.peers.size(), 0);
@@ -259,8 +245,8 @@ TORRENT_TEST(parse_external_ip6)
 	char const response[] = "d5:peers0:11:external ip"
 		"16:\xf1\x02\x03\x04\0\0\0\0\0\0\0\0\0\0\xff\xff" "e";
 	error_code ec;
-	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+	aux::tracker_response resp = aux::parse_tracker_response(response
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.peers.size(), 0);
@@ -268,15 +254,15 @@ TORRENT_TEST(parse_external_ip6)
 }
 
 namespace {
-peer_entry extract_peer(char const* peer_field, error_code expected_ec, bool expected_ret)
+aux::peer_entry extract_peer(char const* peer_field, error_code expected_ec, bool expected_ret)
 {
 	error_code ec;
-	peer_entry result;
+	aux::peer_entry result;
 	bdecode_node n;
 	bdecode(peer_field, peer_field + strlen(peer_field)
 		, n, ec, nullptr, 1000, 1000);
 	TEST_CHECK(!ec);
-	bool ret = extract_peer_info(n, result, ec);
+	bool ret = aux::extract_peer_info(n, result, ec);
 	TEST_EQUAL(expected_ret, ret);
 	TEST_EQUAL(expected_ec, ec);
 	return result;
@@ -285,7 +271,7 @@ peer_entry extract_peer(char const* peer_field, error_code expected_ec, bool exp
 
 TORRENT_TEST(extract_peer)
 {
-	peer_entry result = extract_peer("d7:peer id20:abababababababababab2:ip4:abcd4:porti1337ee"
+	aux::peer_entry result = extract_peer("d7:peer id20:abababababababababab2:ip4:abcd4:porti1337ee"
 		, error_code(), true);
 	TEST_EQUAL(result.hostname, "abcd");
 	TEST_EQUAL(result.pid, peer_id("abababababababababab"));
@@ -294,7 +280,7 @@ TORRENT_TEST(extract_peer)
 
 TORRENT_TEST(extract_peer_hostname)
 {
-	peer_entry result = extract_peer("d2:ip11:example.com4:porti1ee"
+	aux::peer_entry result = extract_peer("d2:ip11:example.com4:porti1ee"
 		, error_code(), true);
 	TEST_EQUAL(result.hostname, "example.com");
 	TEST_EQUAL(result.pid, peer_id::min());
@@ -304,21 +290,21 @@ TORRENT_TEST(extract_peer_hostname)
 TORRENT_TEST(extract_peer_not_a_dictionary)
 {
 	// not a dictionary
-	peer_entry result = extract_peer("2:ip11:example.com"
+	aux::peer_entry result = extract_peer("2:ip11:example.com"
 		, errors::invalid_peer_dict, false);
 }
 
 TORRENT_TEST(extract_peer_missing_ip)
 {
 	// missing IP
-	peer_entry result = extract_peer("d7:peer id20:abababababababababab4:porti1337ee"
+	aux::peer_entry result = extract_peer("d7:peer id20:abababababababababab4:porti1337ee"
 		, errors::invalid_tracker_response, false);
 }
 
 TORRENT_TEST(extract_peer_missing_port)
 {
 	// missing port
-	peer_entry result = extract_peer("d7:peer id20:abababababababababab2:ip4:abcde"
+	aux::peer_entry result = extract_peer("d7:peer id20:abababababababababab2:ip4:abcde"
 		, errors::invalid_tracker_response, false);
 }
 
@@ -345,22 +331,22 @@ void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint c
 	settings_pack pack = settings();
 	pack.set_bool(settings_pack::announce_to_all_trackers, true);
 	pack.set_bool(settings_pack::announce_to_all_tiers, true);
-	pack.set_str(settings_pack::listen_interfaces, iface + ":48875");
+	pack.set_int(settings_pack::alert_queue_size, 10000);
 
 	auto s = std::make_unique<lt::session>(pack);
 
 	error_code ec;
 	remove_all("tmp1_tracker", ec);
 	create_directory("tmp1_tracker", ec);
-	std::ofstream file(combine_path("tmp1_tracker", "temporary").c_str());
+	ofstream file(combine_path("tmp1_tracker", "temporary").c_str());
 	std::shared_ptr<torrent_info> t = ::create_torrent(&file, "temporary", 16 * 1024, 13, false);
 	file.close();
 
+	add_torrent_params addp;
 	char tracker_url[200];
 	std::snprintf(tracker_url, sizeof(tracker_url), "udp://%s:%d/announce", iface.c_str(), udp_port);
-	t->add_tracker(tracker_url, 0);
+	addp.trackers.push_back(tracker_url);
 
-	add_torrent_params addp;
 	addp.flags &= ~torrent_flags::paused;
 	addp.flags &= ~torrent_flags::auto_managed;
 	addp.flags |= torrent_flags::seed_mode;
@@ -373,14 +359,14 @@ void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint c
 	{
 		print_alerts(*s, "s", false, false, std::bind(&connect_alert, _1, std::ref(peer_ep)));
 
-		if (num_udp_announces() == prev_udp_announces + 1)
+		if (num_udp_announces() == prev_udp_announces + 2)
 			break;
 
 		std::this_thread::sleep_for(lt::milliseconds(100));
 	}
 
-	// we should have announced to the tracker by now
-	TEST_EQUAL(num_udp_announces(), prev_udp_announces + 1);
+	// expect two announces, one each for v1 and v2
+	TEST_EQUAL(num_udp_announces(), prev_udp_announces + 2);
 
 	// if we remove the torrent before it has received the response from the
 	// tracker, it won't announce again to stop. So, wait a bit before removing.
@@ -391,12 +377,15 @@ void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint c
 	for (int i = 0; i < 50; ++i)
 	{
 		print_alerts(*s, "s", true, false, std::bind(&connect_alert, _1, std::ref(peer_ep)));
-		if (num_udp_announces() == prev_udp_announces + 2)
+		if (num_udp_announces() == prev_udp_announces + 4)
 			break;
 
 		std::this_thread::sleep_for(lt::milliseconds(100));
 	}
 
+	std::printf("peer_ep: %s expected: %s\n"
+		, aux::print_endpoint(peer_ep).c_str()
+		, aux::print_endpoint(expected_peer).c_str());
 	TEST_CHECK(peer_ep == expected_peer);
 	std::printf("destructing session\n");
 
@@ -404,7 +393,7 @@ void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint c
 	std::printf("done\n");
 
 	// we should have announced the stopped event now
-	TEST_EQUAL(num_udp_announces(), prev_udp_announces + 2);
+	TEST_EQUAL(num_udp_announces(), prev_udp_announces + 4);
 
 	stop_udp_tracker();
 }
@@ -413,44 +402,50 @@ void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint c
 
 TORRENT_TEST(udp_tracker_v4)
 {
-	test_udp_tracker("127.0.0.1", address_v4::any(), ep("1.3.3.7", 1337));
+	// if the machine running the test doesn't have an actual IPv4 connection
+	// the test would fail with any other address than loopback (because it
+	// would be unreachable). This is true for some CI's, running containers
+	// without an internet connection
+	test_udp_tracker("127.0.0.1", address_v4::any(), ep("127.0.0.2", 1337));
 }
 
 TORRENT_TEST(udp_tracker_v6)
 {
 	if (supports_ipv6())
 	{
-		test_udp_tracker("[::1]", address_v6::any(), ep("::1.3.3.7", 1337));
+		// if the machine running the test doesn't have an actual IPv6 connection
+		// the test would fail with any other address than loopback (because it
+		// would be unreachable)
+		test_udp_tracker("[::1]", address_v6::any(), ep("::1", 1337));
 	}
 }
 
 TORRENT_TEST(http_peers)
 {
-	int http_port = start_web_server();
+	int const http_port = start_web_server();
 
 	settings_pack pack = settings();
 	pack.set_bool(settings_pack::announce_to_all_trackers, true);
 	pack.set_bool(settings_pack::announce_to_all_tiers, false);
 	pack.set_int(settings_pack::tracker_completion_timeout, 2);
 	pack.set_int(settings_pack::tracker_receive_timeout, 1);
-	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:39775");
+	pack.set_str(settings_pack::listen_interfaces, test_listen_interface());
 
 	auto s = std::make_unique<lt::session>(pack);
 
 	error_code ec;
 	remove_all("tmp2_tracker", ec);
 	create_directory("tmp2_tracker", ec);
-	std::ofstream file(combine_path("tmp2_tracker", "temporary").c_str());
+	ofstream file(combine_path("tmp2_tracker", "temporary").c_str());
 	std::shared_ptr<torrent_info> t = ::create_torrent(&file, "temporary", 16 * 1024, 13, false);
 	file.close();
 
+	add_torrent_params addp;
 	char tracker_url[200];
-	// and this should not be announced to (since the one before it succeeded)
 	std::snprintf(tracker_url, sizeof(tracker_url), "http://127.0.0.1:%d/announce"
 		, http_port);
-	t->add_tracker(tracker_url, 0);
+	addp.trackers.push_back(tracker_url);
 
-	add_torrent_params addp;
 	addp.flags &= ~torrent_flags::paused;
 	addp.flags &= ~torrent_flags::auto_managed;
 	addp.flags |= torrent_flags::seed_mode;
@@ -466,7 +461,7 @@ TORRENT_TEST(http_peers)
 
 	status = h.status();
 	TEST_CHECK(!status.current_tracker.empty());
-	TEST_CHECK(status.current_tracker == tracker_url);
+	TEST_EQUAL(status.current_tracker, tracker_url);
 
 	// we expect to have certain peers in our peer list now
 	// these peers are hard coded in web_server.py
@@ -507,23 +502,23 @@ TORRENT_TEST(current_tracker)
 	pack.set_bool(settings_pack::announce_to_all_tiers, false);
 	pack.set_int(settings_pack::tracker_completion_timeout, 2);
 	pack.set_int(settings_pack::tracker_receive_timeout, 1);
-	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:39775");
+	pack.set_str(settings_pack::listen_interfaces, test_listen_interface());
 
 	auto s = std::make_unique<lt::session>(pack);
 
 	error_code ec;
 	remove_all("tmp3_tracker", ec);
 	create_directory("tmp3_tracker", ec);
-	std::ofstream file(combine_path("tmp3_tracker", "temporary").c_str());
+	ofstream file(combine_path("tmp3_tracker", "temporary").c_str());
 	std::shared_ptr<torrent_info> t = ::create_torrent(&file, "temporary", 16 * 1024, 13, false);
 	file.close();
 
+	add_torrent_params addp;
 	char tracker_url[200];
 	std::snprintf(tracker_url, sizeof(tracker_url), "http://127.0.0.1:%d/announce"
 		, http_port);
-	t->add_tracker(tracker_url, 0);
+	addp.trackers.push_back(tracker_url);
 
-	add_torrent_params addp;
 	addp.flags &= ~torrent_flags::paused;
 	addp.flags &= ~torrent_flags::auto_managed;
 	addp.flags |= torrent_flags::seed_mode;
@@ -551,6 +546,199 @@ TORRENT_TEST(current_tracker)
 	std::printf("done\n");
 }
 
+#if TORRENT_USE_RTC
+TORRENT_TEST(parse_websocket_tracker_response)
+{
+	char const response[] = R"({"complete":1,"incomplete":0,"action":"announce","interval":120,"info_hash":"xxxxxxxxxxxxxxxxxxxx"})";
+
+	error_code ec;
+	auto ret = aux::parse_websocket_tracker_response({response, long(std::strlen(response))}, ec);
+
+	TEST_EQUAL(ec, error_code{});
+	TEST_CHECK(std::holds_alternative<aux::websocket_tracker_response>(ret));
+
+	if(std::holds_alternative<aux::websocket_tracker_response>(ret))
+	{
+		auto parsed = std::get<aux::websocket_tracker_response>(ret);
+
+		TEST_EQUAL(std::string(parsed.info_hash.data(), parsed.info_hash.size()), "xxxxxxxxxxxxxxxxxxxx");
+		TEST_CHECK(!parsed.offer);
+		TEST_CHECK(!parsed.answer);
+		TEST_CHECK(parsed.resp);
+
+		if (parsed.resp)
+		{
+			TEST_EQUAL(parsed.resp->interval.count(), 120);
+			TEST_EQUAL(parsed.resp->complete, 1);
+			TEST_EQUAL(parsed.resp->incomplete, 0);
+			TEST_EQUAL(parsed.resp->downloaded, -1);
+		}
+	}
+}
+
+TORRENT_TEST(parse_websocket_tracker_response_offer)
+{
+	char const response[] = R"({"action":"announce","offer":{"type":"offer","sdp":"SDP\r\n"},"offer_id":"yyyyyyyyyyyyyyyy","peer_id":"-LT2000-p!SALH(DnYsi","info_hash":"xxxxxxxxxxxxxxxxxxxx"})";
+
+	error_code ec;
+	auto ret = aux::parse_websocket_tracker_response({response, long(std::strlen(response))}, ec);
+
+	TEST_EQUAL(ec, error_code{});
+	TEST_CHECK(std::holds_alternative<aux::websocket_tracker_response>(ret));
+
+	if(std::holds_alternative<aux::websocket_tracker_response>(ret))
+	{
+		auto parsed = std::get<aux::websocket_tracker_response>(ret);
+
+		TEST_EQUAL(std::string(parsed.info_hash.data(), parsed.info_hash.size()), "xxxxxxxxxxxxxxxxxxxx");
+		TEST_CHECK(!parsed.resp);
+		TEST_CHECK(!parsed.answer);
+		TEST_CHECK(parsed.offer);
+
+		if (parsed.offer)
+		{
+			TEST_EQUAL(std::string(parsed.offer->id.data(), parsed.offer->id.size()), "yyyyyyyyyyyyyyyy");
+			TEST_EQUAL(parsed.offer->sdp, "SDP\r\n");
+		}
+	}
+}
+
+TORRENT_TEST(parse_websocket_tracker_response_answer)
+{
+	char const response[] = R"({"action":"announce","answer":{"type":"answer","sdp":"SDP\r\n"},"offer_id":"yyyyyyyyyyyyyyyy","peer_id":"-LT2000-p!SALH(DnYsi","info_hash":"xxxxxxxxxxxxxxxxxxxx"})";
+
+	error_code ec;
+	auto ret = aux::parse_websocket_tracker_response({response, long(std::strlen(response))}, ec);
+
+	TEST_EQUAL(ec, error_code{});
+	TEST_CHECK(std::holds_alternative<aux::websocket_tracker_response>(ret));
+
+	if(std::holds_alternative<aux::websocket_tracker_response>(ret))
+	{
+		auto parsed = std::get<aux::websocket_tracker_response>(ret);
+
+		TEST_EQUAL(std::string(parsed.info_hash.data(), parsed.info_hash.size()), "xxxxxxxxxxxxxxxxxxxx");
+		TEST_CHECK(!parsed.resp);
+		TEST_CHECK(!parsed.offer);
+		TEST_CHECK(parsed.answer);
+
+		if(parsed.answer)
+		{
+			TEST_EQUAL(std::string(parsed.answer->offer_id.data(), parsed.answer->offer_id.size()), "yyyyyyyyyyyyyyyy");
+			TEST_EQUAL(parsed.answer->sdp, "SDP\r\n");
+		}
+	}
+}
+
+TORRENT_TEST(parse_websocket_tracker_invalid_json)
+{
+	char const response[] = R"({"invalid":foo)";
+
+	error_code ec;
+	auto ret = aux::parse_websocket_tracker_response({response, long(std::strlen(response))}, ec);
+
+	TEST_EQUAL(ec.value(), boost::system::errc::bad_message);
+	TEST_CHECK(std::holds_alternative<std::string>(ret));
+}
+
+TORRENT_TEST(parse_websocket_tracker_invalid_response)
+{
+	std::array<char const*, 11> responses =
+	{
+		// not an object
+		R"([ "foo" ])",
+
+		// info_hash too short
+		R"({"complete":1,"incomplete":0,"action":"announce","interval":120,"info_hash":"tooshort"})",
+
+		// info_hash too long
+		R"({"complete":1,"incomplete":0,"action":"announce","interval":120,"info_hash":"aaaaaaaaaaaaaaaaaaaaa"})",
+
+		// offer with peer_id too short
+		R"({"action":"announce","offer":{"type":"offer","sdp":"SDP\r\n"},"offer_id":"yyyyyyyyyyyyyyyy","peer_id":"bbbbbbbbbbbbbbbbbbb","info_hash":"xxxxxxxxxxxxxxxxxxxx"})",
+
+		// offer with peer_id too long
+		R"({"action":"announce","offer":{"type":"offer","sdp":"SDP\r\n"},"offer_id":"yyyyyyyyyyyyyyyy","peer_id":"aaaaaaaaaaaaaaaaaaaaa","info_hash":"xxxxxxxxxxxxxxxxxxxx"})",
+
+		// answer with peer_id too short
+		R"({"action":"announce","answer":{"type":"answer","sdp":"SDP\r\n"},"offer_id":"yyyyyyyyyyyyyyyy","peer_id":"bbbbbbbbbbbbbbbbbbb","info_hash":"xxxxxxxxxxxxxxxxxxxx"})",
+
+		// answer with peer_id too long
+		R"({"action":"announce","answer":{"type":"answer","sdp":"SDP\r\n"},"offer_id":"yyyyyyyyyyyyyyyy","peer_id":"aaaaaaaaaaaaaaaaaaaaa","info_hash":"xxxxxxxxxxxxxxxxxxxx"})",
+
+		// offer without sdp
+		R"({"action":"announce","offer":{"type":"offer"},"offer_id":"yyyyyyyyyyyyyyyy","peer_id":"-LT2000-p!SALH(DnYsi","info_hash":"xxxxxxxxxxxxxxxxxxxx"})",
+
+		// answer without sdp
+		R"({"action":"announce","answer":{"type":"answer"},"offer_id":"yyyyyyyyyyyyyyyy","peer_id":"-LT2000-p!SALH(DnYsi","info_hash":"xxxxxxxxxxxxxxxxxxxx"})",
+
+		// offer not an object
+		R"({"action":"announce","offer": "foo","offer_id":"yyyyyyyyyyyyyyyy","peer_id":"-LT2000-p!SALH(DnYsi","info_hash":"xxxxxxxxxxxxxxxxxxxx"})",
+
+		// answer not an object
+		R"({"action":"announce","answer": ["foo","bar"],"offer_id":"yyyyyyyyyyyyyyyy","peer_id":"-LT2000-p!SALH(DnYsi","info_hash":"xxxxxxxxxxxxxxxxxxxx"})"
+	};
+
+	for(char const* response : responses)
+	{
+		error_code ec;
+		auto ret = aux::parse_websocket_tracker_response({response, long(std::strlen(response))}, ec);
+
+		TEST_EQUAL(ec.value(), boost::system::errc::invalid_argument);
+		TEST_CHECK(std::holds_alternative<std::string>(ret));
+	}
+}
+
+TORRENT_TEST(websocket_tracker)
+{
+	int const http_port = start_websocket_server();
+
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_trackers, true);
+
+	auto s = std::make_unique<lt::session>(pack);
+
+	error_code ec;
+	remove_all("tmp4_tracker", ec);
+	create_directory("tmp4_tracker", ec);
+	std::ofstream file(combine_path("tmp4_tracker", "temporary").c_str());
+	std::shared_ptr<torrent_info> t = ::create_torrent(&file, "temporary", 16 * 1024, 13, false);
+	file.close();
+
+	add_torrent_params addp;
+	char tracker_url[200];
+	std::snprintf(tracker_url, sizeof(tracker_url), "ws://127.0.0.1:%d/announce"
+		, http_port);
+	addp.trackers.push_back(tracker_url);
+
+	addp.flags &= ~torrent_flags::paused;
+	addp.flags &= ~torrent_flags::auto_managed;
+	addp.flags |= torrent_flags::seed_mode;
+	addp.ti = t;
+	addp.save_path = "tmp4_tracker";
+	torrent_handle h = s->add_torrent(addp);
+
+	lt::torrent_status status = h.status();
+	TEST_CHECK(status.current_tracker.empty());
+
+	wait_for_alert(*s, tracker_reply_alert::alert_type, "s");
+
+	std::this_thread::sleep_for(lt::milliseconds(2000));
+
+	status = h.status();
+	TEST_CHECK(!status.current_tracker.empty());
+	TEST_EQUAL(status.current_tracker, tracker_url);
+
+	std::printf("destructing session\n");
+	s.reset();
+	std::printf("done\n");
+
+	std::printf("stop_websocket_server\n");
+	stop_websocket_server();
+	std::printf("done\n");
+}
+#endif
+
 namespace {
 
 void test_proxy(bool proxy_trackers)
@@ -562,7 +750,7 @@ void test_proxy(bool proxy_trackers)
 	pack.set_bool(settings_pack::announce_to_all_tiers, false);
 	pack.set_int(settings_pack::tracker_completion_timeout, 2);
 	pack.set_int(settings_pack::tracker_receive_timeout, 1);
-	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:39775");
+	pack.set_str(settings_pack::listen_interfaces, test_listen_interface());
 
 	pack.set_str(settings_pack::proxy_hostname, "non-existing.com");
 	pack.set_int(settings_pack::proxy_type, settings_pack::socks5);
@@ -574,17 +762,17 @@ void test_proxy(bool proxy_trackers)
 	error_code ec;
 	remove_all("tmp2_tracker", ec);
 	create_directory("tmp2_tracker", ec);
-	std::ofstream file(combine_path("tmp2_tracker", "temporary").c_str());
+	ofstream file(combine_path("tmp2_tracker", "temporary").c_str());
 	std::shared_ptr<torrent_info> t = ::create_torrent(&file, "temporary", 16 * 1024, 13, false);
 	file.close();
 
+	add_torrent_params addp;
 	char tracker_url[200];
 	// and this should not be announced to (since the one before it succeeded)
 	std::snprintf(tracker_url, sizeof(tracker_url), "http://127.0.0.1:%d/announce"
 		, http_port);
-	t->add_tracker(tracker_url, 0);
+	addp.trackers.push_back(tracker_url);
 
-	add_torrent_params addp;
 	addp.flags &= ~torrent_flags::paused;
 	addp.flags &= ~torrent_flags::auto_managed;
 	addp.flags |= torrent_flags::seed_mode;
@@ -625,10 +813,11 @@ TORRENT_TEST(tracker_proxy)
 }
 
 #ifndef TORRENT_DISABLE_LOGGING
+#ifndef TORRENT_DISABLE_ALERT_MSG
 namespace {
 void test_stop_tracker_timeout(int const timeout)
 {
-	// trick the min interval so that the stopped anounce is permitted immediately
+	// trick the min interval so that the stopped announce is permitted immediately
 	// after the initial announce
 	int port = start_web_server(false, false, true, -1);
 
@@ -666,7 +855,7 @@ void test_stop_tracker_timeout(int const timeout)
 	settings_pack p = settings();
 	p.set_bool(settings_pack::announce_to_all_trackers, true);
 	p.set_bool(settings_pack::announce_to_all_tiers, true);
-	p.set_str(settings_pack::listen_interfaces, "0.0.0.0:6881");
+	p.set_str(settings_pack::listen_interfaces, "127.0.0.1:6881");
 	p.set_int(settings_pack::stop_tracker_timeout, timeout);
 
 	lt::session s(p);
@@ -674,7 +863,7 @@ void test_stop_tracker_timeout(int const timeout)
 	error_code ec;
 	remove_all("tmp4_tracker", ec);
 	create_directory("tmp4_tracker", ec);
-	std::ofstream file(combine_path("tmp4_tracker", "temporary").c_str());
+	ofstream file(combine_path("tmp4_tracker", "temporary").c_str());
 	std::shared_ptr<torrent_info> t = ::create_torrent(&file, "temporary", 16 * 1024, 13, false);
 	file.close();
 
@@ -692,12 +881,14 @@ void test_stop_tracker_timeout(int const timeout)
 	h.add_tracker(ae);
 
 	// make sure it announced a event=started properly
-	wait_for_alert(s, tracker_reply_alert::alert_type, "s");
+	// expect announces for v1 and v2 info hashes
+	for (int i = 0; i < 2; ++i)
+		wait_for_alert(s, tracker_reply_alert::alert_type, "s");
 
 	s.remove_torrent(h);
 
-	int const count = count_stopped_events(s, (timeout == 0) ? 0 : 1);
-	TEST_EQUAL(count, (timeout == 0) ? 0 : 1);
+	int const count = count_stopped_events(s, (timeout == 0) ? 0 : 2);
+	TEST_EQUAL(count, (timeout == 0) ? 0 : 2);
 }
 } // anonymous namespace
 
@@ -712,4 +903,5 @@ TORRENT_TEST(stop_tracker_timeout_zero_timeout)
 	std::printf("\n\nexpect to NOT get a request with &event=stopped\n\n");
 	test_stop_tracker_timeout(0);
 }
+#endif
 #endif

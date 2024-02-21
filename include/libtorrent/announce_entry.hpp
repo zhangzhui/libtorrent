@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2015-2018, Arvid Norberg
+Copyright (c) 2015-2020, Arvid Norberg
+Copyright (c) 2016, 2018, 2020, Alden Torres
+Copyright (c) 2017-2018, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_ANNOUNCE_ENTRY_HPP_INCLUDED
@@ -39,7 +18,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/string_view.hpp"
 #include "libtorrent/socket.hpp"
-#include "libtorrent/aux_/listen_socket_handle.hpp"
+#include "libtorrent/aux_/array.hpp"
+#include "libtorrent/info_hash.hpp"
 
 #include <string>
 #include <cstdint>
@@ -47,19 +27,14 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	// announces are sent to each tracker using every listen socket
-	// this class holds information about one listen socket for one tracker
-	struct TORRENT_EXPORT announce_endpoint
-	{
-		friend class torrent;
-#if TORRENT_ABI_VERSION == 1
-		friend struct announce_entry;
-#else
-		friend struct v1_2::announce_entry;
-#endif
+namespace aux { struct torrent; }
 
+TORRENT_VERSION_NAMESPACE_2
+
+	struct TORRENT_EXPORT announce_infohash
+	{
 		// internal
-		explicit announce_endpoint(aux::listen_socket_handle const& s);
+		TORRENT_UNEXPORT announce_infohash();
 
 		// if this tracker has returned an error or warning message
 		// that message is stored here
@@ -69,20 +44,12 @@ namespace libtorrent {
 		// this error code specifies what error occurred
 		error_code last_error;
 
-		// the local endpoint of the listen interface associated with this endpoint
-		tcp::endpoint local_endpoint;
-
 		// the time of next tracker announce
 		time_point32 next_announce = (time_point32::min)();
 
 		// no announces before this time
 		time_point32 min_announce = (time_point32::min)();
 
-	private:
-		// internal
-		aux::listen_socket_handle socket;
-
-	public:
 		// TODO: include the number of peers received from this tracker, at last
 		// announce
 
@@ -94,11 +61,12 @@ namespace libtorrent {
 		// view).
 
 		// if this tracker has returned scrape data, these fields are filled in
-		// with valid numbers. Otherwise they are set to -1. the number of
-		// current downloaders
+		// with valid numbers. Otherwise they are set to -1. ``incomplete`` counts
+		// the number of current downloaders. ``complete`` counts the number of
+		// current peers completed the download, or "seeds". ``downloaded`` is the
+		// cumulative number of completed downloads.
 		int scrape_incomplete = -1;
 		int scrape_complete = -1;
-
 		int scrape_downloaded = -1;
 
 		// the number of times in a row we have failed to announce to this
@@ -119,28 +87,89 @@ namespace libtorrent {
 		// internal
 		bool triggered_manually : 1;
 
+#if TORRENT_ABI_VERSION <= 2
 		// reset announce counters and clears the started sent flag.
 		// The announce_endpoint will look like we've never talked to
 		// the tracker.
-		void reset();
+		TORRENT_DEPRECATED void reset();
 
 		// updates the failure counter and time-outs for re-trying.
 		// This is called when the tracker announce fails.
-		void failed(int backoff_ratio, seconds32 retry_interval = seconds32(0));
+		TORRENT_DEPRECATED void failed(int backoff_ratio, seconds32 retry_interval = seconds32(0));
 
 		// returns true if we can announce to this tracker now.
 		// The current time is passed in as ``now``. The ``is_seed``
 		// argument is necessary because once we become a seed, we
 		// need to announce right away, even if the re-announce timer
 		// hasn't expired yet.
-		bool can_announce(time_point now, bool is_seed, std::uint8_t fail_limit) const;
+		TORRENT_DEPRECATED bool can_announce(time_point now, bool is_seed, std::uint8_t fail_limit) const;
 
 		// returns true if the last time we tried to announce to this
 		// tracker succeeded, or if we haven't tried yet.
-		bool is_working() const { return fails == 0; }
+		TORRENT_DEPRECATED bool is_working() const { return fails == 0; }
+#endif
 	};
 
-TORRENT_VERSION_NAMESPACE_2
+	// announces are sent to each tracker using every listen socket
+	// this class holds information about one listen socket for one tracker
+#if TORRENT_ABI_VERSION <= 2
+	// this is to suppress deprecation warnings from implicit move constructor
+#include "libtorrent/aux_/disable_warnings_push.hpp"
+#endif
+	struct TORRENT_EXPORT announce_endpoint
+	{
+#if TORRENT_ABI_VERSION <= 2
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
+#endif
+
+		announce_endpoint();
+
+		// the local endpoint of the listen interface associated with this endpoint
+		tcp::endpoint local_endpoint;
+
+		// torrents can be announced using multiple info hashes
+		// for different protocol versions
+
+		// info_hashes[0] is the v1 info hash (SHA1)
+		// info_hashes[1] is the v2 info hash (truncated SHA-256)
+		aux::array<announce_infohash, num_protocols, protocol_version> info_hashes;
+
+#if TORRENT_ABI_VERSION <= 2
+		// reset announce counters and clears the started sent flag.
+		// The announce_endpoint will look like we've never talked to
+		// the tracker.
+		TORRENT_DEPRECATED void reset();
+
+		// deprecated in 2.0, use announce_infohash::can_announce
+		// returns true if we can announce to this tracker now.
+		// The current time is passed in as ``now``. The ``is_seed``
+		// argument is necessary because once we become a seed, we
+		// need to announce right away, even if the re-announce timer
+		// hasn't expired yet.
+		TORRENT_DEPRECATED bool can_announce(time_point now, bool is_seed, std::uint8_t fail_limit) const;
+
+		// deprecated in 2.0, use announce_infohash::is_working
+		// returns true if the last time we tried to announce to this
+		// tracker succeeded, or if we haven't tried yet.
+		TORRENT_DEPRECATED bool is_working() const;
+
+		// for backwards compatibility
+		TORRENT_DEPRECATED time_point32 next_announce = (time_point32::min)();
+		TORRENT_DEPRECATED time_point32 min_announce = (time_point32::min)();
+		TORRENT_DEPRECATED std::string message;
+		TORRENT_DEPRECATED error_code last_error;
+		TORRENT_DEPRECATED int scrape_incomplete = -1;
+		TORRENT_DEPRECATED int scrape_complete = -1;
+		TORRENT_DEPRECATED int scrape_downloaded = -1;
+		TORRENT_DEPRECATED std::uint8_t fails : 7;
+		TORRENT_DEPRECATED bool updating : 1;
+		TORRENT_DEPRECATED bool start_sent : 1;
+		TORRENT_DEPRECATED bool complete_sent : 1;
+#endif
+
+		// set to false to not announce from this endpoint
+		bool enabled = true;
+	};
 
 	// this class holds information about one bittorrent tracker, as it
 	// relates to a specific torrent.
@@ -151,7 +180,7 @@ TORRENT_VERSION_NAMESPACE_2
 		announce_entry();
 		~announce_entry();
 		announce_entry(announce_entry const&);
-		announce_entry& operator=(announce_entry const&);
+		announce_entry& operator=(announce_entry const&) &;
 
 		// tracker URL as it appeared in the torrent file
 		std::string url;
@@ -161,6 +190,8 @@ TORRENT_VERSION_NAMESPACE_2
 		// trackerid is sent).
 		std::string trackerid;
 
+		// each local listen socket (endpoint) will announce to the tracker. This
+		// list contains state per endpoint.
 		std::vector<announce_endpoint> endpoints;
 
 		// the tier this tracker belongs to
@@ -195,19 +226,24 @@ TORRENT_VERSION_NAMESPACE_2
 		// deprecated in 1.2
 		// all of these will be set to false or 0
 		// use the corresponding members in announce_endpoint
-		std::uint8_t TORRENT_DEPRECATED_MEMBER fails:7;
-		bool TORRENT_DEPRECATED_MEMBER send_stats:1;
-		bool TORRENT_DEPRECATED_MEMBER start_sent:1;
-		bool TORRENT_DEPRECATED_MEMBER complete_sent:1;
+		TORRENT_DEPRECATED std::uint8_t fails:7;
+		TORRENT_DEPRECATED bool send_stats:1;
+		TORRENT_DEPRECATED bool start_sent:1;
+		TORRENT_DEPRECATED bool complete_sent:1;
 		// internal
-		bool TORRENT_DEPRECATED_MEMBER triggered_manually:1;
-		bool TORRENT_DEPRECATED_MEMBER updating:1;
+		TORRENT_DEPRECATED bool triggered_manually:1;
+		TORRENT_DEPRECATED bool updating:1;
 #endif
 
+#if TORRENT_ABI_VERSION <= 2
 		// reset announce counters and clears the started sent flag.
 		// The announce_entry will look like we've never talked to
 		// the tracker.
-		void reset();
+		TORRENT_DEPRECATED void reset();
+
+		// trims whitespace characters from the beginning of the URL.
+		TORRENT_DEPRECATED void trim();
+#endif
 
 #if TORRENT_ABI_VERSION == 1
 		// deprecated in 1.2, use announce_endpoint::can_announce
@@ -223,12 +259,6 @@ TORRENT_VERSION_NAMESPACE_2
 		// tracker succeeded, or if we haven't tried yet.
 		TORRENT_DEPRECATED bool is_working() const;
 #endif
-
-		// internal
-		announce_endpoint* find_endpoint(aux::listen_socket_handle const& s);
-
-		// trims whitespace characters from the beginning of the URL.
-		void trim();
 	};
 
 TORRENT_VERSION_NAMESPACE_2_END

@@ -1,33 +1,14 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg
+Copyright (c) 2006-2022, Arvid Norberg
+Copyright (c) 2014-2017, Steven Siloti
+Copyright (c) 2015-2017, Alden Torres
+Copyright (c) 2015, Thomas Yuan
+Copyright (c) 2020, Fonic
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef NODE_HPP
@@ -40,7 +21,6 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include <libtorrent/config.hpp>
 #include <libtorrent/kademlia/dht_storage.hpp>
-#include <libtorrent/kademlia/dht_settings.hpp>
 #include <libtorrent/kademlia/routing_table.hpp>
 #include <libtorrent/kademlia/rpc_manager.hpp>
 #include <libtorrent/kademlia/node_id.hpp>
@@ -53,6 +33,9 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <libtorrent/string_view.hpp>
 #include <libtorrent/aux_/listen_socket_handle.hpp>
 
+// for dht_lookup and dht_routing_bucket
+#include <libtorrent/alert_types.hpp>
+
 namespace libtorrent {
 	struct counters;
 }
@@ -63,6 +46,7 @@ namespace dht {
 struct traversal_algorithm;
 struct dht_observer;
 struct msg;
+struct settings;
 
 TORRENT_EXTRA_EXPORT entry write_nodes_entry(std::vector<node_entry> const& nodes);
 
@@ -77,7 +61,7 @@ public:
 	void reply(msg const&) override { flags |= flag_done; }
 };
 
-struct socket_manager
+struct TORRENT_EXTRA_EXPORT socket_manager
 {
 	virtual bool has_quota() = 0;
 	virtual bool send_packet(aux::listen_socket_handle const& s, entry& e, udp::endpoint const& addr) = 0;
@@ -86,13 +70,21 @@ protected:
 };
 
 // get the closest node to the id with the given family_name
-using get_foreign_node_t = std::function<node*(node_id const&, std::string const&)>;
+using get_foreign_node_t = std::function<node*(node_id const&, string_view)>;
+
+struct dht_status
+{
+	node_id our_id;
+	udp::endpoint local_endpoint;
+	std::vector<dht_routing_bucket> table;
+	std::vector<dht_lookup> requests;
+};
 
 class TORRENT_EXTRA_EXPORT node
 {
 public:
 	node(aux::listen_socket_handle const& sock, socket_manager* sock_man
-		, dht_settings const& settings
+		, aux::session_settings const& settings
 		, node_id const& nid
 		, dht_observer* observer, counters& cnt
 		, get_foreign_node_t get_foreign_node
@@ -102,6 +94,8 @@ public:
 
 	node(node const&) = delete;
 	node& operator=(node const&) = delete;
+	node(node&&) = delete;
+	node& operator=(node&&) = delete;
 
 	void update_node_id();
 
@@ -153,7 +147,8 @@ public:
 		, std::function<void(item&)> data_cb);
 
 	void sample_infohashes(udp::endpoint const& ep, sha1_hash const& target
-		, std::function<void(time_duration
+		, std::function<void(sha1_hash
+			, time_duration
 			, int, std::vector<sha1_hash>
 			, std::vector<std::pair<sha1_hash, udp::endpoint>>)> f);
 
@@ -174,7 +169,7 @@ public:
 	// bucket is not full.
 	void add_node(udp::endpoint const& node);
 
-	int branch_factor() const { return m_settings.search_branching; }
+	int branch_factor() const;
 
 	void add_traversal_algorithm(traversal_algorithm* a)
 	{
@@ -188,16 +183,17 @@ public:
 		m_running_requests.erase(a);
 	}
 
-	void status(std::vector<dht_routing_bucket>& table
-		, std::vector<dht_lookup>& requests);
+	dht_status status() const;
 
 	std::tuple<int, int, int> get_stats_counters() const;
 
 #if TORRENT_ABI_VERSION == 1
+#include "libtorrent/aux_/disable_deprecation_warnings_push.hpp"
 	void status(libtorrent::session_status& s);
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
 #endif
 
-	dht_settings const& settings() const { return m_settings; }
+	aux::session_settings const& settings() const { return m_settings; }
 	counters& stats_counters() const { return m_counters; }
 
 	dht_observer* observer() const { return m_observer; }
@@ -223,15 +219,15 @@ private:
 	bool lookup_peers(sha1_hash const& info_hash, entry& reply
 		, bool noseed, bool scrape, address const& requester) const;
 
-	dht_settings const& m_settings;
+	aux::session_settings const& m_settings;
 
-	std::mutex m_mutex;
+	mutable std::mutex m_mutex;
 
 	// this list must be destructed after the rpc manager
 	// since it might have references to it
 	std::set<traversal_algorithm*> m_running_requests;
 
-	void incoming_request(msg const& h, entry& e);
+	void incoming_request(msg const&, entry&);
 
 	void write_nodes_entries(sha1_hash const& info_hash
 		, bdecode_node const& want, entry& r);
@@ -269,7 +265,7 @@ private:
 	time_point m_last_self_refresh;
 
 	// secret random numbers used to create write tokens
-	std::uint32_t m_secret[2];
+	std::array<char, 4> m_secret[2];
 
 	counters& m_counters;
 

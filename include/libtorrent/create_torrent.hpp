@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2008-2018, Arvid Norberg
+Copyright (c) 2008-2022, Arvid Norberg
+Copyright (c) 2016-2017, 2019, Alden Torres
+Copyright (c) 2016, Markus
+Copyright (c) 2017, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_CREATE_TORRENT_HPP_INCLUDED
@@ -36,15 +16,22 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/bencode.hpp"
 #include "libtorrent/file_storage.hpp"
 #include "libtorrent/config.hpp"
-#include "libtorrent/storage.hpp"
 #include "libtorrent/hasher.hpp"
 #include "libtorrent/string_view.hpp"
+#include "libtorrent/session_params.hpp" // for disk_io_constructor_type
 #include "libtorrent/aux_/vector.hpp"
 #include "libtorrent/aux_/path.hpp" // for combine_path etc.
+#include "libtorrent/fwd.hpp"
+#include "libtorrent/aux_/throw.hpp"
+#include "libtorrent/index_range.hpp"
 
 #include <vector>
 #include <string>
 #include <utility>
+
+#if TORRENT_ABI_VERSION < 4
+#include <optional>
+#endif
 
 // OVERVIEW
 //
@@ -73,12 +60,10 @@ POSSIBILITY OF SUCH DAMAGE.
 //
 // .. code:: c++
 //
-//	file_storage fs;
+//	// recursively create a list of all files in the directory
+//	auto fs = list_files("./my_torrent");
 //
-//	// recursively adds files in directories
-//	add_files(fs, "./my_torrent");
-//
-//	create_torrent t(fs);
+//	create_torrent t(std::move(fs));
 //	t.add_tracker("http://my.tracker.com/announce");
 //	t.set_creator("libtorrent example");
 //
@@ -86,14 +71,45 @@ POSSIBILITY OF SUCH DAMAGE.
 //	set_piece_hashes(t, ".");
 //
 //	ofstream out("my_torrent.torrent", std::ios_base::binary);
+//	std::vector<char> buf = t.generate_buf();
+//	out.write(buf.data(), buf.size());
+//
+//	// alternatively, generate an entry and encode it directly to an ostream
+//	// iterator
 //	bencode(std::ostream_iterator<char>(out), t.generate());
 //
 namespace libtorrent {
 
-	class torrent_info;
+TORRENT_VERSION_NAMESPACE_4
 
 	// hidden
 	using create_flags_t = flags::bitfield_flag<std::uint32_t, struct create_flags_tag>;
+
+	// This represents one file in the torrent file to be created
+	struct TORRENT_EXPORT create_file_entry
+	{
+		create_file_entry(std::string fn, std::int64_t const sz
+			, file_flags_t const f = {}, std::time_t const ts = 0, std::string sl = {})
+			: filename(std::move(fn))
+			, size(sz)
+			, flags(f)
+			, mtime(ts)
+			, symlink(std::move(sl))
+		{}
+
+		// the path and name of the file. The path is relative to the root of
+		// the torrent file.
+		std::string filename;
+		// the size of the file
+		std::int64_t size;
+
+		file_flags_t flags;
+
+		std::time_t mtime;
+
+		// only considered if the symlink flag is set
+		std::string symlink;
+	};
 
 	// This class holds state for creating a torrent. After having added
 	// all information to it, call create_torrent::generate() to generate
@@ -101,16 +117,24 @@ namespace libtorrent {
 	// .torrent file using bencode().
 	struct TORRENT_EXPORT create_torrent
 	{
+#if TORRENT_ABI_VERSION == 1
+		using flags_t = create_flags_t;
+#endif
+
+#if TORRENT_ABI_VERSION <= 2
 		// This will insert pad files to align the files to piece boundaries, for
 		// optimized disk-I/O. This will minimize the number of bytes of pad-
 		// files, to keep the impact down for clients that don't support
 		// them.
-		static constexpr create_flags_t optimize_alignment = 0_bit;
+		// incompatible with v2 metadata, ignored
+		TORRENT_DEPRECATED static inline constexpr create_flags_t optimize_alignment = 0_bit;
+#endif
 #if TORRENT_ABI_VERSION == 1
 		// same as optimize_alignment, for backwards compatibility
-		static constexpr create_flags_t TORRENT_DEPRECATED_MEMBER optimize = 0_bit;
+		TORRENT_DEPRECATED static inline constexpr create_flags_t optimize = 0_bit;
 #endif
 
+#if TORRENT_ABI_VERSION <= 2
 		// This will create a merkle hash tree torrent. A merkle torrent cannot
 		// be opened in clients that don't specifically support merkle torrents.
 		// The benefit is that the resulting torrent file will be much smaller and
@@ -119,7 +143,9 @@ namespace libtorrent {
 		// When creating merkle torrents, the full hash tree is also generated
 		// and should be saved off separately. It is accessed through the
 		// create_torrent::merkle_tree() function.
-		static constexpr create_flags_t merkle = 1_bit;
+		// support for BEP 30 merkle torrents has been removed
+		TORRENT_DEPRECATED static inline constexpr create_flags_t merkle = 1_bit;
+#endif
 
 		// This will include the file modification time as part of the torrent.
 		// This is not enabled by default, as it might cause problems when you
@@ -127,82 +153,159 @@ namespace libtorrent {
 		// yield the same info-hash. If the files have different modification times,
 		// with this option enabled, you would get different info-hashes for the
 		// files.
-		static constexpr create_flags_t modification_time = 2_bit;
+		static inline constexpr create_flags_t modification_time = 2_bit;
 
 		// If this flag is set, files that are symlinks get a symlink attribute
 		// set on them and their data will not be included in the torrent. This
 		// is useful if you need to reconstruct a file hierarchy which contains
 		// symlinks.
-		static constexpr create_flags_t symlinks = 3_bit;
+		static inline constexpr create_flags_t symlinks = 3_bit;
 
 		// to create a torrent that can be updated via a *mutable torrent*
 		// (see `BEP 38`_). This also needs to be enabled for torrents that update
 		// another torrent.
-		//
-		// .. _`BEP 38`: http://www.bittorrent.org/beps/bep_0038.html
-		static constexpr create_flags_t mutable_torrent_support = 4_bit;
+#if TORRENT_ABI_VERSION <= 2
+		// BEP 52 requires files to be piece aligned so all torrents are now compatible
+		// with BEP 38
+		TORRENT_DEPRECATED static inline constexpr create_flags_t mutable_torrent_support = 4_bit;
+#endif
 
-		// The ``piece_size`` is the size of each piece in bytes. It must
-		// be a multiple of 16 kiB. If a piece size of 0 is specified, a
-		// piece_size will be calculated such that the torrent file is roughly 40 kB.
+		// Do not generate v1 metadata. The resulting torrent will only be usable by
+		// clients which support v2. This requires setting all v2 hashes, with
+		// set_hash2() before calling generate(). Setting v1 hashes (with
+		// set_hash()) is an error with this flag set.
+		static inline constexpr create_flags_t v2_only = 5_bit;
+
+		// do not generate v2 metadata or enforce v2 alignment and padding rules
+		// this is mainly for tests, not recommended for production use. This
+		// requires setting all v1 hashes, with set_hash(), before calling
+		// generate(). Setting v2 hashes (with set_hash2()) is an error with
+		// this flag set.
+		static inline constexpr create_flags_t v1_only = 6_bit;
+
+		// This flag only affects v1-only torrents, and is only relevant
+		// together with the v1_only_flag. This flag will force the
+		// same file order and padding as a v2 (or hybrid) torrent would have.
+		// It has the effect of ordering files and inserting pad files to align
+		// them with piece boundaries.
+		static inline constexpr create_flags_t canonical_files = 7_bit;
+
+		// passing this flag to list_files() will ignore file attributes (such as
+		// executable or hidden) when adding the files to the file storage.
+		// Since not all filesystems and operating systems support all file
+		// attributes the resulting torrent may differ depending on where it's
+		// created. If it's important for torrents to be created consistently
+		// across systems, this flag should be set.
+		static inline constexpr create_flags_t no_attributes = 8_bit;
+
+		// this flag enforces the file layout to be canonical according to the
+		// bittorrent v2 specification (just like the ``canonical_files`` flag)
+		// with the one exception that tail padding is not added to the last
+		// file.
+		// This behavior deviates from the specification but was the way
+		// libtorrent created torrents in version up to and including 2.0.7.
+		// This flag is here for backwards compatibility.
+		static inline constexpr create_flags_t canonical_files_no_tail_padding = 9_bit;
+
+		// hidden
+		static constexpr create_flags_t allow_odd_piece_size = 31_bit;
+
+		// The ``piece_size`` is the size of each piece in bytes. It must be a
+		// power of 2 and a minimum of 16 kiB. If a piece size of 0 is
+		// specified, a piece_size will be set automatically.
 		//
-		// If a ``pad_file_limit`` is specified (other than -1), any file larger than
-		// the specified number of bytes will be preceded by a pad file to align it
-		// with the start of a piece. The pad_file_limit is ignored unless the
-		// ``optimize_alignment`` flag is passed. Typically it doesn't make sense
-		// to set this any lower than 4 kiB.
+		// The ``flags`` arguments specifies options for the torrent creation. It can
+		// be any combination of the flags defined by create_flags_t.
+		//
+		// The ``files`` argument is a list of all files to be included in the
+		// torrent file. If it has more than one file in it, all files must
+		// share a common root directory (which will be the name of the
+		// torrent).
+		//
+		// If ``files`` has a single file without any directory component (i.e.
+		// just a filename) it will create a single file torrent. If it has a
+		// directory path, it will create a multi-file torrent with a single
+		// file. This is in order to preserve the directory path.
+		//
+		// deprecated overloads
+		// ....................
+		//
+		// There are two deprecated constructors that take a file_storage object
+		// and a torrent_info object respectively.
+		//
+		// The file_storage (``fs``) parameter defines the files, sizes and
+		// their properties for the torrent to be created. Set this up first,
+		// before passing it to the create_torrent constructor. Instead of using
+		// this overload, consider using the overload taking a vector of
+		// create_file_entry objects instead. It is more efficient.
 		//
 		// The overload that takes a ``torrent_info`` object will make a verbatim
 		// copy of its info dictionary (to preserve the info-hash). The copy of
 		// the info dictionary will be used by create_torrent::generate(). This means
 		// that none of the member functions of create_torrent that affects
-		// the content of the info dictionary (such as ``set_hash()``), will
-		// have any affect.
+		// the content of the info dictionary (such as set_hash()), will
+		// have any affect. Instead of using this overload, consider using
+		// write_torrent_file() instead.
 		//
-		// The ``flags`` arguments specifies options for the torrent creation. It can
-		// be any combination of the flags defined by create_torrent::flags_t.
+		// .. warning::
+		// 	The file_storage and torrent_info objects must stay alive for the
+		// 	entire duration of the create_torrent object.
 		//
-		// ``alignment`` is used when pad files are enabled. This is the size
-		// eligible files are aligned to. The default is -1, which means the
-		// piece size of the torrent.
+		explicit create_torrent(std::vector<create_file_entry> files, int piece_size = 0
+			, create_flags_t flags = {});
+#if TORRENT_ABI_VERSION < 4
+		TORRENT_DEPRECATED
 		explicit create_torrent(file_storage& fs, int piece_size = 0
-			, int pad_file_limit = -1, create_flags_t flags = optimize_alignment
-			, int alignment = -1);
+			, create_flags_t flags = {});
+		TORRENT_DEPRECATED
 		explicit create_torrent(torrent_info const& ti);
+#endif
+
+#if TORRENT_ABI_VERSION <= 2
+		TORRENT_DEPRECATED
+		explicit create_torrent(file_storage& fs, int piece_size
+			, int, create_flags_t flags = {}, int = -1);
+#endif
 
 		// internal
 		~create_torrent();
 
-		// This function will generate the .torrent file as a bencode tree. In order to
-		// generate the flat file, use the bencode() function.
+		// This function will generate the .torrent file as a bencode tree, or a
+		// bencoded into a buffer.
+		// In order to encode the entry into a flat file, use the bencode() function.
 		//
-		// It may be useful to add custom entries to the torrent file before bencoding it
-		// and saving it to disk.
+		// The function returning an entry may be useful to add custom entries
+		// to the torrent file before bencoding it and saving it to disk.
 		//
-		// If anything goes wrong during torrent generation, this function will return
-		// an empty ``entry`` structure. You can test for this condition by querying the
-		// type of the entry:
+		// Whether the resulting torrent object is v1, v2 or hybrid depends on
+		// whether any of the v1_only or v2_only flags were set on the
+		// constructor. If neither were set, the resulting torrent depends on
+		// which hashes were set. If both v1 and v2 hashes were set, a hybrid
+		// torrent is created.
 		//
-		// .. code:: c++
+		// Any failure will cause this function to throw system_error, with an
+		// appropriate error message. These are the reasons this call may throw:
 		//
-		//	file_storage fs;
-		//	// add file ...
-		//	create_torrent t(fs);
-		//	// add trackers and piece hashes ...
-		//	e = t.generate();
-		//
-		//	if (e.type() == entry::undefined_t)
-		//	{
-		//		// something went wrong
-		//	}
-		//
-		// For instance, you cannot generate a torrent with 0 files in it. If you don't add
-		// any files to the ``file_storage``, torrent generation will fail.
+		// * the file storage has 0 files
+		// * the total size of the file storage is 0 bytes (i.e. it only has
+		//   empty files)
+		// * not all v1 hashes (set_hash()) and not all v2 hashes (set_hash2())
+		//   were set
+		// * for v2 torrents, you may not have a directory with the same name as
+		//   a file. If that's encountered in the file storage, generate()
+		//   fails.
 		entry generate() const;
+		std::vector<char> generate_buf() const;
 
+#if TORRENT_ABI_VERSION < 4
 		// returns an immutable reference to the file_storage used to create
 		// the torrent from.
-		file_storage const& files() const { return m_files; }
+		TORRENT_DEPRECATED
+		file_storage const& files() const;
+#endif
+
+		// internal
+		aux::vector<create_file_entry, file_index_t> const& file_list() const { return m_files; }
 
 		// Sets the comment for the torrent. The string ``str`` should be utf-8 encoded.
 		// The comment in a torrent file is optional.
@@ -212,26 +315,59 @@ namespace libtorrent {
 		// This is optional.
 		void set_creator(char const* str);
 
+		// sets the "creation time" field. Defaults to the system clock at the
+		// time of construction of the create_torrent object. The timestamp is
+		// specified in seconds, posix time. If the creation date is set to 0,
+		// the "creation date" field will be omitted from the generated torrent.
+		void set_creation_date(std::time_t timestamp);
+
 		// This sets the SHA-1 hash for the specified piece (``index``). You are required
 		// to set the hash for every piece in the torrent before generating it. If you have
 		// the files on disk, you can use the high level convenience function to do this.
 		// See set_piece_hashes().
+		// A SHA-1 hash of all zeros is internally used to indicate a hash that
+		// has not been set. Setting such hash will not be considered set when
+		// calling generate().
+		// This function will throw ``std::system_error`` if it is called on an
+		// object constructed with the v2_only flag.
 		void set_hash(piece_index_t index, sha1_hash const& h);
 
+		// sets the bittorrent v2 hash for file `file` of the piece `piece`.
+		// `piece` is relative to the first piece of the file, starting at 0. The
+		// first piece in the file can be computed with
+		// file_storage::file_index_at_piece().
+		// The hash, `h`, is the root of the merkle tree formed by the piece's
+		// 16 kiB blocks. Note that piece sizes must be powers-of-2, so all
+		// per-piece merkle trees are complete.
+		// A SHA-256 hash of all zeros is internally used to indicate a hash
+		// that has not been set. Setting such hash will not be considered set
+		// when calling generate().
+		// This function will throw ``std::system_error`` if it is called on an
+		// object constructed with the v1_only flag.
+		void set_hash2(file_index_t file, piece_index_t::diff_type piece, sha256_hash const& h);
+
+#if TORRENT_ABI_VERSION < 3
 		// This sets the sha1 hash for this file. This hash will end up under the key ``sha1``
 		// associated with this file (for multi-file torrents) or in the root info dictionary
 		// for single-file torrents.
+		// .. note::
+		//
+		// 	with bittorrent v2, this feature is obsolete
+		TORRENT_DEPRECATED
 		void set_file_hash(file_index_t index, sha1_hash const& h);
+#endif
 
 		// This adds a url seed to the torrent. You can have any number of url seeds. For a
 		// single file torrent, this should be an HTTP url, pointing to a file with identical
 		// content as the file of the torrent. For a multi-file torrent, it should point to
 		// a directory containing a directory with the same name as this torrent, and all the
 		// files of the torrent in it.
-		//
-		// The second function, ``add_http_seed()`` adds an HTTP seed instead.
 		void add_url_seed(string_view url);
+
+#if TORRENT_ABI_VERSION < 4
+		TORRENT_DEPRECATED
 		void add_http_seed(string_view url);
+#endif
 
 		// This adds a DHT node to the torrent. This especially useful if you're creating a
 		// tracker less torrent. It can be used by clients to bootstrap their DHT node from.
@@ -254,7 +390,7 @@ namespace libtorrent {
 		//
 		// The string is not the path to the cert, it's the actual content of the
 		// certificate.
-		void set_root_cert(string_view pem);
+		void set_root_cert(string_view cert);
 
 		// Sets and queries the private flag of the torrent.
 		// Torrents with the private flag set ask the client to not use any other
@@ -263,14 +399,54 @@ namespace libtorrent {
 		void set_priv(bool p) { m_private = p; }
 		bool priv() const { return m_private; }
 
+		bool is_v2_only() const { return m_v2_only; }
+		bool is_v1_only() const { return m_v1_only; }
+
 		// returns the number of pieces in the associated file_storage object.
-		int num_pieces() const { return m_files.num_pieces(); }
+		int num_pieces() const { return m_num_pieces; }
+
+		// one past-the-end piece index
+		piece_index_t end_piece() const { return piece_index_t(m_num_pieces); }
+
+		// all piece indices in the torrent to be created
+		index_range<piece_index_t> piece_range() const noexcept
+		{ return {piece_index_t{0}, end_piece()}; }
+
+		file_index_t end_file() const { return file_index_t{int(m_files.size())}; }
+
+		// all file indices in the torrent to be created
+		index_range<file_index_t> file_range() const noexcept
+		{ return {file_index_t{0}, end_file()}; }
+
+		// returns a reference to the create_file_entry at the given file index.
+		// Note that this is not necessarily the same entries passed into the
+		// constructor, since the layout may have been canonicalized. e.g. file
+		// order and padding may have changed.
+		create_file_entry const& file_at(file_index_t f) const
+		{ return m_files[f]; }
+
+		// for v2 and hybrid torrents only, the pieces in the
+		// specified file, specified as delta from the first piece in the file.
+		// i.e. the first index is 0.
+		index_range<piece_index_t::diff_type> file_piece_range(file_index_t f)
+		{
+			TORRENT_ASSERT_PRECOND(f >= file_index_t{0});
+			TORRENT_ASSERT_PRECOND(f < m_files.end_index());
+			using t = piece_index_t::diff_type;
+			return {t{0}, t{int((m_files[f].size + m_piece_length - 1) / m_piece_length)}};
+		}
+
+		// the total number of bytes of all files and pad files
+		std::int64_t total_size() const { return m_total_size; }
 
 		// ``piece_length()`` returns the piece size of all pieces but the
 		// last one. ``piece_size()`` returns the size of the specified piece.
 		// these functions are just forwarding to the associated file_storage.
-		int piece_length() const { return m_files.piece_length(); }
-		int piece_size(piece_index_t i) const { return m_files.piece_size(i); }
+		int piece_length() const { return m_piece_length; }
+		int piece_size(piece_index_t i) const;
+
+#if TORRENT_ABI_VERSION <= 2
+		// support for BEP 30 merkle torrents has been removed
 
 		// This function returns the merkle hash tree, if the torrent was created as a merkle
 		// torrent. The tree is created by ``generate()`` and won't be valid until that function
@@ -278,7 +454,9 @@ namespace libtorrent {
 		// be saved off separately and fed into libtorrent the first time you start seeding it,
 		// through the ``torrent_info::set_merkle_tree()`` function. From that point onwards, the
 		// tree will be saved in the resume data.
-		std::vector<sha1_hash> const& merkle_tree() const { return m_merkle_tree; }
+		TORRENT_DEPRECATED
+		std::vector<sha1_hash> merkle_tree() const { return std::vector<sha1_hash>(); }
+#endif
 
 		// Add similar torrents (by info-hash) or collections of similar torrents.
 		// Similar torrents are expected to share some files with this torrent.
@@ -286,36 +464,50 @@ namespace libtorrent {
 		// to share files with this torrent. A torrent may have more than one
 		// collection and more than one similar torrents. For more information,
 		// see `BEP 38`_.
-		//
-		// .. _`BEP 38`: http://www.bittorrent.org/beps/bep_0038.html
 		void add_similar_torrent(sha1_hash ih);
 		void add_collection(string_view c);
 
 	private:
 
-		file_storage& m_files;
+		aux::vector<create_file_entry, file_index_t> m_files;
+
+		std::int64_t m_total_size;
+
+		int m_piece_length;
+
+		int m_num_pieces;
+
+		std::string m_name;
+
+#if TORRENT_ABI_VERSION < 4
 		// if m_info_dict is initialized, it is
 		// used instead of m_files to generate
 		// the info dictionary
 		entry m_info_dict;
+#endif
 
 		// the URLs to the trackers
 		std::vector<std::pair<std::string, int>> m_urls;
 
 		std::vector<std::string> m_url_seeds;
-		std::vector<std::string> m_http_seeds;
 
 		aux::vector<sha1_hash, piece_index_t> m_piece_hash;
 
+#if TORRENT_ABI_VERSION < 4
+		// leave this here for now, to preserve ABI between building with
+		// deprecated functions and without
 		aux::vector<sha1_hash, file_index_t> m_filehashes;
+
+		// this is here to support the (deprecated) API of asking the
+		// create_torrent object for the file storage.
+		// it's create on demand, that's why it's mutable
+		mutable std::optional<file_storage> m_file_storage_compat;
+#endif
+
+		aux::vector<aux::vector<sha256_hash, piece_index_t::diff_type>, file_index_t> m_file_piece_hash;
 
 		std::vector<sha1_hash> m_similar;
 		std::vector<std::string> m_collections;
-
-		// if we're generating a merkle torrent, this is the
-		// merkle tree we got. This should be saved in fast-resume
-		// in order to start seeding the torrent
-		mutable aux::vector<sha1_hash> m_merkle_tree;
 
 		// dht nodes to add to the routing table/bootstrap from
 		std::vector<std::pair<std::string, int>> m_nodes;
@@ -347,9 +539,6 @@ namespace libtorrent {
 		// advertise itself on the DHT for this torrent
 		bool m_private:1;
 
-		// if set to one, a merkle torrent will be generated
-		bool m_merkle_torrent:1;
-
 		// if set, include the 'mtime' modification time in the
 		// torrent file
 		bool m_include_mtime:1;
@@ -358,9 +547,16 @@ namespace libtorrent {
 		// the torrent file. The full data of the pointed-to
 		// file is still included
 		bool m_include_symlinks:1;
+
+		bool m_v2_only:1;
+
+		// only generate v1 metadata and do not enforce v2 padding rules
+		bool m_v1_only:1;
 	};
 
-namespace detail {
+TORRENT_VERSION_NAMESPACE_4_END
+
+namespace aux {
 	inline void nop(piece_index_t) {}
 }
 
@@ -369,7 +565,9 @@ namespace detail {
 	//
 	// If specified, the predicate ``p`` is called once for every file and directory that
 	// is encountered. Files for which ``p`` returns true are added, and directories for
-	// which ``p`` returns true are traversed. ``p`` must have the following signature::
+	// which ``p`` returns true are traversed. ``p`` must have the following signature:
+	//
+	// .. code:: c++
 	//
 	// 	bool Pred(std::string const& p);
 	//
@@ -381,93 +579,77 @@ namespace detail {
 	//
 	// The ``flags`` argument should be the same as the flags passed to the `create_torrent`_
 	// constructor.
+	TORRENT_EXPORT std::vector<create_file_entry> list_files(std::string const& file
+		, std::function<bool(std::string)> p, create_flags_t flags = {});
+	TORRENT_EXPORT std::vector<create_file_entry> list_files(std::string const& file
+		, create_flags_t flags = {});
+
+#if TORRENT_ABI_VERSION < 4
+	TORRENT_DEPRECATED
 	TORRENT_EXPORT void add_files(file_storage& fs, std::string const& file
 		, std::function<bool(std::string)> p, create_flags_t flags = {});
+	TORRENT_DEPRECATED
 	TORRENT_EXPORT void add_files(file_storage& fs, std::string const& file
 		, create_flags_t flags = {});
+#endif
 
 	// This function will assume that the files added to the torrent file exists at path
 	// ``p``, read those files and hash the content and set the hashes in the ``create_torrent``
 	// object. The optional function ``f`` is called in between every hash that is set. ``f``
-	// must have the following signature::
+	// must have the following signature:
+	//
+	// .. code:: c++
 	//
 	// 	void Fun(piece_index_t);
+	//
+	// The overloads taking a settings_pack may be used to configure the
+	// underlying disk access. Such as ``settings_pack::aio_threads``.
 	//
 	// The overloads that don't take an ``error_code&`` may throw an exception in case of a
 	// file error, the other overloads sets the error code to reflect the error, if any.
 	TORRENT_EXPORT void set_piece_hashes(create_torrent& t, std::string const& p
 		, std::function<void(piece_index_t)> const& f, error_code& ec);
+	TORRENT_EXPORT void set_piece_hashes(create_torrent& t, std::string const& p
+		, settings_pack const& settings
+		, std::function<void(piece_index_t)> const& f, error_code& ec);
+	TORRENT_EXPORT void set_piece_hashes(create_torrent& t, std::string const& p
+		, settings_pack const& settings, disk_io_constructor_type disk_io
+		, std::function<void(piece_index_t)> const& f, error_code& ec);
 	inline void set_piece_hashes(create_torrent& t, std::string const& p, error_code& ec)
 	{
-		set_piece_hashes(t, p, detail::nop, ec);
+		set_piece_hashes(t, p, aux::nop, ec);
 	}
 #ifndef BOOST_NO_EXCEPTIONS
 	inline void set_piece_hashes(create_torrent& t, std::string const& p)
 	{
 		error_code ec;
-		set_piece_hashes(t, p, detail::nop, ec);
-		if (ec) throw system_error(ec);
+		set_piece_hashes(t, p, aux::nop, ec);
+		if (ec) aux::throw_ex<system_error>(ec);
 	}
 	inline void set_piece_hashes(create_torrent& t, std::string const& p
 		, std::function<void(piece_index_t)> const& f)
 	{
 		error_code ec;
 		set_piece_hashes(t, p, f, ec);
-		if (ec) throw system_error(ec);
+		if (ec) aux::throw_ex<system_error>(ec);
 	}
-#endif
-
-	// all wstring APIs are deprecated since 0.16.11
-	// instead, use the wchar -> utf8 conversion functions
-	// and pass in utf8 strings
-#if TORRENT_ABI_VERSION == 1
-
-	TORRENT_DEPRECATED_EXPORT
-	void add_files(file_storage& fs, std::wstring const& wfile
-		, std::function<bool(std::string)> p, create_flags_t flags = {});
-
-	TORRENT_DEPRECATED_EXPORT
-	void add_files(file_storage& fs, std::wstring const& wfile
-		, create_flags_t flags = {});
-
-	TORRENT_DEPRECATED_EXPORT
-	void set_piece_hashes(create_torrent& t, std::wstring const& p
-		, std::function<void(int)> f, error_code& ec);
-
-	TORRENT_EXPORT void set_piece_hashes_deprecated(create_torrent& t
-		, std::wstring const& p
-		, std::function<void(int)> f, error_code& ec);
-
-#ifndef BOOST_NO_EXCEPTIONS
-	TORRENT_DEPRECATED
-	inline void set_piece_hashes(create_torrent& t, std::wstring const& p
-		, std::function<void(int)> f)
+	inline void set_piece_hashes(create_torrent& t, std::string const& p
+		, settings_pack const& settings
+		, std::function<void(piece_index_t)> const& f)
 	{
 		error_code ec;
-		set_piece_hashes_deprecated(t, p, f, ec);
-		if (ec) throw system_error(ec);
-	}
-
-	TORRENT_DEPRECATED
-	inline void set_piece_hashes(create_torrent& t, std::wstring const& p)
-	{
-		error_code ec;
-		set_piece_hashes_deprecated(t, p, detail::nop, ec);
-		if (ec) throw system_error(ec);
+		set_piece_hashes(t, p, settings, f, ec);
+		if (ec) aux::throw_ex<system_error>(ec);
 	}
 #endif
-
-	TORRENT_DEPRECATED
-	inline void set_piece_hashes(create_torrent& t
-		, std::wstring const& p, error_code& ec)
-	{
-		set_piece_hashes_deprecated(t, p, detail::nop, ec);
-	}
-#endif // TORRENT_ABI_VERSION
 
 namespace aux {
-	TORRENT_EXTRA_EXPORT file_flags_t get_file_attributes(std::string const& p);
 	TORRENT_EXTRA_EXPORT std::string get_symlink_path(std::string const& p);
+
+	TORRENT_EXTRA_EXPORT
+	std::tuple<aux::vector<create_file_entry, file_index_t>, std::int64_t>
+	canonicalize(aux::vector<create_file_entry, file_index_t> files, int piece_length
+		, bool backwards_compatible);
 }
 
 }

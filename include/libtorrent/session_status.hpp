@@ -1,39 +1,20 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg
+Copyright (c) 2006, 2008-2011, 2013-2020, 2022, Arvid Norberg
+Copyright (c) 2016, Alden Torres
+Copyright (c) 2017, Falco
+Copyright (c) 2017, Falcosc
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_SESSION_STATUS_HPP_INCLUDED
 #define TORRENT_SESSION_STATUS_HPP_INCLUDED
 
 #include "libtorrent/config.hpp"
+#include "libtorrent/aux_/export.hpp"
 #include <vector>
 
 #if TORRENT_ABI_VERSION == 1
@@ -47,7 +28,7 @@ namespace libtorrent {
 	// holds counters and gauges for the uTP sockets
 	// deprecated in 1.1 in favor of session_stats counters, which is a more
 	// flexible, extensible and performant mechanism for stats.
-	struct TORRENT_EXPORT utp_status
+	struct TORRENT_DEPRECATED_EXPORT utp_status
 	{
 		// gauges. These are snapshots of the number of
 		// uTP sockets in each respective state
@@ -76,7 +57,7 @@ namespace libtorrent {
 	// contains session wide state and counters
 	// deprecated in 1.1 in favor of session_stats counters, which is a more
 	// flexible, extensible and performant mechanism for stats.
-	struct TORRENT_EXPORT session_status
+	struct TORRENT_DEPRECATED_EXPORT session_status
 	{
 		// false as long as no incoming connections have been
 		// established on the listening socket. Every time you change the listen port, this will
@@ -212,8 +193,12 @@ namespace libtorrent {
 		// by the DHT.
 		int dht_total_allocations;
 
+#include "libtorrent/aux_/disable_warnings_push.hpp"
+
 		// statistics on the uTP sockets.
 		utp_status utp_stats;
+
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
 
 		// the number of known peers across all torrents. These are not necessarily
 		// connected peers, just peers we know of.
@@ -228,4 +213,3 @@ namespace libtorrent {
 #endif // TORRENT_ABI_VERSION
 
 #endif // TORRENT_SESSION_STATUS_HPP_INCLUDED
-

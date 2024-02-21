@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2007-2018, Arvid Norberg
+Copyright (c) 2007-2012, 2014-2022, Arvid Norberg
+Copyright (c) 2016-2017, 2020-2021, Alden Torres
+Copyright (c) 2016, Pavel Pimenov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include <cstdlib>
@@ -35,18 +14,24 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <functional>
 #include <cstdio> // for vsnprintf
 
-#include "libtorrent/lsd.hpp"
+#include "libtorrent/aux_/lsd.hpp"
 #include "libtorrent/time.hpp"
-#include "libtorrent/random.hpp"
-#include "libtorrent/http_parser.hpp"
-#include "libtorrent/socket_io.hpp" // for print_address
-#include "libtorrent/debug.hpp"
+#include "libtorrent/aux_/random.hpp"
+#include "libtorrent/aux_/http_parser.hpp"
+#include "libtorrent/aux_/socket_io.hpp" // for print_address
+#include "libtorrent/aux_/debug.hpp"
 #include "libtorrent/hex.hpp" // to_hex, from_hex
 #include "libtorrent/aux_/numeric_cast.hpp"
+#include "libtorrent/aux_/enum_net.hpp"
+#include "libtorrent/aux_/scope_end.hpp"
+
+#include "libtorrent/aux_/disable_warnings_push.hpp"
+#include <boost/asio/ip/multicast.hpp>
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
 
 using namespace std::placeholders;
 
-namespace libtorrent {
+namespace libtorrent::aux {
 
 namespace {
 
@@ -64,16 +49,14 @@ int render_lsd_packet(char* dst, int const len, int const listen_port
 }
 } // anonymous namespace
 
-static error_code dummy;
-
-lsd::lsd(io_context& ios, aux::lsd_callback& cb)
+lsd::lsd(io_context& ios, aux::lsd_callback& cb
+	, address const listen_address, address const netmask)
 	: m_callback(cb)
-	, m_socket(udp::endpoint(make_address_v4("239.192.152.143", dummy), 6771))
-	, m_socket6(udp::endpoint(make_address_v6("ff15::efc0:988f", dummy), 6771))
+	, m_listen_address(listen_address)
+	, m_netmask(netmask)
+	, m_socket(ios)
 	, m_broadcast_timer(ios)
-	, m_cookie((random(0x7fffffff) ^ std::uintptr_t(this)) & 0x7fffffff)
-	, m_disabled(false)
-	, m_disabled6(false)
+	, m_cookie((aux::random(0x7fffffff) ^ std::uintptr_t(this)) & 0x7fffffff)
 {
 }
 
@@ -97,40 +80,78 @@ void lsd::debug_log(char const* fmt, ...) const
 }
 #endif
 
+namespace {
+	address_v4 const lsd_multicast_addr4 = make_address_v4("239.192.152.143");
+	address_v6 const lsd_multicast_addr6 = make_address_v6("ff15::efc0:988f");
+	int const lsd_port = 6771;
+}
+
 void lsd::start(error_code& ec)
 {
-	m_socket.open(std::bind(&lsd::on_announce, self(), _1, _2)
-		, m_broadcast_timer.get_executor().context(), ec);
+	using namespace boost::asio::ip::multicast;
+	bool const v4 = m_listen_address.is_v4();
+	m_socket.open(v4 ? udp::v4() : udp::v6(), ec);
 	if (ec) return;
 
-	m_socket6.open(std::bind(&lsd::on_announce, self(), _1, _2)
-		, m_broadcast_timer.get_executor().context(), ec);
+	m_socket.set_option(udp::socket::reuse_address(true), ec);
+	if (ec) return;
+
+	m_socket.bind(udp::endpoint(v4 ? address(address_v4::any()) : address(address_v6::any()), lsd_port), ec);
+	if (ec) return;
+	if (v4)
+		m_socket.set_option(join_group(lsd_multicast_addr4, m_listen_address.to_v4()), ec);
+	else
+		m_socket.set_option(join_group(lsd_multicast_addr6, m_listen_address.to_v6().scope_id()), ec);
+	if (ec) return;
+	m_socket.set_option(hops(32), ec);
+	if (ec) return;
+	m_socket.set_option(enable_loopback(true), ec);
+	if (ec) return;
+	if (v4)
+	{
+		m_socket.set_option(outbound_interface(m_listen_address.to_v4()), ec);
+		if (ec) return;
+	}
+
+	ADD_OUTSTANDING_ASYNC("lsd::on_announce");
+	m_socket.async_receive_from(boost::asio::buffer(m_buffer), m_remote
+		, std::bind(&lsd::on_announce, self(), _1, _2));
 }
 
 lsd::~lsd() = default;
 
-void lsd::announce(sha1_hash const& ih, int listen_port, bool broadcast)
+void lsd::announce(sha1_hash const& ih, int listen_port)
 {
-	announce_impl(ih, listen_port, broadcast, 0);
+	announce_impl(ih, listen_port, 0);
 }
 
 void lsd::announce_impl(sha1_hash const& ih, int const listen_port
-	, bool const broadcast, int retry_count)
+	, int retry_count)
 {
-	if (m_disabled && m_disabled6) return;
+	if (m_disabled) return;
 
 	char msg[200];
-
-#ifndef TORRENT_DISABLE_LOGGING
-	debug_log("==> LSD: ih: %s port: %u\n", aux::to_hex(ih).c_str(), listen_port);
-#endif
 
 	error_code ec;
 	if (!m_disabled)
 	{
+		bool const v4 = m_listen_address.is_v4();
+		char const* v4_address = "239.192.152.143";
+		char const* v6_address = "[ff15::efc0:988f]";
+
 		int const msg_len = render_lsd_packet(msg, sizeof(msg), listen_port, aux::to_hex(ih).c_str()
-			, m_cookie, "239.192.152.143");
-		m_socket.send(msg, msg_len, ec, broadcast ? broadcast_socket::flag_broadcast : 0);
+			, m_cookie, v4 ? v4_address : v6_address);
+
+		udp::endpoint const to(v4 ? address(lsd_multicast_addr4) : address(lsd_multicast_addr6)
+			, lsd_port);
+
+#ifndef TORRENT_DISABLE_LOGGING
+		debug_log("==> LSD: ih: %s port: %u [iface: %s]", aux::to_hex(ih).c_str()
+			, listen_port, m_listen_address.to_string().c_str());
+#endif
+
+		m_socket.send_to(boost::asio::buffer(msg, static_cast<std::size_t>(msg_len))
+			, to, {}, ec);
 		if (ec)
 		{
 			m_disabled = true;
@@ -144,28 +165,10 @@ void lsd::announce_impl(sha1_hash const& ih, int const listen_port
 		}
 	}
 
-	if (!m_disabled6)
-	{
-		int const msg_len = render_lsd_packet(msg, sizeof(msg), listen_port, aux::to_hex(ih).c_str()
-			, m_cookie, "[ff15::efc0:988f]");
-		m_socket6.send(msg, msg_len, ec, broadcast ? broadcast_socket::flag_broadcast : 0);
-		if (ec)
-		{
-			m_disabled6 = true;
-#ifndef TORRENT_DISABLE_LOGGING
-			if (should_log())
-			{
-				debug_log("*** LSD: failed to send message6: (%d) %s", ec.value()
-					, ec.message().c_str());
-			}
-#endif
-		}
-	}
-
 	++retry_count;
 	if (retry_count >= 3) return;
 
-	if (m_disabled && m_disabled6) return;
+	if (m_disabled) return;
 
 	ADD_OUTSTANDING_ASYNC("lsd::resend_announce");
 	m_broadcast_timer.expires_after(seconds(2 * retry_count));
@@ -179,15 +182,44 @@ void lsd::resend_announce(error_code const& e, sha1_hash const& info_hash
 	COMPLETE_ASYNC("lsd::resend_announce");
 	if (e) return;
 
-	announce_impl(info_hash, listen_port, false, retry_count);
+	announce_impl(info_hash, listen_port, retry_count);
 }
 
-void lsd::on_announce(udp::endpoint const& from, span<char const> buf)
+void lsd::on_announce(error_code const& ec, std::size_t len)
 {
-	http_parser p;
+	COMPLETE_ASYNC("lsd::on_announce");
+	if (ec)
+	{
+#ifndef TORRENT_DISABLE_LOGGING
+		debug_log("<== LSD: receive error: %s", ec.message().c_str());
+#endif
+		return;
+	}
+
+	udp::endpoint const from = m_remote;
+
+	// reissue the async receive as we exit the function. We can't do this
+	// earlier because we still need to use m_buffer
+	auto reissue_receive = aux::scope_end([&] {
+		ADD_OUTSTANDING_ASYNC("lsd::on_announce");
+		m_socket.async_receive_from(boost::asio::buffer(m_buffer), m_remote
+			, std::bind(&lsd::on_announce, self(), _1, _2));
+	});
+
+	if (!aux::match_addr_mask(from.address(), m_listen_address, m_netmask))
+	{
+		// we don't care about this network. Ignore this packet
+#ifndef TORRENT_DISABLE_LOGGING
+		debug_log("<== LSD: receive from out of network: %s"
+			, from.address().to_string().c_str());
+#endif
+		return;
+	}
+
+	aux::http_parser p;
 
 	bool error = false;
-	p.incoming(buf, error);
+	p.incoming(span<char const>{m_buffer.data(), std::ptrdiff_t(len)}, error);
 
 	if (!p.header_finished() || error)
 	{
@@ -263,7 +295,7 @@ void lsd::on_announce(udp::endpoint const& from, span<char const> buf)
 			if (should_log())
 			{
 				debug_log("<== LSD: %s:%d ih: %s"
-					, print_address(from.address()).c_str()
+					, aux::print_address(from.address()).c_str()
 					, int(port), ih_str.c_str());
 			}
 #endif
@@ -275,11 +307,10 @@ void lsd::on_announce(udp::endpoint const& from, span<char const> buf)
 
 void lsd::close()
 {
-	m_socket.close();
-	m_socket6.close();
+	error_code ec;
+	m_socket.close(ec);
 	m_broadcast_timer.cancel();
 	m_disabled = true;
-	m_disabled6 = true;
 }
 
-} // libtorrent namespace
+} // libtorrent::aux namespace

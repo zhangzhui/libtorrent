@@ -1,36 +1,17 @@
 /*
 
-Copyright (c) 2017, Arvid Norberg
+Copyright (c) 2017-2022, Arvid Norberg
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2018, Alden Torres
+Copyright (c) 2018, d-komarov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session.hpp"
+#include "libtorrent/session_params.hpp"
 #include "libtorrent/torrent_handle.hpp"
 #include "libtorrent/torrent_status.hpp"
 #include "libtorrent/session_settings.hpp"
@@ -39,6 +20,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/aux_/path.hpp"
 
 #include "test.hpp"
+#include "test_utils.hpp"
 #include "setup_transfer.hpp"
 #include "settings.hpp"
 #include <fstream>
@@ -54,7 +36,8 @@ namespace {
 enum test_case {
 	complete_download,
 	partial_download,
-	mid_download
+	mid_download,
+	double_remove,
 };
 
 void test_remove_torrent(remove_flags_t const remove_options
@@ -64,10 +47,10 @@ void test_remove_torrent(remove_flags_t const remove_options
 	std::vector<session_proxy> sp;
 	settings_pack pack = settings();
 
-	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:48075");
+	pack.set_str(settings_pack::listen_interfaces, test_listen_interface());
 	lt::session ses1(pack);
 
-	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:49075");
+	pack.set_str(settings_pack::listen_interfaces, test_listen_interface());
 	lt::session ses2(pack);
 
 	torrent_handle tor1;
@@ -81,7 +64,7 @@ void test_remove_torrent(remove_flags_t const remove_options
 	create_directory("tmp1_remove", ec);
 	std::ofstream file("tmp1_remove/temporary");
 	std::shared_ptr<torrent_info> t = ::create_torrent(&file, "temporary"
-		, 16 * 1024, num_pieces, false);
+		, 8 * 1024, num_pieces, false, create_torrent::v1_only);
 	file.close();
 
 	wait_for_listen(ses1, "ses1");
@@ -89,7 +72,8 @@ void test_remove_torrent(remove_flags_t const remove_options
 
 	// test using piece sizes smaller than 16kB
 	std::tie(tor1, tor2, ignore) = setup_transfer(&ses1, &ses2, nullptr
-		, true, false, true, "_remove", 8 * 1024, &t, false, nullptr);
+		, true, false, true, "_remove", 8 * 1024, &t, false, nullptr, true, false, nullptr
+		, create_torrent::v1_only);
 
 	if (test == partial_download)
 	{
@@ -113,9 +97,11 @@ void test_remove_torrent(remove_flags_t const remove_options
 		print_alerts(ses2, "ses2", true, true);
 
 		st1 = tor1.status();
+		std::cout << "st1.total_payload_upload: " << st1.total_payload_upload << '\n';
+		std::cout << "st2.num_pieces: " << st2.num_pieces << '\n';
 		st2 = tor2.status();
 
-		if (test == mid_download && st2.num_pieces > num_pieces / 2)
+		if (test == mid_download && st2.num_pieces > 1)
 		{
 			TEST_CHECK(st2.is_finished == false);
 			break;
@@ -128,8 +114,8 @@ void test_remove_torrent(remove_flags_t const remove_options
 		TEST_CHECK(st2.state == torrent_status::downloading
 			|| st2.state == torrent_status::checking_resume_data);
 
-		// if nothing is being transferred after 3 seconds, we're failing the test
-		if (st1.total_payload_upload == 0 && i > 30)
+		// if nothing is being transferred after 4 seconds, we're failing the test
+		if (st1.total_payload_upload == 0 && i > 40)
 		{
 			TEST_ERROR("no transfer");
 			return;
@@ -144,12 +130,18 @@ void test_remove_torrent(remove_flags_t const remove_options
 	ses2.remove_torrent(tor2, remove_options);
 	ses1.remove_torrent(tor1, remove_options);
 
+	if (test == double_remove)
+	{
+		ses2.remove_torrent(tor2, remove_options);
+		ses1.remove_torrent(tor1, remove_options);
+	}
+
 	std::cerr << "removed" << std::endl;
 
 	for (int i = 0; tor2.is_valid() || tor1.is_valid(); ++i)
 	{
 		std::this_thread::sleep_for(lt::milliseconds(100));
-		if (++i > 40)
+		if (++i > 400)
 		{
 			std::cerr << "torrent handle(s) still valid: "
 				<< (tor1.is_valid() ? "tor1 " : "")
@@ -183,6 +175,16 @@ TORRENT_TEST(remove_torrent_and_files)
 	test_remove_torrent(session::delete_files);
 }
 
+TORRENT_TEST(remove_torrent_files_and_partfile)
+{
+	test_remove_torrent(session::delete_files | session::delete_partfile);
+}
+
+TORRENT_TEST(remove_torrent_and_just_partfile)
+{
+	test_remove_torrent(session::delete_partfile);
+}
+
 TORRENT_TEST(remove_torrent_partial)
 {
 	test_remove_torrent({}, partial_download);
@@ -203,4 +205,12 @@ TORRENT_TEST(remove_torrent_and_files_mid_download)
 	test_remove_torrent(session::delete_files, mid_download);
 }
 
+TORRENT_TEST(remove_torrent_twice)
+{
+	test_remove_torrent({}, double_remove);
+}
 
+TORRENT_TEST(remove_torrent_and_files_twice)
+{
+	test_remove_torrent(session::delete_files, double_remove);
+}

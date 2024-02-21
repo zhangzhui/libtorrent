@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2007-2018, Arvid Norberg
+Copyright (c) 2007-2012, 2014-2022, Arvid Norberg
+Copyright (c) 2015, Steven Siloti
+Copyright (c) 2016, 2018, 2020-2021, Alden Torres
+Copyright (c) 2017, Andrei Kurushin
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_DISABLE_EXTENSIONS
@@ -40,19 +20,18 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <functional>
 
 #include "libtorrent/hasher.hpp"
-#include "libtorrent/torrent.hpp"
+#include "libtorrent/aux_/torrent.hpp"
 #include "libtorrent/torrent_handle.hpp"
 #include "libtorrent/extensions.hpp"
 #include "libtorrent/extensions/smart_ban.hpp"
-#include "libtorrent/disk_io_thread.hpp"
 #include "libtorrent/aux_/session_impl.hpp"
-#include "libtorrent/peer_connection.hpp"
+#include "libtorrent/aux_/peer_connection.hpp"
 #include "libtorrent/peer_info.hpp"
-#include "libtorrent/random.hpp"
+#include "libtorrent/aux_/random.hpp"
 #include "libtorrent/operations.hpp" // for operation_t enum
 
 #ifndef TORRENT_DISABLE_LOGGING
-#include "libtorrent/socket_io.hpp"
+#include "libtorrent/aux_/socket_io.hpp"
 #include "libtorrent/hex.hpp" // to_hex
 #endif
 
@@ -60,7 +39,7 @@ using namespace std::placeholders;
 
 namespace libtorrent {
 
-class torrent;
+namespace aux { struct torrent; }
 
 namespace {
 
@@ -69,10 +48,12 @@ namespace {
 		: torrent_plugin
 		, std::enable_shared_from_this<smart_ban_plugin>
 	{
-		explicit smart_ban_plugin(torrent& t)
+		explicit smart_ban_plugin(aux::torrent& t)
 			: m_torrent(t)
-			, m_salt(random(0xffffffff))
 		{}
+
+		// explicitly disallow assignment, to silence msvc warning
+		smart_ban_plugin& operator=(smart_ban_plugin const&) = delete;
 
 		void on_piece_pass(piece_index_t const p) override
 		{
@@ -136,8 +117,8 @@ namespace {
 			// a bunch of read operations on it
 			if (m_torrent.is_aborted()) return;
 
-			std::vector<torrent_peer*> downloaders;
-			m_torrent.picker().get_downloaders(downloaders, p);
+			std::vector<aux::torrent_peer*> const downloaders
+				= m_torrent.picker().get_downloaders(p);
 
 			int size = m_torrent.torrent_file().piece_size(p);
 			peer_request r = {p, 0, std::min(16*1024, size)};
@@ -170,7 +151,7 @@ namespace {
 		// a peer.
 		struct block_entry
 		{
-			torrent_peer* peer;
+			aux::torrent_peer* peer;
 			sha1_hash digest;
 		};
 
@@ -185,14 +166,13 @@ namespace {
 
 			hasher h;
 			h.update({buffer.data(), block_size});
-			h.update(reinterpret_cast<char const*>(&m_salt), sizeof(m_salt));
 
 			auto const range = m_torrent.find_peers(a);
 
 			// there is no peer with this address anymore
 			if (range.first == range.second) return;
 
-			torrent_peer* p = (*range.first);
+			aux::torrent_peer* p = (*range.first);
 			block_entry e = {p, h.final()};
 
 			auto i = m_block_hashes.lower_bound(b);
@@ -222,7 +202,7 @@ namespace {
 							, static_cast<int>(b.piece_index), b.block_index, client
 							, aux::to_hex(i->second.digest).c_str()
 							, aux::to_hex(e.digest).c_str()
-							, print_endpoint(p->ip()).c_str());
+							, aux::print_endpoint(p->ip()).c_str());
 					}
 #endif
 					m_torrent.ban_peer(p);
@@ -250,7 +230,7 @@ namespace {
 					" | digest: %s | ip: %s ]"
 					, static_cast<int>(b.piece_index), b.block_index, client
 					, aux::to_hex(e.digest).c_str()
-					, print_address(p->ip().address()).c_str());
+					, aux::print_address(p->ip().address()).c_str());
 			}
 #endif
 		}
@@ -266,7 +246,6 @@ namespace {
 
 			hasher h;
 			h.update({buffer.data(), block_size});
-			h.update(reinterpret_cast<char const*>(&m_salt), sizeof(m_salt));
 			sha1_hash const ok_digest = h.final();
 
 			if (b.second.digest == ok_digest) return;
@@ -274,7 +253,7 @@ namespace {
 			// find the peer
 			auto range = m_torrent.find_peers(a);
 			if (range.first == range.second) return;
-			torrent_peer* p = nullptr;
+			aux::torrent_peer* p = nullptr;
 			for (; range.first != range.second; ++range.first)
 			{
 				if (b.second.peer != *range.first) continue;
@@ -297,7 +276,7 @@ namespace {
 					, static_cast<int>(b.first.piece_index), b.first.block_index, client
 					, aux::to_hex(ok_digest).c_str()
 					, aux::to_hex(b.second.digest).c_str()
-					, print_address(p->ip().address()).c_str());
+					, aux::print_address(p->ip().address()).c_str());
 			}
 #endif
 			m_torrent.ban_peer(p);
@@ -305,30 +284,21 @@ namespace {
 				errors::peer_banned, operation_t::bittorrent);
 		}
 
-		torrent& m_torrent;
+		aux::torrent& m_torrent;
 
 		// This table maps a piece_block (piece and block index
 		// pair) to a peer and the block CRC. The CRC is calculated
 		// from the data in the block + the salt
 		std::map<piece_block, block_entry> m_block_hashes;
-
-		// This salt is a random value used to calculate the block CRCs
-		// Since the CRC function that is used is not a one way function
-		// the salt is required to avoid attacks where bad data is sent
-		// that is forged to match the CRC of the good data.
-		std::uint32_t const m_salt;
-
-		// explicitly disallow assignment, to silence msvc warning
-		smart_ban_plugin& operator=(smart_ban_plugin const&) = delete;
 	};
 
 } }
 
 namespace libtorrent {
 
-	std::shared_ptr<torrent_plugin> create_smart_ban_plugin(torrent_handle const& th, void*)
+	std::shared_ptr<torrent_plugin> create_smart_ban_plugin(torrent_handle const& th, client_data_t)
 	{
-		torrent* t = th.native_handle().get();
+		aux::torrent* t = th.native_handle().get();
 		return std::make_shared<smart_ban_plugin>(*t);
 	}
 }

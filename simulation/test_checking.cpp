@@ -1,41 +1,20 @@
 /*
 
-Copyright (c) 2016, Arvid Norberg
+Copyright (c) 2016-2022, Arvid Norberg
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session.hpp"
-#include "libtorrent/deadline_timer.hpp"
+#include "libtorrent/aux_/deadline_timer.hpp"
 #include "libtorrent/address.hpp"
 #include "libtorrent/torrent_status.hpp"
 #include "libtorrent/torrent_info.hpp"
-#include "libtorrent/file.hpp"
+#include "libtorrent/aux_/file.hpp"
 #include "libtorrent/create_torrent.hpp"
 #include "libtorrent/hex.hpp"
 #include "simulator/simulator.hpp"
@@ -46,6 +25,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "setup_transfer.hpp" // for create_random_files
 #include "create_torrent.hpp"
 #include "utils.hpp"
+#include "test_utils.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -84,6 +64,46 @@ void run_test(Setup const& setup, Test const& test)
 	sim.run();
 }
 
+template <typename SetupTorrent, typename SetupFiles, typename Test>
+void run_force_recheck_test(SetupTorrent const& setup1, SetupFiles const& setup2, Test const& test)
+{
+	// this is a seeding torrent
+	lt::add_torrent_params atp = create_torrent(0, true);
+
+	sim::default_config network_cfg;
+	sim::simulation sim{network_cfg};
+	auto ios = std::make_unique<sim::asio::io_context>(
+		sim, lt::make_address_v4("50.0.0.1"));
+	lt::session_proxy zombie;
+
+	// setup settings pack to use for the session (customization point)
+	lt::settings_pack pack = settings();
+	setup1(atp, pack);
+
+	auto ses = std::make_shared<lt::session>(pack, *ios);
+
+	ses->async_add_torrent(atp);
+
+	print_alerts(*ses);
+
+	sim::timer t1(sim, lt::seconds(6), [&](boost::system::error_code const&)
+	{
+		setup2(atp);
+		ses->get_torrents()[0].force_recheck();
+	});
+
+	sim::timer t2(sim, lt::seconds(12), [&](boost::system::error_code const&)
+	{
+		test(*ses);
+
+		// shut down
+		zombie = ses->abort();
+		ses.reset();
+	});
+
+	sim.run();
+}
+
 TORRENT_TEST(no_truncate_checking)
 {
 	std::string filename;
@@ -111,16 +131,46 @@ std::shared_ptr<lt::torrent_info> create_multifile_torrent()
 	// the two first files are exactly the size of a piece
 	static std::array<const int, 8> const file_sizes{{ 0x40000, 0x40000, 4300, 0, 400, 4300, 6, 4}};
 
-	lt::file_storage fs;
-	create_random_files("test_torrent_dir", file_sizes, &fs);
-	lt::create_torrent t(fs, 0x40000, -1, {});
+	auto fs = create_random_files("test_torrent_dir", file_sizes);
+	// the torrent needs to be v1 only because the zero_priority_missing_partfile
+	// test relies on non-aligned files
+	lt::create_torrent t(std::move(fs), 0x40000, lt::create_torrent::v1_only);
 
 	// calculate the hash for all pieces
 	set_piece_hashes(t, ".");
 
-	std::vector<char> buf;
-	lt::bencode(std::back_inserter(buf), t.generate());
+	std::vector<char> const buf = lt::bencode(t.generate());
 	return std::make_shared<lt::torrent_info>(buf, lt::from_span);
+}
+
+TORRENT_TEST(checking_first_piece_missing)
+{
+	run_force_recheck_test(
+		[&](lt::add_torrent_params&, lt::settings_pack& pack) {
+			pack.set_int(lt::settings_pack::checking_mem_usage, 1);
+		},
+		[&](lt::add_torrent_params& atp) {
+		std::string filename = lt::combine_path(
+			atp.save_path, atp.ti->files().file_path(lt::file_index_t{0}));
+			FILE* f = ::fopen(filename.c_str(), "rb+");
+			::fwrite("0000", 4, 1, f);
+			::fclose(f);
+		},
+		[](lt::session& ses) {
+			lt::torrent_handle tor = ses.get_torrents()[0];
+			lt::torrent_status st = tor.status(lt::torrent_handle::query_pieces);
+
+			TEST_EQUAL(st.is_finished, false);
+
+
+			lt::typed_bitfield<lt::piece_index_t> expected_pieces(st.pieces.size(), true);
+			expected_pieces.clear_bit(0_piece);
+
+			// check that just the first piece is missing
+			for (lt::piece_index_t p : expected_pieces.range())
+				TEST_EQUAL(st.pieces[p], expected_pieces[p]);
+		}
+	);
 }
 
 TORRENT_TEST(aligned_zero_priority)
@@ -154,7 +204,7 @@ TORRENT_TEST(aligned_zero_priority_no_file)
 			std::string filename = lt::combine_path(lt::current_working_directory()
 				, lt::combine_path(atp.save_path, atp.ti->files().file_path(lt::file_index_t{1})));
 			partfile = lt::combine_path(lt::current_working_directory()
-				, lt::combine_path(atp.save_path, "." + lt::aux::to_hex(atp.ti->info_hash().to_string()) + ".parts"));
+				, lt::combine_path(atp.save_path, "." + lt::aux::to_hex(atp.ti->info_hashes().v1.to_string()) + ".parts"));
 			lt::error_code ec;
 			lt::remove(filename, ec);
 			TEST_CHECK(!ec);

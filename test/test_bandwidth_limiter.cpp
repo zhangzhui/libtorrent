@@ -1,45 +1,25 @@
 /*
 
-Copyright (c) 2008, Arvid Norberg
+Copyright (c) 2007-2009, 2014-2022, Arvid Norberg
+Copyright (c) 2016-2018, 2020, Alden Torres
+Copyright (c) 2016-2017, Andrei Kurushin
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
 
-#include "libtorrent/bandwidth_manager.hpp"
-#include "libtorrent/bandwidth_queue_entry.hpp"
-#include "libtorrent/bandwidth_limit.hpp"
-#include "libtorrent/bandwidth_socket.hpp"
+#include "libtorrent/aux_/bandwidth_manager.hpp"
+#include "libtorrent/aux_/bandwidth_queue_entry.hpp"
+#include "libtorrent/aux_/bandwidth_limit.hpp"
+#include "libtorrent/aux_/bandwidth_socket.hpp"
 #include "libtorrent/socket.hpp"
-#include "libtorrent/stat.hpp"
+#include "libtorrent/aux_/stat.hpp"
 #include "libtorrent/time.hpp"
 #include "libtorrent/aux_/session_settings.hpp"
+#include "libtorrent/aux_/array.hpp"
 
 #include <cmath>
 #include <functional>
@@ -58,12 +38,12 @@ const float sample_time = 20.f; // seconds
 
 //#define VERBOSE_LOGGING
 
-bandwidth_channel global_bwc;
+aux::bandwidth_channel global_bwc;
 
-struct peer_connection: bandwidth_socket, std::enable_shared_from_this<peer_connection>
+struct peer_connection: aux::bandwidth_socket, std::enable_shared_from_this<peer_connection>
 {
-	peer_connection(bandwidth_manager& bwm
-		, bandwidth_channel& torrent_bwc, int prio, bool ignore_limits, std::string name)
+	peer_connection(aux::bandwidth_manager& bwm
+		, aux::bandwidth_channel& torrent_bwc, int prio, bool ignore_limits, std::string name)
 		: m_bwm(bwm)
 		, m_torrent_bandwidth_channel(torrent_bwc)
 		, m_priority(prio)
@@ -79,10 +59,10 @@ struct peer_connection: bandwidth_socket, std::enable_shared_from_this<peer_conn
 
 	void start();
 
-	bandwidth_manager& m_bwm;
+	aux::bandwidth_manager& m_bwm;
 
-	bandwidth_channel m_bandwidth_channel;
-	bandwidth_channel& m_torrent_bandwidth_channel;
+	aux::bandwidth_channel m_bandwidth_channel;
+	aux::bandwidth_channel& m_torrent_bandwidth_channel;
 
 	int m_priority;
 	bool m_ignore_limits;
@@ -103,19 +83,19 @@ void peer_connection::assign_bandwidth(int /*channel*/, int amount)
 
 void peer_connection::start()
 {
-	bandwidth_channel* channels[] = {
+	aux::array<aux::bandwidth_channel*, 3> channels{{
 		&m_bandwidth_channel
 		, &m_torrent_bandwidth_channel
 		, &global_bwc
-	};
+	}};
 
-	m_bwm.request_bandwidth(shared_from_this(), 400000000, m_priority, channels, 3);
+	m_bwm.request_bandwidth(shared_from_this(), 400000000, m_priority, channels);
 }
 
 
 using connections_t = std::vector<std::shared_ptr<peer_connection>>;
 
-void do_change_rate(bandwidth_channel& t1, bandwidth_channel& t2, int limit)
+void do_change_rate(aux::bandwidth_channel& t1, aux::bandwidth_channel& t2, int limit)
 {
 	static int counter = 10;
 	--counter;
@@ -148,8 +128,14 @@ void do_change_peer_rate(connections_t& v, int limit)
 
 static void nop() {}
 
+// TODO: fix these warnings
+#if defined __clang__ && __clang_major__ >= 10
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wimplicit-int-float-conversion"
+#endif
+
 void run_test(connections_t& v
-	, bandwidth_manager& manager
+	, aux::bandwidth_manager& manager
 	, std::function<void()> f = &nop)
 {
 	std::cout << "-------------" << std::endl;
@@ -172,8 +158,8 @@ bool close_to(float const val, float const comp, float const err)
 	return std::abs(val - comp) <= err;
 }
 
-void spawn_connections(connections_t& v, bandwidth_manager& bwm
-	, bandwidth_channel& bwc, int num, char const* prefix)
+void spawn_connections(connections_t& v, aux::bandwidth_manager& bwm
+	, aux::bandwidth_channel& bwc, int num, char const* prefix)
 {
 	for (int i = 0; i < num; ++i)
 	{
@@ -186,10 +172,10 @@ void spawn_connections(connections_t& v, bandwidth_manager& bwm
 void test_equal_connections(int num, int limit)
 {
 	std::cout << "\ntest equal connections " << num << " " << limit << std::endl;
-	bandwidth_manager manager(0);
+	aux::bandwidth_manager manager(0);
 	global_bwc.throttle(limit);
 
-	bandwidth_channel t1;
+	aux::bandwidth_channel t1;
 
 	connections_t v;
 	spawn_connections(v, manager, t1, num, "p");
@@ -218,10 +204,10 @@ void test_connections_variable_rate(int num, int limit, int torrent_limit)
 		<< " l: " << limit
 		<< " t: " << torrent_limit
 		<< std::endl;
-	bandwidth_manager manager(0);
+	aux::bandwidth_manager manager(0);
 	global_bwc.throttle(0);
 
-	bandwidth_channel t1;
+	aux::bandwidth_channel t1;
 	if (torrent_limit)
 		t1.throttle(torrent_limit);
 
@@ -256,8 +242,8 @@ void test_connections_variable_rate(int num, int limit, int torrent_limit)
 void test_single_peer(int limit, bool torrent_limit)
 {
 	std::cout << "\ntest single peer " << limit << " " << torrent_limit << std::endl;
-	bandwidth_manager manager(0);
-	bandwidth_channel t1;
+	aux::bandwidth_manager manager(0);
+	aux::bandwidth_channel t1;
 	global_bwc.throttle(0);
 
 	if (torrent_limit)
@@ -287,11 +273,11 @@ void test_torrents(int num, int limit1, int limit2, int global_limit)
 		<< " l1: " << limit1
 		<< " l2: " << limit2
 		<< " g: " << global_limit << std::endl;
-	bandwidth_manager manager(0);
+	aux::bandwidth_manager manager(0);
 	global_bwc.throttle(global_limit);
 
-	bandwidth_channel t1;
-	bandwidth_channel t2;
+	aux::bandwidth_channel t1;
+	aux::bandwidth_channel t2;
 
 	t1.throttle(limit1);
 	t2.throttle(limit2);
@@ -338,11 +324,11 @@ void test_torrents_variable_rate(int num, int limit, int global_limit)
 	std::cout << "\ntest torrents variable rate" << num
 		<< " l: " << limit
 		<< " g: " << global_limit << std::endl;
-	bandwidth_manager manager(0);
+	aux::bandwidth_manager manager(0);
 	global_bwc.throttle(global_limit);
 
-	bandwidth_channel t1;
-	bandwidth_channel t2;
+	aux::bandwidth_channel t1;
+	aux::bandwidth_channel t2;
 
 	t1.throttle(limit);
 	t2.throttle(limit);
@@ -386,8 +372,8 @@ void test_torrents_variable_rate(int num, int limit, int global_limit)
 void test_peer_priority(int limit, bool torrent_limit)
 {
 	std::cout << "\ntest peer priority " << limit << " " << torrent_limit << std::endl;
-	bandwidth_manager manager(0);
-	bandwidth_channel t1;
+	aux::bandwidth_manager manager(0);
+	aux::bandwidth_channel t1;
 	global_bwc.throttle(0);
 
 	if (torrent_limit)
@@ -423,9 +409,9 @@ void test_peer_priority(int limit, bool torrent_limit)
 void test_no_starvation(int limit)
 {
 	std::cout << "\ntest no starvation " << limit << std::endl;
-	bandwidth_manager manager(0);
-	bandwidth_channel t1;
-	bandwidth_channel t2;
+	aux::bandwidth_manager manager(0);
+	aux::bandwidth_channel t1;
+	aux::bandwidth_channel t2;
 
 	global_bwc.throttle(limit);
 
@@ -455,6 +441,10 @@ void test_no_starvation(int limit)
 		<< " target: " << (limit / 200 / num_peers) << std::endl;
 	TEST_CHECK(close_to(p->m_quota / sample_time, float(limit) / 200 / num_peers, 5));
 }
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 } // anonymous namespace
 

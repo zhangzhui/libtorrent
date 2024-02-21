@@ -1,36 +1,15 @@
 /*
 
-Copyright (c) 2005-2016, Arvid Norberg, Steven Siloti
+Copyright (c) 2016-2018, 2020, 2022, Alden Torres
+Copyright (c) 2016, 2018, Steven Siloti
+Copyright (c) 2017-2020, 2022, Arvid Norberg
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-* Redistributions of source code must retain the above copyright
-notice, this list of conditions and the following disclaimer.
-* Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in
-the documentation and/or other materials provided with the distribution.
-* Neither the name of the author nor the names of its
-contributors may be used to endorse or promote products derived
-from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
-#include "libtorrent/disk_io_thread_pool.hpp"
+#include "libtorrent/aux_/disk_io_thread_pool.hpp"
 #include "libtorrent/assert.hpp"
 
 #include <algorithm>
@@ -38,24 +17,49 @@ POSSIBILITY OF SUCH DAMAGE.
 namespace {
 
 	constexpr std::chrono::seconds reap_idle_threads_interval(60);
+
+	struct idle
+	{
+		libtorrent::aux::disk_io_thread_pool& m_pool;
+		idle(libtorrent::aux::disk_io_thread_pool& p): m_pool(p) {
+			m_pool.thread_idle();
+		}
+
+		~idle() {
+			m_pool.thread_active();
+		}
+	};
 }
 
-namespace libtorrent {
+namespace libtorrent::aux {
 
-	disk_io_thread_pool::disk_io_thread_pool(pool_thread_interface& thread_iface
+	disk_io_thread_pool::disk_io_thread_pool(disk_thread_fun thread_fun
 		, io_context& ios)
-		: m_thread_iface(thread_iface)
+		: m_thread_fun(std::move(thread_fun))
 		, m_max_threads(0)
 		, m_threads_to_exit(0)
 		, m_abort(false)
 		, m_num_idle_threads(0)
 		, m_min_idle_threads(0)
 		, m_idle_timer(ios)
+		, m_ioc(ios)
+		, m_interrupt(false)
 	{}
 
 	disk_io_thread_pool::~disk_io_thread_pool()
 	{
 		abort(true);
+
+		TORRENT_ASSERT(num_threads() == 0);
+
+#if TORRENT_USE_ASSERTS
+		if (!m_queued_jobs.empty())
+		{
+			for (auto i = m_queued_jobs.iterate(); i.get(); i.next())
+				std::printf("job: %d\n", int(i.get()->action.index()));
+		}
+		TORRENT_ASSERT(m_queued_jobs.empty());
+#endif
 	}
 
 	void disk_io_thread_pool::set_max_threads(int const i)
@@ -71,7 +75,6 @@ namespace libtorrent {
 	{
 		std::unique_lock<std::mutex> l(m_mutex);
 		if (m_abort) return;
-		m_max_threads = 0;
 		m_abort = true;
 		m_idle_timer.cancel();
 		stop_threads(int(m_threads.size()));
@@ -172,9 +175,7 @@ namespace libtorrent {
 			// that the event is destructed after the disk_io_thread. If the
 			// event refers to a disk buffer it will try to free it, but the
 			// buffer pool won't exist anymore, and crash. This prevents that.
-			m_threads.emplace_back(&pool_thread_interface::thread_fun
-				, &m_thread_iface, std::ref(*this)
-				, make_work_guard(m_idle_timer.get_executor()));
+			m_threads.emplace_back(m_thread_fun, std::ref(*this), make_work_guard(m_ioc));
 		}
 	}
 
@@ -199,7 +200,46 @@ namespace libtorrent {
 	void disk_io_thread_pool::stop_threads(int num_to_stop)
 	{
 		m_threads_to_exit = num_to_stop;
-		m_thread_iface.notify_all();
+		m_job_cond.notify_all();
 	}
 
-} // namespace libtorrent
+	wait_result disk_io_thread_pool::wait_for_job(std::unique_lock<std::mutex>& l)
+	{
+		TORRENT_ASSERT(l.owns_lock());
+
+		// the thread should only go active if it is exiting or there is work to do
+		// if the thread goes active on every wakeup it causes the minimum idle thread
+		// count to be lower than it should be
+		// for performance reasons we also want to avoid going idle and active again
+		// if there is already work to do
+		if (m_queued_jobs.empty())
+		{
+			if (m_interrupt.exchange(false)) return wait_result::interrupt;
+			do
+			{
+				// if the number of wanted threads is decreased,
+				// we may stop this thread
+				// when we're terminating the last thread, make sure
+				// we finish up all queued jobs first
+				if (should_exit()
+					&& (m_queued_jobs.empty()
+						|| num_threads() > 1)
+					// try_thread_exit must be the last condition
+					&& try_thread_exit(std::this_thread::get_id()))
+				{
+					// time to exit this thread.
+					return wait_result::exit_thread;
+				}
+
+				idle i(*this);
+				using namespace std::literals::chrono_literals;
+				m_job_cond.wait_for(l, 1s);
+				if (m_interrupt.exchange(false)) return wait_result::interrupt;
+			} while (m_queued_jobs.empty());
+		}
+
+		return wait_result::new_job;
+	}
+
+
+} // namespace libtorrent::aux

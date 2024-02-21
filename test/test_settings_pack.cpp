@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2012, Arvid Norberg
+Copyright (c) 2010, 2014-2020, 2022, Arvid Norberg
+Copyright (c) 2016-2017, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
@@ -46,7 +24,7 @@ TORRENT_TEST(default_settings)
 	aux::session_settings sett;
 
 	entry e;
-	save_settings_to_dict(sett, e.dict());
+	save_settings_to_dict(non_default_settings(sett), e.dict());
 	// all default values are supposed to be skipped
 	// by save_settings
 	TEST_EQUAL(e.dict().size(), 0);
@@ -94,7 +72,7 @@ TORRENT_TEST(apply_pack)
 
 	TEST_EQUAL(sett.get_int(settings_pack::max_out_request_queue), 1337);
 	entry e;
-	save_settings_to_dict(sett, e.dict());
+	save_settings_to_dict(non_default_settings(sett), e.dict());
 	TEST_EQUAL(e.dict().size(), 1);
 
 	std::string out;
@@ -117,7 +95,7 @@ TORRENT_TEST(sparse_pack)
 TORRENT_TEST(test_name)
 {
 #define TEST_NAME(n) \
-	TEST_EQUAL(setting_by_name(#n), settings_pack:: n) \
+	TEST_EQUAL(setting_by_name(#n), settings_pack:: n); \
 	TEST_EQUAL(name_for_setting(settings_pack:: n), std::string(#n))
 
 #if TORRENT_ABI_VERSION == 1
@@ -135,6 +113,9 @@ TORRENT_TEST(test_name)
 	TEST_NAME(predictive_piece_announce);
 	TEST_NAME(max_metadata_size);
 	TEST_NAME(num_optimistic_unchoke_slots);
+
+	TEST_EQUAL(name_for_setting(settings_pack::peer_tos), std::string("peer_dscp"));
+	TEST_EQUAL(setting_by_name("peer_tos"), settings_pack::peer_dscp); \
 }
 
 TORRENT_TEST(clear)
@@ -163,19 +144,21 @@ TORRENT_TEST(clear_single_int)
 
 	sp.clear(settings_pack::max_out_request_queue);
 
-	TEST_EQUAL(sp.get_int(settings_pack::max_out_request_queue), 0);
+	// when cleared, we'll get the default value
+	TEST_EQUAL(sp.get_int(settings_pack::max_out_request_queue), 500);
 }
 
 TORRENT_TEST(clear_single_bool)
 {
 	settings_pack sp;
-	sp.set_bool(settings_pack::send_redundant_have, true);
+	sp.set_bool(settings_pack::send_redundant_have, false);
 
-	TEST_EQUAL(sp.get_bool(settings_pack::send_redundant_have), true);
+	TEST_EQUAL(sp.get_bool(settings_pack::send_redundant_have), false);
 
 	sp.clear(settings_pack::send_redundant_have);
 
-	TEST_EQUAL(sp.get_bool(settings_pack::send_redundant_have), false);
+	// when cleared, we'll get the default value
+	TEST_EQUAL(sp.get_bool(settings_pack::send_redundant_have), true);
 }
 
 TORRENT_TEST(clear_single_string)
@@ -187,7 +170,8 @@ TORRENT_TEST(clear_single_string)
 
 	sp.clear(settings_pack::user_agent);
 
-	TEST_EQUAL(sp.get_str(settings_pack::user_agent), std::string());
+	// when cleared, we'll get the default value
+	TEST_EQUAL(sp.get_str(settings_pack::user_agent), "libtorrent/2.1.0.0");
 }
 
 TORRENT_TEST(duplicates)
@@ -209,7 +193,7 @@ TORRENT_TEST(load_pack_from_dict)
 	p1.set_bool(settings_pack::send_redundant_have, false);
 
 	entry e;
-	save_settings_to_dict(p1, e.dict());
+	save_settings_to_dict(non_default_settings(p1), e.dict());
 
 	std::string s;
 	bencode(std::back_inserter(s), e);
@@ -259,3 +243,62 @@ TORRENT_TEST(settings_pack_abi)
 	TEST_EQUAL(settings_pack::max_web_seed_connections, settings_pack::int_type_base + 131);
 	TEST_EQUAL(settings_pack::resolver_cache_timeout, settings_pack::int_type_base + 132);
 }
+
+namespace {
+
+bool empty_pack(settings_pack const& sp)
+{
+	for (std::uint16_t i = 0; i < settings_pack::num_string_settings; ++i)
+		if (sp.has_val(i | settings_pack::string_type_base)) return false;
+	for (std::uint16_t i = 0; i < settings_pack::num_int_settings; ++i)
+		if (sp.has_val(i | settings_pack::int_type_base)) return false;
+	for (std::uint16_t i = 0; i < settings_pack::num_bool_settings; ++i)
+		if (sp.has_val(i | settings_pack::bool_type_base)) return false;
+	return true;
+}
+
+}
+
+TORRENT_TEST(non_default_settings)
+{
+	aux::session_settings def;
+	settings_pack const p = non_default_settings(def);
+	TEST_CHECK(empty_pack(p));
+}
+
+TORRENT_TEST(non_default_settings2)
+{
+	aux::session_settings def;
+	def.set_int(settings_pack::max_out_request_queue, 1337);
+	settings_pack const p = non_default_settings(def);
+	TEST_EQUAL(p.get_int(settings_pack::max_out_request_queue), 1337);
+}
+
+TORRENT_TEST(save_settings_to_dict)
+{
+	settings_pack p;
+	p.set_str(settings_pack::peer_fingerprint, "abc");
+	p.set_int(settings_pack::max_out_request_queue, 1337);
+	p.set_bool(settings_pack::send_redundant_have, false);
+
+	entry e;
+	save_settings_to_dict(p, e.dict());
+	std::string buf;
+	bencode(std::back_inserter(buf), e);
+	TEST_EQUAL(buf, "d21:max_out_request_queuei1337e16:peer_fingerprint3:abc19:send_redundant_havei0ee");
+}
+
+// MSVC doesn't support making these arrays constexpr yet (which is required to
+// initialize them before global constructors)
+#if !defined _MSC_VER
+namespace {
+// make sure a global constructor has access to the default values, to
+// initialize itself with
+lt::aux::session_settings g_sett;
+}
+
+TORRENT_TEST(global_constructors)
+{
+	TEST_CHECK(g_sett.get_int(lt::settings_pack::aio_threads) > 0);
+}
+#endif

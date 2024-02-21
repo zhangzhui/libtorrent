@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # vim: tabstop=8 expandtab shiftwidth=4 softtabstop=4
 
 from __future__ import print_function
@@ -16,16 +16,16 @@ if len(sys.argv) >= 3:
 
 if socket_filter is None:
     print("scanning for socket with the most packets")
-    file = open(sys.argv[1], 'rb')
+    file = open(sys.argv[1], 'r')
 
     sockets = {}
 
-    for l in file:
-        if 'our_delay' not in l:
+    for line in file:
+        if 'our_delay' not in line:
             continue
 
         try:
-            a = l.strip().split(" ")
+            a = line.strip().split(" ")
             socket_index = a[1][:-1]
         except Exception:
             continue
@@ -41,7 +41,7 @@ if socket_filter is None:
             sockets[socket_index] = 1
 
     items = list(sockets.items())
-    items.sort(lambda x, y: y[1] - x[1])
+    items.sort(reverse=True, key=lambda x: x[1])
 
     count = 0
     for i in items:
@@ -54,9 +54,9 @@ if socket_filter is None:
     socket_filter = items[0][0]
     print('\nfocusing on socket %s' % socket_filter)
 
-file = open(sys.argv[1], 'rb')
+file = open(sys.argv[1], 'r')
 out_file = 'utp.out%s' % socket_filter
-out = open(out_file, 'wb')
+out = open(out_file, 'w')
 
 delay_samples = 'points lc rgb "blue"'
 delay_base = 'steps lw 2 lc rgb "purple"'
@@ -245,12 +245,12 @@ for line in file:
 
 out.close()
 
-out = open('%s.histogram' % out_file, 'wb')
+out = open('%s.histogram' % out_file, 'w')
 for d, f in delay_histogram.items():
     print(float(d * histogram_quantization) + histogram_quantization / 2.0, f, file=out)
 out.close()
 
-out = open('%s_packet_size.histogram' % out_file, 'wb')
+out = open('%s_packet_size.histogram' % out_file, 'w')
 for d, f in packet_size_histogram.items():
     print(d, f, file=out)
 out.close()

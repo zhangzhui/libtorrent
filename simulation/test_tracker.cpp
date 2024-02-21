@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2010, Arvid Norberg
+Copyright (c) 2015-2022, Arvid Norberg
+Copyright (c) 2016, Alden Torres
+Copyright (c) 2017-2018, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
@@ -45,7 +24,9 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/create_torrent.hpp"
 #include "libtorrent/file_storage.hpp"
 #include "libtorrent/torrent_info.hpp"
+#include "libtorrent/aux_/ip_helpers.hpp" // for is_v4
 
+#include <boost/optional.hpp>
 #include <iostream>
 
 using namespace lt;
@@ -60,12 +41,6 @@ template <typename Tp1, typename Tp2>
 bool eq(Tp1 const lhs, Tp2 const rhs)
 {
 	return std::abs(lt::duration_cast<seconds>(lhs - rhs).count()) <= 1;
-}
-
-template <class T>
-std::shared_ptr<T> clone_ptr(std::shared_ptr<T> const& ptr)
-{
-	return std::make_shared<T>(*ptr);
 }
 
 void test_interval(int interval)
@@ -135,10 +110,11 @@ void test_interval(int interval)
 
 	TEST_CHECK(ran_to_completion);
 	TEST_EQUAL(announce_alerts.size(), announces.size());
+	TEST_CHECK(announces.size() % 2 == 0);
 
 	lt::time_point last_announce = announces[0];
 	lt::time_point last_alert = announce_alerts[0];
-	for (int i = 1; i < int(announces.size()); ++i)
+	for (int i = 2; i < int(announces.size()); i += 2)
 	{
 		// make sure the interval is within 1 second of what it's supposed to be
 		// (this accounts for network latencies, and the second-granularity
@@ -151,7 +127,10 @@ void test_interval(int interval)
 	}
 }
 
-TORRENT_TEST(event_completed)
+template <typename AddTorrent, typename OnAlert>
+std::vector<std::string> test_event(swarm_test_t const type
+	, AddTorrent add_torrent
+	, OnAlert on_alert)
 {
 	using sim::asio::ip::address_v4;
 	sim::default_config network_cfg;
@@ -162,19 +141,16 @@ TORRENT_TEST(event_completed)
 	sim::http_server http(web_server, 8080);
 
 	// the request strings of all announces
-	std::vector<std::pair<int, std::string>> announces;
+	std::vector<std::string> announces;
 
 	const int interval = 500;
-	lt::time_point start = lt::clock_type::now();
 
 	http.register_handler("/announce"
 	, [&](std::string method, std::string req
 		, std::map<std::string, std::string>&)
 	{
 		TEST_EQUAL(method, "GET");
-		int const timestamp = int(chrono::duration_cast<lt::seconds>(
-			lt::clock_type::now() - start).count());
-		announces.push_back({timestamp, req});
+		announces.push_back(req);
 
 		char response[500];
 		int const size = std::snprintf(response, sizeof(response), "d8:intervali%de5:peers0:e", interval);
@@ -184,78 +160,111 @@ TORRENT_TEST(event_completed)
 	lt::settings_pack default_settings = settings();
 	lt::add_torrent_params default_add_torrent;
 
-	int completion = -1;
-
-	setup_swarm(2, swarm_test::download, sim, default_settings, default_add_torrent
+	setup_swarm(2, type, sim, default_settings, default_add_torrent
 		// add session
 		, [](lt::settings_pack&) { }
 		// add torrent
-		, [](lt::add_torrent_params& params) {
-			params.trackers.push_back("http://2.2.2.2:8080/announce");
-		}
+		, add_torrent
 		// on alert
-		, [&](lt::alert const*, lt::session&) {}
+		, on_alert
 		// terminate
 		, [&](int const ticks, lt::session& ses) -> bool
 		{
-			if (completion == -1 && is_seed(ses))
-			{
-				completion = int(chrono::duration_cast<lt::seconds>(
-					lt::clock_type::now() - start).count());
-			}
-
 			return ticks > duration;
 		});
 
-	// the first announce should be event=started, the second should be
-	// event=completed, then all but the last should have no event and the last
-	// be event=stopped.
-	for (int i = 0; i < int(announces.size()); ++i)
+	// this is some basic sanity checking of the announces that should always be
+	// true.
+	// the first announce should be event=started then no other announce should
+	// have event=started.
+	// only the last announce should have event=stopped.
+	TEST_CHECK(announces.size() > 2);
+
+	// to keep things simple, just consider one of the v1 or v2 announces, since
+	// we use a hybrid torrent, we get double announces.
+	std::map<std::string, std::vector<std::string>> announces_ih;
+	for (auto&& a : announces)
 	{
-		std::string const& str = announces[i].second;
-		int timestamp = announces[i].first;
-
-		const bool has_start = str.find("&event=started")
-			!= std::string::npos;
-		const bool has_completed = str.find("&event=completed")
-			!= std::string::npos;
-		const bool has_stopped = str.find("&event=stopped")
-			!= std::string::npos;
-
-		// we there can only be one event
-		const bool has_event = str.find("&event=") != std::string::npos;
-
-		std::printf("- %s\n", str.c_str());
-
-		// there is exactly 0 or 1 events.
-		TEST_EQUAL(int(has_start) + int(has_completed) + int(has_stopped)
-			, int(has_event));
-
-		switch (i)
-		{
-			case 0:
-				TEST_CHECK(has_start);
-				break;
-			case 1:
-			{
-				// the announce should have come approximately the same time we
-				// completed
-				TEST_CHECK(std::abs(completion - timestamp) <= 1);
-				TEST_CHECK(has_completed);
-				break;
-			}
-			default:
-				if (i == int(announces.size()) - 1)
-				{
-					TEST_CHECK(has_stopped);
-				}
-				else
-				{
-					TEST_CHECK(!has_event);
-				}
-				break;
-		}
+		auto const ih = a.find("info_hash=");
+		TEST_CHECK(ih != std::string::npos);
+		auto const key = a.substr(ih, 20);
+		announces_ih[key].push_back(std::move(a));
 	}
+
+	for (auto const& entry : announces_ih)
+	{
+		auto const& ann = entry.second;
+		TEST_CHECK(ann.size() > 2);
+		TEST_CHECK(ann.front().find("&event=started") != std::string::npos);
+		for (auto const& a : span<std::string const>(ann).subspan(1))
+			TEST_CHECK(a.find("&event=started") == std::string::npos);
+
+		TEST_CHECK(ann.back().find("&event=stopped") != std::string::npos);
+		for (auto const& a : span<std::string const>(ann).first(ann.size() - 1))
+			TEST_CHECK(a.find("&event=stopped") == std::string::npos);
+	}
+	return announces_ih.begin()->second;
+}
+
+TORRENT_TEST(event_completed_downloading)
+{
+	auto const announces = test_event(swarm_test::download
+		, [](lt::add_torrent_params& params) {
+			params.trackers.push_back("http://2.2.2.2:8080/announce");
+		}
+		, [&](lt::alert const*, lt::session&) {}
+	);
+
+	// make sure there's exactly one event=completed
+	TEST_CHECK(std::count_if(announces.begin(), announces.end(), [](std::string const& s)
+		{ return s.find("&event=completed") != std::string::npos; }) == 1);
+}
+
+TORRENT_TEST(event_completed_downloading_replace_trackers)
+{
+	auto const announces = test_event(swarm_test::download
+		, [](lt::add_torrent_params& params) {}
+		, [&](lt::alert const* a, lt::session&) {
+			if (auto const* at = alert_cast<add_torrent_alert>(a))
+				at->handle.replace_trackers({announce_entry{"http://2.2.2.2:8080/announce"}});
+		}
+	);
+
+	// make sure there's exactly one event=completed
+	TEST_CHECK(std::count_if(announces.begin(), announces.end(), [](std::string const& s)
+		{ return s.find("&event=completed") != std::string::npos; }) == 1);
+}
+
+TORRENT_TEST(event_completed_seeding)
+{
+	auto const announces = test_event(swarm_test::upload | swarm_test::no_auto_stop
+		, [](lt::add_torrent_params& params) {
+			params.trackers.push_back("http://2.2.2.2:8080/announce");
+		}
+		, [&](lt::alert const*, lt::session&) {}
+		);
+
+	// make sure there are no event=completed, since we added the torrent as a
+	// seed
+	TEST_CHECK(std::count_if(announces.begin(), announces.end(), [](std::string const& s)
+		{ return s.find("&event=completed") != std::string::npos; }) == 0);
+}
+
+
+TORRENT_TEST(event_completed_seeding_replace_trackers)
+{
+	auto const announces = test_event(swarm_test::upload | swarm_test::no_auto_stop
+		, [](lt::add_torrent_params& params) {}
+		, [&](lt::alert const* a, lt::session&) {
+			if (auto const* at = alert_cast<add_torrent_alert>(a))
+				at->handle.replace_trackers({announce_entry{"http://2.2.2.2:8080/announce"}});
+		}
+	);
+
+	// make sure there are no event=completed, since we added the torrent as a
+	// seed
+	TEST_CHECK(std::count_if(announces.begin(), announces.end(), [](std::string const& s)
+		{ return s.find("&event=completed") != std::string::npos; }) == 0);
 }
 
 TORRENT_TEST(announce_interval_440)
@@ -290,6 +299,23 @@ struct sim_config : sim::default_config
 				result.push_back(make_address_v6("ff::dead:beef"));
 			return duration_cast<chrono::high_resolution_clock::duration>(chrono::milliseconds(100));
 		}
+		if (hostname == "localhost")
+		{
+			result.push_back(make_address_v4("127.0.0.1"));
+			if (ipv6)
+				result.push_back(make_address_v6("::1"));
+			return duration_cast<chrono::high_resolution_clock::duration>(chrono::milliseconds(1));
+		}
+		if (hostname == "xn--tracker-.com")
+		{
+			result.push_back(make_address_v4("123.0.0.2"));
+			return duration_cast<chrono::high_resolution_clock::duration>(chrono::milliseconds(100));
+		}
+		if (hostname == "redirector.com")
+		{
+			result.push_back(make_address_v4("123.0.0.4"));
+			return duration_cast<chrono::high_resolution_clock::duration>(chrono::milliseconds(100));
+		}
 
 		return default_config::hostname_lookup(requestor, hostname, result, ec);
 	}
@@ -308,7 +334,7 @@ void on_alert_notify(lt::session* ses)
 			lt::time_duration d = a->timestamp().time_since_epoch();
 			std::uint32_t const millis = std::uint32_t(
 				lt::duration_cast<lt::milliseconds>(d).count());
-			std::printf("%4d.%03d: %s\n", millis / 1000, millis % 1000,
+			std::printf("%4u.%03u: %s\n", millis / 1000, millis % 1000,
 				a->message().c_str());
 		}
 	});
@@ -335,7 +361,7 @@ void test_ipv6_support(char const* listen_interfaces
 
 	// if we're not listening we'll just report port 0
 	std::string const expect_port = (listen_interfaces && listen_interfaces == ""_sv)
-		? "&port=0" : "&port=6881";
+		? "&port=1" : "&port=6881";
 
 	http_v4.register_handler("/announce"
 	, [&v4_announces,expect_port](std::string method, std::string req
@@ -389,7 +415,7 @@ void test_ipv6_support(char const* listen_interfaces
 		lt::add_torrent_params p;
 		p.name = "test-torrent";
 		p.save_path = ".";
-		p.info_hash.assign("abababababababababab");
+		p.info_hashes.v1.assign("abababababababababab");
 
 //TODO: parameterize http vs. udp here
 		p.trackers.push_back("http://tracker.com:8080/announce");
@@ -468,11 +494,11 @@ void test_udpv6_support(char const* listen_interfaces
 					lt::time_duration d = a->timestamp().time_since_epoch();
 					std::uint32_t const millis = std::uint32_t(
 						lt::duration_cast<lt::milliseconds>(d).count());
-					std::printf("%4d.%03d: %s\n", millis / 1000, millis % 1000,
+					std::printf("%4u.%03u: %s\n", millis / 1000, millis % 1000,
 						a->message().c_str());
 					if (auto tr = alert_cast<tracker_announce_alert>(a))
 					{
-						if (is_v4(tr->local_endpoint))
+						if (lt::aux::is_v4(tr->local_endpoint))
 							++v4_announces;
 						else
 							++v6_announces;
@@ -488,7 +514,7 @@ void test_udpv6_support(char const* listen_interfaces
 		lt::add_torrent_params p;
 		p.name = "test-torrent";
 		p.save_path = ".";
-		p.info_hash.assign("abababababababababab");
+		p.info_hashes.v1.assign("abababababababababab");
 
 		p.trackers.push_back("udp://tracker.com:8080/announce");
 		ses->async_add_torrent(p);
@@ -524,28 +550,26 @@ void test_udpv6_support(char const* listen_interfaces
 TORRENT_TEST(ipv6_support)
 {
 	// null means default
-	test_ipv6_support(nullptr, 2, num_interfaces * 2);
+	test_ipv6_support(nullptr, num_interfaces * 2, num_interfaces * 2);
 }
 
 TORRENT_TEST(announce_no_listen)
 {
-	// if we don't listen on any sockets at all (but only make outgoing peer
-	// connections) we still need to make sure we announce to trackers
-	test_ipv6_support("", 2, 2);
+	// if we don't listen on any sockets at all we should not announce to trackers
+	test_ipv6_support("", 0, 0);
 }
 
 TORRENT_TEST(announce_udp_no_listen)
 {
-	// since there's no actual udp tracker in this test, we will only try to
-	// announce once, and fail. We won't announce the event=stopped
-	test_udpv6_support("", 1, 1);
+	// if we don't listen on any sockets at all we should not announce to trackers
+	test_udpv6_support("", 0, 0);
 }
 
 TORRENT_TEST(ipv6_support_bind_v4_v6_any)
 {
 	// 2 because there's one announce on startup and one when shutting down
 	// IPv6 will send announces for each interface
-	test_ipv6_support("0.0.0.0:6881,[::0]:6881", 2, num_interfaces * 2);
+	test_ipv6_support("0.0.0.0:6881,[::0]:6881", num_interfaces * 2, num_interfaces * 2);
 }
 
 TORRENT_TEST(ipv6_support_bind_v6_any)
@@ -588,7 +612,8 @@ TORRENT_TEST(ipv6_support_bind_v6_v4)
 // port 8080.
 template <typename Setup, typename Announce, typename Test1, typename Test2>
 void tracker_test(Setup setup, Announce a, Test1 test1, Test2 test2
-	, char const* url_path = "/announce")
+	, char const* url_path = "/announce"
+	, char const* redirect = "http://123.0.0.2/announce")
 {
 	using sim::asio::ip::address_v4;
 	sim_config network_cfg;
@@ -596,13 +621,23 @@ void tracker_test(Setup setup, Announce a, Test1 test1, Test2 test2
 
 	sim::asio::io_context tracker_ios(sim, make_address_v4("123.0.0.2"));
 	sim::asio::io_context tracker_ios6(sim, make_address_v6("ff::dead:beef"));
+	sim::asio::io_context redirector_ios(sim, make_address_v4("123.0.0.4"));
+
+	sim::asio::io_context tracker_lo_ios(sim, make_address_v4("127.0.0.1"));
+	sim::asio::io_context tracker_lo_ios6(sim, make_address_v6("::1"));
 
 	// listen on port 8080
 	sim::http_server http(tracker_ios, 8080);
 	sim::http_server http6(tracker_ios6, 8080);
+	sim::http_server http_lo(tracker_lo_ios, 8080);
+	sim::http_server http6_lo(tracker_lo_ios6, 8080);
+	sim::http_server http_redirect(redirector_ios, 8080);
 
 	http.register_handler(url_path, a);
 	http6.register_handler(url_path, a);
+	http_lo.register_handler(url_path, a);
+	http6_lo.register_handler(url_path, a);
+	http_redirect.register_redirect(url_path, redirect);
 
 	lt::session_proxy zombie;
 
@@ -616,7 +651,7 @@ void tracker_test(Setup setup, Announce a, Test1 test1, Test2 test2
 	lt::add_torrent_params p;
 	p.name = "test-torrent";
 	p.save_path = ".";
-	p.info_hash.assign("abababababababababab");
+	p.info_hashes.v1.assign("abababababababababab");
 	int const delay = setup(p, *ses);
 	ses->async_add_torrent(p);
 
@@ -675,6 +710,67 @@ void announce_entry_test(Announce a, Test t, char const* url_path = "/announce")
 		, url_path);
 }
 
+// test that we correctly omit announcing an event=stopped to a tracker we never
+// managed to send an event=start to
+TORRENT_TEST(omit_stop_event)
+{
+	using sim::asio::ip::address_v4;
+	sim_config network_cfg;
+	sim::simulation sim{network_cfg};
+
+	lt::session_proxy zombie;
+
+	asio::io_context ios(sim, { make_address_v4("123.0.0.3"), make_address_v6("ff::dead:beef")});
+	lt::settings_pack sett = settings();
+	std::unique_ptr<lt::session> ses(new lt::session(sett, ios));
+
+	print_alerts(*ses);
+
+	lt::add_torrent_params p;
+	p.name = "test-torrent";
+	p.save_path = ".";
+	p.info_hashes.v1.assign("abababababababababab");
+	p.trackers.push_back("udp://tracker.com:8080/announce");
+	ses->async_add_torrent(p);
+
+	// run the test 5 seconds in
+	sim::timer t1(sim, lt::seconds(5)
+		, [&ses](boost::system::error_code const&)
+	{
+		std::vector<lt::torrent_handle> torrents = ses->get_torrents();
+		TEST_EQUAL(torrents.size(), 1);
+		torrent_handle h = torrents.front();
+	});
+
+	int stop_announces = 0;
+
+	sim::timer t2(sim, lt::seconds(1800)
+		, [&](boost::system::error_code const&)
+	{
+		// make sure we don't announce a stopped event when stopping
+		print_alerts(*ses, [&](lt::session&, lt::alert const* a) {
+			if (alert_cast<lt::tracker_announce_alert>(a))
+			++stop_announces;
+		});
+		std::vector<lt::torrent_handle> torrents = ses->get_torrents();
+		TEST_EQUAL(torrents.size(), 1);
+		torrent_handle h = torrents.front();
+		h.set_flags(torrent_flags::paused, torrent_flags::paused | torrent_flags::auto_managed);
+	});
+
+	// then shut down 10 seconds in
+	sim::timer t3(sim, lt::seconds(1810)
+		, [&](boost::system::error_code const&)
+	{
+		zombie = ses->abort();
+		ses.reset();
+	});
+
+	sim.run();
+
+	TEST_EQUAL(stop_announces, 0);
+}
+
 TORRENT_TEST(test_error)
 {
 	announce_entry_test(
@@ -693,12 +789,130 @@ TORRENT_TEST(test_error)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.is_working(), false);
-				TEST_EQUAL(aep.message, "test");
-				TEST_EQUAL(aep.last_error, error_code(errors::tracker_failure));
-				TEST_EQUAL(aep.fails, 1);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "test");
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error, error_code(errors::tracker_failure));
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 1);
 			}
 		});
+}
+
+TORRENT_TEST(test_no_announce_path)
+{
+	tracker_test(
+		[](lt::add_torrent_params& p, lt::session&) {
+			p.trackers.push_back("http://tracker.com:8080");
+			return 5;
+		},
+		[](std::string method, std::string req, std::map<std::string, std::string>&)
+		{
+			TEST_EQUAL(method, "GET");
+
+			char response[500];
+			int const size = std::snprintf(response, sizeof(response), "d5:peers6:aaaaaae");
+			return sim::send_response(200, "OK", size) + response;
+		}
+		, [](torrent_handle h)
+		{
+			std::vector<announce_entry> tr = h.trackers();
+
+			TEST_EQUAL(tr.size(), 1);
+			announce_entry const& ae = tr[0];
+			TEST_EQUAL(ae.url, "http://tracker.com:8080");
+			TEST_EQUAL(ae.endpoints.size(), 2);
+			for (auto const& aep : ae.endpoints)
+			{
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "");
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error, error_code());
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 0);
+			}
+		}
+		, [](torrent_handle){}
+		, "/");
+}
+
+TORRENT_TEST(paused_session)
+{
+	using sim::asio::ip::address_v4;
+	sim_config network_cfg;
+	sim::simulation sim{network_cfg};
+
+	sim::asio::io_context tracker_ios(sim, make_address_v4("123.0.0.2"));
+	// listen on port 8080
+	sim::http_server http(tracker_ios, 8080);
+
+	int announces = 0;
+
+	http.register_handler("/announce",
+		[&announces](std::string method, std::string req, std::map<std::string, std::string>&)
+		{
+			TEST_EQUAL(method, "GET");
+
+			++announces;
+			char response[500];
+			int const size = std::snprintf(response, sizeof(response), "d8:intervali1800e5:peers6:aaaaaae");
+			return sim::send_response(200, "OK", size) + response;
+		}
+	);
+
+	lt::session_proxy zombie;
+
+	asio::io_context ios(sim, { make_address_v4("123.0.0.3")
+		, make_address_v6("ffff::1337") });
+	lt::settings_pack sett = settings();
+	auto ses = std::make_unique<lt::session>(sett, ios);
+
+	ses->set_alert_notify(std::bind(&on_alert_notify, ses.get()));
+
+	lt::add_torrent_params p;
+	p.name = "test-torrent";
+	p.save_path = ".";
+	p.info_hashes.v1.assign("abababababababababab");
+	p.trackers.push_back("http://123.0.0.2:8080/announce");
+	ses->async_add_torrent(p);
+
+	lt::seconds timeline(5);
+
+	// pause the session
+	sim::timer t1(sim, timeline
+		, [&announces,&ses](boost::system::error_code const&)
+	{
+		// make sure we got 1 announce
+		TEST_EQUAL(announces, 1);
+		ses->pause();
+	});
+
+	// wait until the next tracker announce should have happened, but didn't
+	// because the session is paused
+	timeline += seconds(1801);
+
+	sim::timer t2(sim, timeline
+		, [&announces,&ses](boost::system::error_code const&)
+	{
+		// the stop is announced
+		TEST_EQUAL(announces, 2);
+		ses->resume();
+	});
+
+	timeline += seconds(5);
+
+	sim::timer t3(sim, timeline
+		, [&announces](boost::system::error_code const&)
+	{
+		// make sure we got another announce
+		TEST_EQUAL(announces, 3);
+	});
+
+	timeline += seconds(5);
+
+	// then shut down
+	sim::timer t4(sim, timeline
+		, [&ses,&zombie](boost::system::error_code const&)
+	{
+		zombie = ses->abort();
+		ses.reset();
+	});
+
+	sim.run();
 }
 
 TORRENT_TEST(test_warning)
@@ -719,10 +933,9 @@ TORRENT_TEST(test_warning)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.is_working(), true);
-				TEST_EQUAL(aep.message, "test2");
-				TEST_EQUAL(aep.last_error, error_code());
-				TEST_EQUAL(aep.fails, 0);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "test2");
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error, error_code());
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 0);
 			}
 		});
 }
@@ -746,13 +959,12 @@ TORRENT_TEST(test_scrape_data_in_announce)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.is_working(), true);
-				TEST_EQUAL(aep.message, "");
-				TEST_EQUAL(aep.last_error, error_code());
-				TEST_EQUAL(aep.fails, 0);
-				TEST_EQUAL(aep.scrape_complete, 1);
-				TEST_EQUAL(aep.scrape_incomplete, 2);
-				TEST_EQUAL(aep.scrape_downloaded, 3);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "");
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error, error_code());
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 0);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].scrape_complete, 1);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].scrape_incomplete, 2);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].scrape_downloaded, 3);
 			}
 		});
 }
@@ -783,9 +995,9 @@ TORRENT_TEST(test_scrape)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.scrape_incomplete, 2);
-				TEST_EQUAL(aep.scrape_complete, 1);
-				TEST_EQUAL(aep.scrape_downloaded, 3);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].scrape_incomplete, 2);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].scrape_complete, 1);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].scrape_downloaded, 3);
 			}
 		}
 		, "/scrape");
@@ -806,10 +1018,9 @@ TORRENT_TEST(test_http_status)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.is_working(), false);
-				TEST_EQUAL(aep.message, "Not A Tracker");
-				TEST_EQUAL(aep.last_error, error_code(410, http_category()));
-				TEST_EQUAL(aep.fails, 1);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "Not A Tracker");
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error, error_code(410, http_category()));
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 1);
 			}
 		});
 }
@@ -832,10 +1043,9 @@ TORRENT_TEST(test_interval)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.is_working(), true);
-				TEST_EQUAL(aep.message, "");
-				TEST_EQUAL(aep.last_error, error_code());
-				TEST_EQUAL(aep.fails, 0);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "");
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error, error_code());
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 0);
 			}
 
 			TEST_EQUAL(ae.trackerid, "testtest");
@@ -860,11 +1070,10 @@ TORRENT_TEST(test_invalid_bencoding)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.is_working(), false);
-				TEST_EQUAL(aep.message, "");
-				TEST_EQUAL(aep.last_error, error_code(bdecode_errors::expected_value
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "");
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error, error_code(bdecode_errors::expected_value
 					, bdecode_category()));
-				TEST_EQUAL(aep.fails, 1);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 1);
 			}
 		});
 }
@@ -913,7 +1122,7 @@ TORRENT_TEST(try_next)
 				{
 					for (auto const& aep : tr[i].endpoints)
 					{
-						TEST_EQUAL(aep.fails, 0);
+						TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 0);
 					}
 					TEST_EQUAL(tr[i].verified, true);
 				}
@@ -921,8 +1130,8 @@ TORRENT_TEST(try_next)
 				{
 					for (auto const& aep : tr[i].endpoints)
 					{
-						TEST_CHECK(aep.fails >= 1);
-						TEST_EQUAL(aep.last_error
+						TEST_CHECK(aep.info_hashes[protocol_version::V1].fails >= 1);
+						TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error
 							, error_code(boost::asio::error::host_not_found));
 					}
 					TEST_EQUAL(tr[i].verified, false);
@@ -932,8 +1141,8 @@ TORRENT_TEST(try_next)
 					TEST_EQUAL(tr[i].verified, false);
 					for (auto const& aep : tr[i].endpoints)
 					{
-						TEST_CHECK(aep.fails >= 1);
-						TEST_EQUAL(aep.last_error
+						TEST_CHECK(aep.info_hashes[protocol_version::V1].fails >= 1);
+						TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error
 							, error_code(boost::asio::error::host_not_found));
 					}
 				}
@@ -946,22 +1155,83 @@ TORRENT_TEST(try_next)
 	TEST_EQUAL(got_announce, true);
 }
 
+TORRENT_TEST(clear_error)
+{
+	// make sure we clear the error from a previous attempt when succeeding
+	// a tracker announce
+
+	int num_announces = 0;
+	tracker_test(
+		[](lt::add_torrent_params& p, lt::session& ses)
+		{
+			settings_pack pack;
+			// make sure we just listen on a single listen interface
+			pack.set_str(settings_pack::listen_interfaces, "123.0.0.3:0");
+			pack.set_int(settings_pack::min_announce_interval, 1);
+			pack.set_int(settings_pack::tracker_backoff, 1);
+			ses.apply_settings(pack);
+			p.trackers.push_back("http://tracker.com:8080/announce");
+			return 60;
+		},
+		[&](std::string method, std::string req, std::map<std::string, std::string>&)
+		{
+			// don't count the stopped event when shutting down
+			if (req.find("&event=stopped&") != std::string::npos)
+			{
+				return sim::send_response(200, "OK", 2) + "de";
+			}
+			if (num_announces++ == 0)
+			{
+				// the first announce fails
+				return std::string{};
+			}
+
+			// the second announce succeeds, with an empty peer list
+			char response[500];
+			int const size = std::snprintf(response, sizeof(response), "d8:intervali1800e5:peers0:e");
+			return sim::send_response(200, "OK", size) + response;
+		}
+		, [](torrent_handle h) {
+
+		}
+		, [&](torrent_handle h)
+		{
+			std::vector<announce_entry> const tr = h.trackers();
+			TEST_EQUAL(tr.size(), 1);
+
+			std::printf("tracker \"%s\"\n", tr[0].url.c_str());
+			TEST_EQUAL(tr[0].url, "http://tracker.com:8080/announce");
+			TEST_EQUAL(tr[0].endpoints.size(), 1);
+			auto const& aep = tr[0].endpoints[0];
+
+			TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 0);
+			TEST_CHECK(!aep.info_hashes[protocol_version::V1].last_error);
+			TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "");
+
+#if TORRENT_ABI_VERSION <= 2
+			TEST_EQUAL(aep.fails, 0);
+			TEST_CHECK(!aep.last_error);
+			TEST_EQUAL(aep.message, "");
+#endif
+		});
+	TEST_EQUAL(num_announces, 2);
+}
+
 std::shared_ptr<torrent_info> make_torrent(bool priv)
 {
-	file_storage fs;
-	fs.add_file("foobar", 13241);
-	lt::create_torrent ct(fs);
+	std::vector<lt::create_file_entry> fs;
+	fs.emplace_back("foobar", 13241);
+	lt::create_torrent ct(std::move(fs));
 
 	ct.add_tracker("http://tracker.com:8080/announce");
 
 	for (piece_index_t i(0); i < piece_index_t(ct.num_pieces()); ++i)
-		ct.set_hash(i, sha1_hash(nullptr));
+		ct.set_hash(i, sha1_hash::max());
 
 	ct.set_priv(priv);
 
 	entry e = ct.generate();
-	std::vector<char> buf;
-	bencode(std::back_inserter(buf), e);
+	std::vector<char> const buf = bencode(e);
 	return std::make_shared<torrent_info>(buf, from_span);
 }
 
@@ -979,6 +1249,7 @@ TORRENT_TEST(tracker_ipv6_argument)
 			pack.set_str(settings_pack::listen_interfaces, "123.0.0.3:0,[ffff::1337]:0");
 			ses.apply_settings(pack);
 			p.ti = make_torrent(true);
+			p.info_hashes = lt::info_hash_t{};
 			return 60;
 		},
 		[&](std::string method, std::string req
@@ -1017,6 +1288,7 @@ TORRENT_TEST(tracker_key_argument)
 		[](lt::add_torrent_params& p, lt::session&)
 		{
 			p.ti = make_torrent(true);
+			p.info_hashes = lt::info_hash_t{};
 			return 60;
 		},
 		[&](std::string, std::string req
@@ -1030,8 +1302,8 @@ TORRENT_TEST(tracker_key_argument)
 		, [](torrent_handle h) {}
 		, [](torrent_handle h) {});
 
-	// make sure we got two separate keys, one for each listen socket interface
-	TEST_EQUAL(keys.size(), 2);
+	// make sure we got the same key for all listen socket interface
+	TEST_EQUAL(keys.size(), 1);
 }
 
 // make sure we do _not_ send our IPv6 address to trackers for non-private
@@ -1047,6 +1319,7 @@ TORRENT_TEST(tracker_ipv6_argument_non_private)
 			pack.set_bool(settings_pack::anonymous_mode, false);
 			ses.apply_settings(pack);
 			p.ti = make_torrent(false);
+			p.info_hashes = lt::info_hash_t{};
 			return 60;
 		},
 		[&](std::string method, std::string req
@@ -1075,6 +1348,7 @@ TORRENT_TEST(tracker_ipv6_argument_privacy_mode)
 			pack.set_bool(settings_pack::anonymous_mode, true);
 			ses.apply_settings(pack);
 			p.ti = make_torrent(true);
+			p.info_hashes = lt::info_hash_t{};
 			return 60;
 		},
 		[&](std::string method, std::string req
@@ -1103,6 +1377,7 @@ TORRENT_TEST(tracker_user_agent_privacy_mode_public_torrent)
 			pack.set_str(settings_pack::user_agent, "test_agent/1.2.3");
 			ses.apply_settings(pack);
 			p.ti = make_torrent(false);
+			p.info_hashes = lt::info_hash_t{};
 			return 60;
 		},
 		[&](std::string method, std::string req
@@ -1110,8 +1385,8 @@ TORRENT_TEST(tracker_user_agent_privacy_mode_public_torrent)
 		{
 			got_announce = true;
 
-			// in anonymous mode we should not send a user agent
-			TEST_CHECK(headers["user-agent"] == "");
+			// in anonymous mode we should send a generic user agent
+			TEST_CHECK(headers["user-agent"] == "curl/7.81.0");
 			return sim::send_response(200, "OK", 11) + "d5:peers0:e";
 		}
 		, [](torrent_handle h) {}
@@ -1130,6 +1405,7 @@ TORRENT_TEST(tracker_user_agent_privacy_mode_private_torrent)
 			pack.set_str(settings_pack::user_agent, "test_agent/1.2.3");
 			ses.apply_settings(pack);
 			p.ti = make_torrent(true);
+			p.info_hashes = lt::info_hash_t{};
 			return 60;
 		},
 		[&](std::string method, std::string req
@@ -1147,110 +1423,586 @@ TORRENT_TEST(tracker_user_agent_privacy_mode_private_torrent)
 	TEST_EQUAL(got_announce, true);
 }
 
+bool test_ssrf(char const* announce_path, bool const feature_on
+	, char const* tracker_url)
+{
+	bool got_announce = false;
+	tracker_test(
+		[&](lt::add_torrent_params& p, lt::session& ses)
+		{
+			settings_pack pack;
+			pack.set_bool(settings_pack::ssrf_mitigation, feature_on);
+			ses.apply_settings(pack);
+			p.trackers.emplace_back(tracker_url);
+			return 60;
+		},
+		[&](std::string method, std::string req
+			, std::map<std::string, std::string>& headers)
+		{
+			got_announce = true;
+			return sim::send_response(200, "OK", 11) + "d5:peers0:e";
+		}
+		, [](torrent_handle h) {}
+		, [](torrent_handle h) {}
+		, announce_path);
+	return got_announce;
+}
+
+TORRENT_TEST(ssrf_localhost)
+{
+	TEST_CHECK(test_ssrf("/announce", true, "http://localhost:8080/announce"));
+	TEST_CHECK(!test_ssrf("/unusual-announce-path", true, "http://localhost:8080/unusual-announce-path"));
+	TEST_CHECK(test_ssrf("/unusual-announce-path", false, "http://localhost:8080/unusual-announce-path"));
+
+	TEST_CHECK(!test_ssrf("/short", true, "http://localhost:8080/short"));
+	TEST_CHECK(test_ssrf("/short", false, "http://localhost:8080/short"));
+}
+
+TORRENT_TEST(ssrf_IPv4)
+{
+	TEST_CHECK(test_ssrf("/announce", true, "http://127.0.0.1:8080/announce"));
+	TEST_CHECK(!test_ssrf("/unusual-announce-path", true, "http://127.0.0.1:8080/unusual-announce-path"));
+	TEST_CHECK(test_ssrf("/unusual-announce-path", false, "http://127.0.0.1:8080/unusual-announce-path"));
+}
+
+TORRENT_TEST(ssrf_IPv6)
+{
+	TEST_CHECK(test_ssrf("/announce", true, "http://[::1]:8080/announce"));
+	TEST_CHECK(!test_ssrf("/unusual-announce-path", true, "http://[::1]:8080/unusual-announce-path"));
+	TEST_CHECK(test_ssrf("/unusual-announce-path", false, "http://[::1]:8080/unusual-announce-path"));
+}
+
+TORRENT_TEST(ssrf_query_string)
+{
+	// tracker URLs that come pre-baked with query string arguments will be
+	// rejected when SSRF-mitigation is enabled
+	TEST_CHECK(!test_ssrf("/announce", true, "http://tracker.com:8080/announce?info_hash=abc"));
+	TEST_CHECK(!test_ssrf("/announce", true, "http://tracker.com:8080/announce?iNfo_HaSh=abc"));
+	TEST_CHECK(!test_ssrf("/announce", true, "http://tracker.com:8080/announce?event=abc"));
+	TEST_CHECK(!test_ssrf("/announce", true, "http://tracker.com:8080/announce?EvEnT=abc"));
+
+	TEST_CHECK(test_ssrf("/announce", false, "http://tracker.com:8080/announce?info_hash=abc"));
+	TEST_CHECK(test_ssrf("/announce", false, "http://tracker.com:8080/announce?iNfo_HaSh=abc"));
+	TEST_CHECK(test_ssrf("/announce", false, "http://tracker.com:8080/announce?event=abc"));
+}
+
+bool test_idna(char const* tracker_url, char const* redirect
+	, bool const feature_on)
+{
+	bool got_announce = false;
+	tracker_test(
+		[&](lt::add_torrent_params& p, lt::session& ses)
+		{
+			settings_pack pack;
+			pack.set_bool(settings_pack::allow_idna, feature_on);
+			ses.apply_settings(pack);
+			p.trackers.emplace_back(tracker_url);
+			return 60;
+		},
+		[&](std::string method, std::string req
+			, std::map<std::string, std::string>& headers)
+		{
+			got_announce = true;
+			return sim::send_response(200, "OK", 11) + "d5:peers0:e";
+		}
+		, [](torrent_handle h) {}
+		, [](torrent_handle h) {}
+		, "/announce"
+		, redirect ? redirect : ""
+		);
+	return got_announce;
+}
+
+TORRENT_TEST(tracker_idna)
+{
+	TEST_EQUAL(test_idna("http://tracker.com:8080/announce", nullptr, true), true);
+	TEST_EQUAL(test_idna("http://tracker.com:8080/announce", nullptr, false), true);
+
+	TEST_EQUAL(test_idna("http://xn--tracker-.com:8080/announce", nullptr, true), true);
+	TEST_EQUAL(test_idna("http://xn--tracker-.com:8080/announce", nullptr, false), false);
+}
+
+TORRENT_TEST(tracker_idna_redirect)
+{
+	TEST_EQUAL(test_idna("http://redirector.com:8080/announce", "http://xn--tracker-.com:8080/announce", true), true);
+	TEST_EQUAL(test_idna("http://redirector.com:8080/announce", "http://xn--tracker-.com:8080/announce", false), false);
+}
+
 // This test sets up two peers, one seed an one downloader. The downloader has
 // two trackers, both in tier 0. The behavior we expect is that it picks one of
 // the trackers at random and announces to it. Since both trackers are working,
 // it should not announce to the tracker it did not initially pick.
 
-// #error parameterize this test over adding the trackers into different tiers
-// and setting "announce_to_all_tiers"
+struct tracker_ent
+{
+	std::string url;
+	int tier;
+};
 
-TORRENT_TEST(tracker_tiers)
+void test_tracker_tiers(lt::settings_pack pack
+	, std::vector<address> local_addresses
+	, std::vector<tracker_ent> trackers
+	, std::function<void(int (&)[7])> test
+	, boost::optional<std::function<void(int (&)[7])>> test2 = boost::none)
 {
 	using namespace libtorrent;
 
-	char const* peer0_ip = "50.0.0.1";
-	char const* peer1_ip = "50.0.0.2";
-
-	using asio::ip::address;
-	address peer0 = addr(peer0_ip);
-	address peer1 = addr(peer1_ip);
+	pack.set_int(settings_pack::alert_mask, alert_category::error
+		| alert_category::status
+		| alert_category::torrent_log);
 
 	// setup the simulation
-	sim::default_config network_cfg;
-	sim::simulation sim{network_cfg};
-	sim::asio::io_context ios0 { sim, peer0 };
-	sim::asio::io_context ios1 { sim, peer1 };
+	struct sim_config : sim::default_config
+	{
+		chrono::high_resolution_clock::duration hostname_lookup(
+			asio::ip::address const& requestor
+			, std::string hostname
+			, std::vector<asio::ip::address>& result
+			, boost::system::error_code& ec)
+		{
+			if (hostname == "ipv6-only-tracker.com")
+			{
+				result.push_back(addr("f8e0::1"));
+			}
+			else if (hostname == "ipv4-only-tracker.com")
+			{
+				result.push_back(addr("3.0.0.1"));
+			}
+			else if (hostname == "dual-tracker.com")
+			{
+				result.push_back(addr("f8e0::2"));
+				result.push_back(addr("3.0.0.2"));
+			}
+			else return default_config::hostname_lookup(requestor, hostname, result, ec);
 
-	sim::asio::io_context tracker1(sim, make_address_v4("3.0.0.1"));
-	sim::asio::io_context tracker2(sim, make_address_v4("3.0.0.2"));
+			return lt::duration_cast<chrono::high_resolution_clock::duration>(chrono::milliseconds(100));
+		}
+	};
+
+	sim_config network_cfg;
+	sim::simulation sim{network_cfg};
+	sim::asio::io_context ios0 { sim, local_addresses};
+
+	sim::asio::io_context tracker1(sim, addr("3.0.0.1"));
+	sim::asio::io_context tracker2(sim, addr("3.0.0.2"));
+	sim::asio::io_context tracker3(sim, addr("3.0.0.3"));
+	sim::asio::io_context tracker4(sim, addr("3.0.0.4"));
+	sim::asio::io_context tracker5(sim, addr("f8e0::1"));
+	sim::asio::io_context tracker6(sim, addr("f8e0::2"));
+	sim::asio::io_context tracker7(sim, addr("3.0.0.5"));
 	sim::http_server http1(tracker1, 8080);
 	sim::http_server http2(tracker2, 8080);
+	sim::http_server http3(tracker3, 8080);
+	sim::http_server http4(tracker4, 8080);
+	sim::http_server http5(tracker5, 8080);
+	sim::http_server http6(tracker6, 8080);
+	sim::http_server http7(tracker7, 8080);
 
-	bool received_announce[2] = {false, false};
-	http1.register_handler("/announce"
-		, [&](std::string method, std::string req
-		, std::map<std::string, std::string>&)
+	int received_announce[7] = {0, 0, 0, 0, 0, 0, 0};
+
+	auto const return_no_peers = [&](std::string method, std::string req
+		, std::map<std::string, std::string>&, int const tracker_index)
 	{
-		received_announce[0] = true;
-		std::string const ret = "d8:intervali60e5:peers0:e";
+		++received_announce[tracker_index];
+		std::string const ret = "d8:intervali1800e5:peers0:e";
 		return sim::send_response(200, "OK", static_cast<int>(ret.size())) + ret;
-	});
+	};
 
-	http2.register_handler("/announce"
-		, [&](std::string method, std::string req
-		, std::map<std::string, std::string>&)
+	auto const return_404 = [&](std::string method, std::string req
+		, std::map<std::string, std::string>&, int const tracker_index)
 	{
-		received_announce[1] = true;
-		std::string const ret = "d8:intervali60e5:peers0:e";
-		return sim::send_response(200, "OK", static_cast<int>(ret.size())) + ret;
-	});
+		++received_announce[tracker_index];
+		return sim::send_response(404, "Not Found", 0);
+	};
 
-	lt::session_proxy zombie[2];
+	using namespace std::placeholders;
+	http1.register_handler("/announce", std::bind(return_no_peers, _1, _2, _3, 0));
+	http2.register_handler("/announce", std::bind(return_no_peers, _1, _2, _3, 1));
+	http3.register_handler("/announce", std::bind(return_no_peers, _1, _2, _3, 2));
+	http4.register_handler("/announce", std::bind(return_no_peers, _1, _2, _3, 3));
+	http5.register_handler("/announce", std::bind(return_no_peers, _1, _2, _3, 4));
+	http6.register_handler("/announce", std::bind(return_no_peers, _1, _2, _3, 5));
+	http7.register_handler("/announce", std::bind(return_404, _1, _2, _3, 6));
 
-	// setup settings pack to use for the session (customization point)
-	lt::settings_pack pack = settings();
+	lt::session_proxy zombie;
+
 	// create session
-	std::shared_ptr<lt::session> ses[2];
-	pack.set_str(settings_pack::listen_interfaces, peer0_ip + std::string(":6881"));
-	ses[0] = std::make_shared<lt::session>(pack, ios0);
+	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:6881,[::]:6881");
+	auto ses = std::make_shared<lt::session>(pack, ios0);
 
-	pack.set_str(settings_pack::listen_interfaces, peer1_ip + std::string(":6881"));
-	ses[1] = std::make_shared<lt::session>(pack, ios1);
+	print_alerts(*ses);
 
-	// only monitor alerts for session 0 (the downloader)
-	print_alerts(*ses[0], [=](lt::session&, lt::alert const* a) {
-		if (auto ta = alert_cast<lt::add_torrent_alert>(a))
-		{
-			ta->handle.connect_peer(lt::tcp::endpoint(peer1, 6881));
-		}
-	});
-
-	print_alerts(*ses[1]);
-
-	// the first peer is a downloader, the second peer is a seed
 	lt::add_torrent_params params = ::create_torrent(1);
-	auto ti2 = clone_ptr(params.ti);
 	params.flags &= ~lt::torrent_flags::auto_managed;
 	params.flags &= ~lt::torrent_flags::paused;
 
-	// These trackers are in the same tier. libtorrent is expected to pick one at
-	// random and stick to it, never announce to the other one.
-	params.ti->add_tracker("http://3.0.0.1:8080/announce", 0);
-	params.ti->add_tracker("http://3.0.0.2:8080/announce", 0);
-	params.save_path = save_path(0);
-	ses[0]->async_add_torrent(params);
-
-	params.ti = ti2;
-	params.save_path = save_path(1);
-	ses[1]->async_add_torrent(params);
-
-	sim::timer t(sim, lt::minutes(30), [&](boost::system::error_code const&)
+	for (auto const& t : trackers)
 	{
-		TEST_CHECK(received_announce[0] != received_announce[1]);
-		TEST_CHECK(ses[0]->get_torrents()[0].status().is_seeding);
-		TEST_CHECK(ses[1]->get_torrents()[0].status().is_seeding);
+		params.trackers.push_back("http://" + t.url + ":8080/announce");
+		params.tracker_tiers.push_back(t.tier);
+	}
 
-		// shut down
-		int idx = 0;
-		for (auto& s : ses)
+	params.save_path = save_path(0);
+	ses->async_add_torrent(params);
+
+	sim::timer t(sim, lt::seconds(30), [&](boost::system::error_code const&)
+	{
+		test(received_announce);
+		if (test2)
 		{
-			zombie[idx++] = s->abort();
-			s.reset();
+			std::memset(&received_announce, 0, sizeof(received_announce));
+		}
+		else
+		{
+			zombie = ses->abort();
+			ses.reset();
 		}
 	});
 
-	sim.run();
+	if (test2)
+	{
+		sim::timer t2(sim, lt::minutes(31), [&](boost::system::error_code const&)
+		{
+			(*test2)(received_announce);
+
+			zombie = ses->abort();
+			ses.reset();
+		});
+		sim.run();
+	}
+	else
+	{
+		sim.run();
+	}
+
+}
+
+bool one_of(int a, int b)
+{
+	return (a == 2 && b == 0) || (a == 0 && b == 2);
+}
+
+// the torrent is a hybrid v1 and v2 torrent, so there is one announce per
+// info-hash
+TORRENT_TEST(tracker_tiers_multi_homed)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, false);
+	pack.set_bool(settings_pack::announce_to_all_trackers, false);
+	test_tracker_tiers(pack, { addr("50.0.0.1"), addr("f8e0::10") }
+		, { {"3.0.0.1", 0}, {"3.0.0.2", 0}, {"3.0.0.3", 1}, {"3.0.0.4", 1}}
+		, [](int (&a)[7]) {
+		TEST_CHECK(one_of(a[0], a[1]));
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 0);
+		TEST_EQUAL(a[5], 0);
+		TEST_EQUAL(a[6], 0);
+	});
+}
+
+TORRENT_TEST(tracker_tiers_all_trackers_multi_homed)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, false);
+	pack.set_bool(settings_pack::announce_to_all_trackers, true);
+	test_tracker_tiers(pack, { addr("50.0.0.1"), addr("f8e0::10") }
+		, { {"3.0.0.1", 0}, {"3.0.0.2", 0}, {"3.0.0.3", 1}, {"3.0.0.4", 1}}
+		, [](int (&a)[7]) {
+		TEST_EQUAL(a[0], 2);
+		TEST_EQUAL(a[1], 2);
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 0);
+		TEST_EQUAL(a[5], 0);
+		TEST_EQUAL(a[6], 0);
+	});
+}
+
+TORRENT_TEST(tracker_tiers_all_tiers_multi_homed)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, true);
+	pack.set_bool(settings_pack::announce_to_all_trackers, false);
+	test_tracker_tiers(pack, { addr("50.0.0.1"), addr("f8e0::10") }
+		, { {"3.0.0.1", 0}, {"3.0.0.2", 0}, {"3.0.0.3", 1}, {"3.0.0.4", 1}}
+		, [](int (&a)[7]) {
+		TEST_CHECK(one_of(a[0], a[1]));
+		TEST_CHECK(one_of(a[2], a[3]));
+		TEST_EQUAL(a[4], 0);
+		TEST_EQUAL(a[5], 0);
+		TEST_EQUAL(a[6], 0);
+	});
+}
+TORRENT_TEST(tracker_tiers_all_trackers_and_tiers_multi_homed)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, true);
+	pack.set_bool(settings_pack::announce_to_all_trackers, true);
+	test_tracker_tiers(pack, { addr("50.0.0.1"), addr("f8e0::10") }
+		, { {"3.0.0.1", 0}, {"3.0.0.2", 0}, {"3.0.0.3", 1}, {"3.0.0.4", 1}}
+		, [](int (&a)[7]) {
+		TEST_EQUAL(a[0], 2);
+		TEST_EQUAL(a[1], 2);
+		TEST_EQUAL(a[2], 2);
+		TEST_EQUAL(a[3], 2);
+		TEST_EQUAL(a[4], 0);
+		TEST_EQUAL(a[5], 0);
+	});
+}
+
+TORRENT_TEST(tracker_tiers)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, false);
+	pack.set_bool(settings_pack::announce_to_all_trackers, false);
+	test_tracker_tiers(pack, { addr("50.0.0.1") }
+		, { {"3.0.0.1", 0}, {"3.0.0.2", 0}, {"3.0.0.3", 1}, {"3.0.0.4", 1}}
+		, [](int (&a)[7]) {
+		TEST_CHECK(one_of(a[0], a[1]));
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 0);
+		TEST_EQUAL(a[5], 0);
+	});
+}
+
+TORRENT_TEST(tracker_tiers_all_trackers)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, false);
+	pack.set_bool(settings_pack::announce_to_all_trackers, true);
+	test_tracker_tiers(pack, { addr("50.0.0.1") }
+		, { {"3.0.0.1", 0}, {"3.0.0.2", 0}, {"3.0.0.3", 1}, {"3.0.0.4", 1}}
+		, [](int (&a)[7]) {
+		TEST_EQUAL(a[0], 2);
+		TEST_EQUAL(a[1], 2);
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 0);
+		TEST_EQUAL(a[5], 0);
+	});
+}
+
+TORRENT_TEST(tracker_tiers_all_tiers)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, true);
+	pack.set_bool(settings_pack::announce_to_all_trackers, false);
+	test_tracker_tiers(pack, { addr("50.0.0.1") }
+		, { {"3.0.0.1", 0}, {"3.0.0.2", 0}, {"3.0.0.3", 1}, {"3.0.0.4", 1}}
+		, [](int (&a)[7]) {
+		TEST_CHECK(one_of(a[0], a[1]));
+		TEST_CHECK(one_of(a[2], a[3]));
+		TEST_EQUAL(a[4], 0);
+		TEST_EQUAL(a[5], 0);
+	});
+}
+
+TORRENT_TEST(tracker_tiers_all_trackers_and_tiers)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, true);
+	pack.set_bool(settings_pack::announce_to_all_trackers, true);
+	test_tracker_tiers(pack, { addr("50.0.0.1") }
+		, { {"3.0.0.1", 0}, {"3.0.0.2", 0}, {"3.0.0.3", 1}, {"3.0.0.4", 1}}
+		, [](int (&a)[7]) {
+		TEST_EQUAL(a[0], 2);
+		TEST_EQUAL(a[1], 2);
+		TEST_EQUAL(a[2], 2);
+		TEST_EQUAL(a[3], 2);
+		TEST_EQUAL(a[4], 0);
+		TEST_EQUAL(a[5], 0);
+	});
+}
+
+// in this case, we only have an IPv4 address, and the first tracker resolves
+// only to an IPv6 address. Make sure we move on to the next one in the tier
+TORRENT_TEST(tracker_tiers_unreachable_tracker)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, false);
+	pack.set_bool(settings_pack::announce_to_all_trackers, false);
+	test_tracker_tiers(pack, { addr("50.0.0.1") }
+		, { {"f8e0::1", 0}, {"3.0.0.2", 0}, {"3.0.0.3", 1}, {"3.0.0.4", 1}}
+		, [](int (&a)[7]) {
+		TEST_EQUAL(a[0], 0);
+		TEST_EQUAL(a[1], 2);
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 0);
+		TEST_EQUAL(a[5], 0);
+	});
+}
+
+// in this test, we have both v6 and v4 connectivity, and we have two trackers
+// One is v6 only and one is dual. Since the first tracker was announced to
+// using IPv6, the second tracker will *only* be used for IPv4, and not to
+// announce IPv6 to again.
+TORRENT_TEST(tracker_tiers_v4_and_v6_same_tier)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, false);
+	pack.set_bool(settings_pack::announce_to_all_trackers, false);
+	test_tracker_tiers(pack, { addr("50.0.0.1"), addr("f8e0::10") }
+		, { {"ipv6-only-tracker.com", 0}, {"dual-tracker.com", 0}}
+		, [](int (&a)[7]) {
+		TEST_EQUAL(a[0], 0);
+		TEST_EQUAL(a[1], 2);
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 2);
+		TEST_EQUAL(a[5], 0);
+	});
+}
+
+TORRENT_TEST(tracker_tiers_v4_and_v6_different_tiers)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, false);
+	pack.set_bool(settings_pack::announce_to_all_trackers, false);
+	test_tracker_tiers(pack, { addr("50.0.0.1"), addr("f8e0::10") }
+		, { {"ipv6-only-tracker.com", 0}, {"dual-tracker.com", 1}}
+		, [](int (&a)[7]) {
+		TEST_EQUAL(a[0], 0);
+		TEST_EQUAL(a[1], 2);
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 2);
+		TEST_EQUAL(a[5], 0);
+	});
+}
+
+// in the same scenario as above, if we announce to all trackers, we expect to
+// continue to visit all trackers in the tier, and announce to that additional
+// IPv6 address as well
+TORRENT_TEST(tracker_tiers_v4_and_v6_all_trackers)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, false);
+	pack.set_bool(settings_pack::announce_to_all_trackers, true);
+	test_tracker_tiers(pack, { addr("50.0.0.1"), addr("f8e0::10") }
+		, { {"ipv6-only-tracker.com", 0}, {"dual-tracker.com", 0}}
+		, [](int (&a)[7]) {
+		TEST_EQUAL(a[0], 0);
+		TEST_EQUAL(a[1], 2);
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 2);
+		TEST_EQUAL(a[5], 2);
+	});
+}
+
+TORRENT_TEST(tracker_tiers_v4_and_v6_different_tiers_all_trackers)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, false);
+	pack.set_bool(settings_pack::announce_to_all_trackers, true);
+	test_tracker_tiers(pack, { addr("50.0.0.1"), addr("f8e0::10") }
+		, { {"ipv6-only-tracker.com", 0}, {"dual-tracker.com", 1}}
+		, [](int (&a)[7]) {
+		TEST_EQUAL(a[0], 0);
+		TEST_EQUAL(a[1], 2);
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 2);
+		TEST_EQUAL(a[5], 0);
+	});
+}
+
+TORRENT_TEST(tracker_tiers_v4_and_v6_different_tiers_all_tiers)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, true);
+	pack.set_bool(settings_pack::announce_to_all_trackers, false);
+	test_tracker_tiers(pack, { addr("50.0.0.1"), addr("f8e0::10") }
+		, { {"ipv6-only-tracker.com", 0}, {"dual-tracker.com", 1}}
+		, [](int (&a)[7]) {
+		TEST_EQUAL(a[0], 0);
+		TEST_EQUAL(a[1], 2);
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 2);
+		TEST_EQUAL(a[5], 2);
+	});
+}
+
+TORRENT_TEST(tracker_tiers_retry_all)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, true);
+	pack.set_bool(settings_pack::announce_to_all_trackers, true);
+	// the torrent is a hybrid torrent, so it will announce twice, once for v1
+	// and once for v2
+	test_tracker_tiers(pack, { addr("50.0.0.1") }
+		, { {"3.0.0.1", 0}, {"3.0.0.5", 1}}
+		, [](int (&a)[7]) {
+		TEST_EQUAL(a[0], 2);
+		TEST_EQUAL(a[1], 0);
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 0);
+		TEST_EQUAL(a[5], 0);
+		// the failing tracker is retried 17 seconds later
+		TEST_EQUAL(a[6], 4);
+	}, std::function<void (int (&)[7])>([](int (&a)[7]) {
+		// this is 31 minutes later
+		// the working tracker is re-announced once, since interval is 1800
+		TEST_EQUAL(a[0], 2);
+		TEST_EQUAL(a[1], 0);
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 0);
+		TEST_EQUAL(a[5], 0);
+		// The failing tracker is retried after:
+		// 72 seconds
+		// 189 seconds
+		// 396 seconds
+		// 711 seconds
+		// 1166 seconds
+		// 1783 seconds
+		// 6 * 2 = 12
+		TEST_EQUAL(a[6], 12);
+	}));
+}
+
+TORRENT_TEST(tracker_tiers_retry_all_multiple_trackers_per_tier)
+{
+	settings_pack pack = settings();
+	pack.set_bool(settings_pack::announce_to_all_tiers, true);
+	pack.set_bool(settings_pack::announce_to_all_trackers, true);
+	// the torrent is a hybrid torrent, so it will announce twice, once for v1
+	// and once for v2
+	test_tracker_tiers(pack, { addr("50.0.0.1") }
+		, { {"3.0.0.1", 0}, {"3.0.0.5", 1}, {"3.0.0.2", 1}}
+		, [](int (&a)[7]) {
+		TEST_EQUAL(a[0], 2);
+		TEST_EQUAL(a[1], 2);
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 0);
+		TEST_EQUAL(a[5], 0);
+		// the failing tracker is retried 17 seconds later
+		TEST_EQUAL(a[6], 4);
+	}, std::function<void (int (&)[7])>([](int (&a)[7]) {
+		// this is 31 minutes later
+		// the working tracker is re-announced once, since interval is 1800
+		TEST_EQUAL(a[0], 2);
+		TEST_EQUAL(a[1], 2);
+		TEST_EQUAL(a[2], 0);
+		TEST_EQUAL(a[3], 0);
+		TEST_EQUAL(a[4], 0);
+		TEST_EQUAL(a[5], 0);
+		// The failing tracker is retried after:
+		// 72 seconds
+		// 189 seconds
+		// 396 seconds
+		// 711 seconds
+		// 1166 seconds
+		// 1783 seconds
+		// 6 * 2 = 12
+		TEST_EQUAL(a[6], 12);
+	}));
 }
 
 // TODO: test external IP

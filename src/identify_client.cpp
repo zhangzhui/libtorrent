@@ -1,47 +1,29 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2003-2010, 2013-2022, Arvid Norberg
+Copyright (c) 2004, spyhole
+Copyright (c) 2016, Pavel Pimenov
+Copyright (c) 2017, 2020, Alden Torres
+Copyright (c) 2017, Andrei Kurushin
+Copyright (c) 2017, Col-blimp
+Copyright (c) 2019, gubatron
+Copyright (c) 2020, Paul-Louis Ageneau
+Copyright (c) 2021, SeaHOH
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include <cctype>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
-
-#include "libtorrent/aux_/disable_warnings_push.hpp"
-#include <boost/optional.hpp>
-#include "libtorrent/aux_/disable_warnings_pop.hpp"
+#include <optional>
 
 #include "libtorrent/identify_client.hpp"
 #include "libtorrent/fingerprint.hpp"
-#include "libtorrent/string_util.hpp"
+#include "libtorrent/aux_/string_util.hpp"
 #include "libtorrent/aux_/numeric_cast.hpp"
 
 namespace {
@@ -50,23 +32,23 @@ namespace {
 
 	int decode_digit(std::uint8_t c)
 	{
-		if (is_digit(char(c))) return c - '0';
+		if (aux::is_digit(char(c))) return c - '0';
 		return c - 'A' + 10;
 	}
 
-	// takes a peer id and returns a valid boost::optional
+	// takes a peer id and returns a valid std::optional
 	// object if the peer id matched the azureus style encoding
 	// the returned fingerprint contains information about the
 	// client's id
-	boost::optional<fingerprint> parse_az_style(const peer_id& id)
+	std::optional<fingerprint> parse_az_style(const peer_id& id)
 	{
 		fingerprint ret("..", 0, 0, 0, 0);
 
-		if (id[0] != '-' || !is_print(char(id[1])) || (id[2] < '0')
+		if (id[0] != '-' || !aux::is_print(char(id[1])) || (id[2] < '0')
 			|| (id[3] < '0') || (id[4] < '0')
 			|| (id[5] < '0') || (id[6] < '0')
 			|| id[7] != '-')
-			return boost::optional<fingerprint>();
+			return std::optional<fingerprint>();
 
 		ret.name[0] = char(id[1]);
 		ret.name[1] = char(id[2]);
@@ -75,23 +57,23 @@ namespace {
 		ret.revision_version = decode_digit(id[5]);
 		ret.tag_version = decode_digit(id[6]);
 
-		return boost::optional<fingerprint>(ret);
+		return std::optional<fingerprint>(ret);
 	}
 
 	// checks if a peer id can possibly contain a shadow-style
 	// identification
-	boost::optional<fingerprint> parse_shadow_style(const peer_id& id)
+	std::optional<fingerprint> parse_shadow_style(const peer_id& id)
 	{
 		fingerprint ret("..", 0, 0, 0, 0);
 
-		if (!is_alpha(char(id[0])) && !is_digit(char(id[0])))
-			return boost::optional<fingerprint>();
+		if (!aux::is_alpha(char(id[0])) && !aux::is_digit(char(id[0])))
+			return std::optional<fingerprint>();
 
 		if (std::equal(id.begin() + 4, id.begin() + 6, "--"))
 		{
 			if ((id[1] < '0') || (id[2] < '0')
 				|| (id[3] < '0'))
-				return boost::optional<fingerprint>();
+				return std::optional<fingerprint>();
 			ret.major_version = decode_digit(id[1]);
 			ret.minor_version = decode_digit(id[2]);
 			ret.revision_version = decode_digit(id[3]);
@@ -99,7 +81,7 @@ namespace {
 		else
 		{
 			if (id[8] != 0 || id[1] > 127 || id[2] > 127 || id[3] > 127)
-				return boost::optional<fingerprint>();
+				return std::optional<fingerprint>();
 			ret.major_version = id[1];
 			ret.minor_version = id[2];
 			ret.revision_version = id[3];
@@ -109,12 +91,12 @@ namespace {
 		ret.name[1] = 0;
 
 		ret.tag_version = 0;
-		return boost::optional<fingerprint>(ret);
+		return std::optional<fingerprint>(ret);
 	}
 
 	// checks if a peer id can possibly contain a mainline-style
 	// identification
-	boost::optional<fingerprint> parse_mainline_style(const peer_id& id)
+	std::optional<fingerprint> parse_mainline_style(const peer_id& id)
 	{
 		char ids[21];
 		std::copy(id.begin(), id.end(), ids);
@@ -122,12 +104,12 @@ namespace {
 		fingerprint ret("..", 0, 0, 0, 0);
 		ret.name[1] = 0;
 		ret.tag_version = 0;
-		if (sscanf(ids, "%1c%3d-%3d-%3d--", &ret.name[0], &ret.major_version, &ret.minor_version
+		if (std::sscanf(ids, "%1c%3d-%3d-%3d--", &ret.name[0], &ret.major_version, &ret.minor_version
 			, &ret.revision_version) != 4
-			|| !is_print(ret.name[0]))
-			return boost::optional<fingerprint>();
+			|| !aux::is_print(ret.name[0]))
+			return std::optional<fingerprint>();
 
-		return boost::optional<fingerprint>(ret);
+		return std::optional<fingerprint>(ret);
 	}
 
 	struct map_entry
@@ -155,6 +137,7 @@ namespace {
 		, {"BE", "baretorrent"}
 		, {"BF", "Bitflu"}
 		, {"BG", "BTG"}
+		, {"BI", "BiglyBT"}
 		, {"BL", "BitBlinder"}
 		, {"BP", "BitTorrent Pro"}
 		, {"BR", "BitRocket"}
@@ -185,6 +168,7 @@ namespace {
 		, {"LH", "LH-ABC"}
 		, {"LK", "Linkage"}
 		, {"LP", "lphant"}
+		, {"LR", "LibreTorrent"}
 		, {"LT", "libtorrent"}
 		, {"LW", "Limewire"}
 		, {"M",  "Mainline"}
@@ -225,13 +209,16 @@ namespace {
 		, {"UM", "uTorrent Mac"}
 		, {"UT", "uTorrent"}
 		, {"VG", "Vagaa"}
+		, {"WD", "WebTorrent Desktop"}
 		, {"WT", "BitLet"}
+		, {"WW", "WebTorrent"}
 		, {"WY", "FireTorrent"}
 		, {"XF", "Xfplay"}
 		, {"XL", "Xunlei"}
 		, {"XS", "XSwifter"}
 		, {"XT", "XanTorrent"}
 		, {"XX", "Xtorrent"}
+		, {"ZO", "Zona"}
 		, {"ZT", "ZipTorrent"}
 		, {"lt", "rTorrent"}
 		, {"pX", "pHoeniX"}
@@ -263,6 +250,7 @@ namespace {
 		, {0, "T00---0", "Teeweety"}
 		, {0, "BTDWV-", "Deadman Walking"}
 		, {2, "BS", "BitSpirit"}
+		, {0, "-SP", "BitSpirit 3.6"}
 		, {0, "Pando-", "Pando"}
 		, {0, "LIME", "LimeWire"}
 		, {0, "btuga", "BTugaXP"}
@@ -348,10 +336,10 @@ namespace libtorrent {
 
 #if TORRENT_ABI_VERSION == 1
 
-	boost::optional<fingerprint> client_fingerprint(peer_id const& p)
+	std::optional<fingerprint> client_fingerprint(peer_id const& p)
 	{
 		// look for azureus style id
-		boost::optional<fingerprint> f;
+		std::optional<fingerprint> f;
 		f = parse_az_style(p);
 		if (f) return f;
 
@@ -404,7 +392,7 @@ namespace aux {
 			return "Experimental 3.1";
 
 		// look for azureus style id
-		boost::optional<fingerprint> f = parse_az_style(p);
+		std::optional<fingerprint> f = parse_az_style(p);
 		if (f) return lookup(*f);
 
 		// look for shadow style id

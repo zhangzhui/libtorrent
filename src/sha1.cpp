@@ -10,10 +10,11 @@ By Steve Reid <sreid@sea-to-sky.net>
 changelog at the end of the file.
 */
 
-#include "libtorrent/sha1.hpp"
+#include "libtorrent/aux_/sha1.hpp"
 
 #if !defined TORRENT_USE_LIBGCRYPT \
 	&& !TORRENT_USE_COMMONCRYPTO \
+	&& !TORRENT_USE_CNG \
 	&& !TORRENT_USE_CRYPTOAPI \
 	&& !defined TORRENT_USE_LIBCRYPTO
 
@@ -24,7 +25,7 @@ changelog at the end of the file.
 #include <boost/predef/other/endian.h>
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
-namespace libtorrent {
+namespace libtorrent::aux {
 
 namespace {
 
@@ -71,11 +72,11 @@ using u8 = std::uint8_t;
 	^block->l[((i)+2)&15]^block->l[(i)&15],1))
 
 // (R0+R1), R2, R3, R4 are the different operations used in SHA1
-#define R0(v,w,x,y,z,i) z+=(((w)&((x)^(y)))^(y))+BlkFun::apply(block, i)+0x5A827999+rol(v,5);(w)=rol(w,30);
-#define R1(v,w,x,y,z,i) z+=(((w)&((x)^(y)))^(y))+blk(i)+0x5A827999+rol(v,5);(w)=rol(w,30);
-#define R2(v,w,x,y,z,i) z+=((w)^(x)^(y))+blk(i)+0x6ED9EBA1+rol(v,5);(w)=rol(w,30);
-#define R3(v,w,x,y,z,i) z+=((((w)|(x))&(y))|((w)&(x)))+blk(i)+0x8F1BBCDC+rol(v,5);(w)=rol(w,30);
-#define R4(v,w,x,y,z,i) z+=((w)^(x)^(y))+blk(i)+0xCA62C1D6+rol(v,5);(w)=rol(w,30);
+#define R0(v,w,x,y,z,i) z+=(((w)&((x)^(y)))^(y))+BlkFun::apply(block, i)+0x5A827999+rol(v,5);(w)=rol(w,30)
+#define R1(v,w,x,y,z,i) z+=(((w)&((x)^(y)))^(y))+blk(i)+0x5A827999+rol(v,5);(w)=rol(w,30)
+#define R2(v,w,x,y,z,i) z+=((w)^(x)^(y))+blk(i)+0x6ED9EBA1+rol(v,5);(w)=rol(w,30)
+#define R3(v,w,x,y,z,i) z+=((((w)|(x))&(y))|((w)&(x)))+blk(i)+0x8F1BBCDC+rol(v,5);(w)=rol(w,30)
+#define R4(v,w,x,y,z,i) z+=((w)^(x)^(y))+blk(i)+0xCA62C1D6+rol(v,5);(w)=rol(w,30)
 
 	// Hash a single 512-bit block. This is the core of the algorithm.
 	template <class BlkFun>
@@ -204,8 +205,8 @@ void SHA1_update(sha1_ctx* context, u8 const* data, size_t len)
 #elif BOOST_ENDIAN_LITTLE_BYTE
 	internal_update<little_endian_blk0>(context, data, len);
 #else
-	// select different functions depending on endianess
-	// and figure out the endianess runtime
+	// select different functions depending on endianness
+	// and figure out the endianness runtime
 	if (is_big_endian())
 		internal_update<big_endian_blk0>(context, data, len);
 	else
@@ -306,9 +307,9 @@ By Arvid Norberg <arvidn@sourceforge.net>
 2- uses C99 types with size guarantees
    from boost
 3- if none of BOOST_BIG_ENDIAN or BOOST_LITTLE_ENDIAN
-   are defined, endianess is determined
+   are defined, endianness is determined
    at runtime. templates are used to duplicate
-   the transform function for each endianess
+   the transform function for each endianness
 4- using anonymous namespace to avoid external
    linkage on internal functions
 5- using standard C++ includes

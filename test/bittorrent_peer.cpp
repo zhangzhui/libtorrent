@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2016, Arvid Norberg
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2016-2017, 2019-2022, Arvid Norberg
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2018, 2020-2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/socket.hpp"
@@ -37,8 +17,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "bittorrent_peer.hpp"
 #include "libtorrent/torrent_info.hpp"
 #include "libtorrent/io_context.hpp"
-#include "libtorrent/io.hpp"
-#include "libtorrent/random.hpp"
+#include "libtorrent/aux_/io_bytes.hpp"
+#include "libtorrent/aux_/random.hpp"
 
 #include <cstdlib>
 #include <functional>
@@ -84,7 +64,7 @@ void peer_conn::on_connect(error_code const& ec)
 	char* h = static_cast<char*>(malloc(sizeof(handshake)));
 	memcpy(h, handshake, sizeof(handshake));
 	std::memcpy(h + 28, m_ti.info_hash().data(), 20);
-	std::generate(h + 48, h + 68, &rand);
+	lt::aux::random_bytes({h + 48, 20});
 	// for seeds, don't send the interested message
 	boost::asio::async_write(s, boost::asio::buffer(h, (sizeof(handshake) - 1)
 		- (m_mode == peer_mode_t::uploader ? 5 : 0))
@@ -130,7 +110,7 @@ void peer_conn::on_handshake2(error_code const& ec, size_t)
 
 void peer_conn::write_have_all()
 {
-	using namespace lt::detail;
+	using namespace lt::aux;
 
 	if (fast_extension)
 	{
@@ -178,7 +158,7 @@ void peer_conn::on_have_all_sent(error_code const& ec, size_t)
 
 bool peer_conn::write_request()
 {
-	using namespace lt::detail;
+	using namespace lt::aux;
 
 	// if we're choked (and there are no allowed-fast pieces left)
 	if (choked && allowed_fast.empty() && !m_current_piece_is_allowed) return false;
@@ -263,8 +243,8 @@ void peer_conn::close(char const* fmt, error_code const& ec)
 #endif
 	int time = int(total_milliseconds(end_time - start_time));
 	if (time == 0) time = 1;
-	double const up = (std::int64_t(blocks_sent) * 0x4000) / time / 1000.0;
-	double const down = (std::int64_t(blocks_received) * 0x4000) / time / 1000.0;
+	double const up = double(std::int64_t(blocks_sent) * 0x4000) / double(time) / 1000.0;
+	double const down = double(std::int64_t(blocks_received) * 0x4000) / double(time) / 1000.0;
 	error_code e;
 
 	char ep_str[200];
@@ -304,7 +284,7 @@ void peer_conn::work_download()
 
 void peer_conn::on_msg_length(error_code const& ec, size_t)
 {
-	using namespace lt::detail;
+	using namespace lt::aux;
 
 	if ((ec == boost::asio::error::operation_aborted || ec == boost::asio::error::bad_descriptor)
 		&& restarting)
@@ -341,7 +321,7 @@ void peer_conn::on_msg_length(error_code const& ec, size_t)
 
 void peer_conn::on_message(error_code const& ec, size_t bytes_transferred)
 {
-	using namespace lt::detail;
+	using namespace lt::aux;
 
 	if ((ec == boost::asio::error::operation_aborted || ec == boost::asio::error::bad_descriptor)
 		&& restarting)
@@ -370,9 +350,9 @@ void peer_conn::on_message(error_code const& ec, size_t bytes_transferred)
 				close("REQUEST packet has invalid size", error_code());
 				return;
 			}
-			int piece = detail::read_int32(ptr);
-			int start = detail::read_int32(ptr);
-			int length = detail::read_int32(ptr);
+			int piece = aux::read_int32(ptr);
+			int start = aux::read_int32(ptr);
+			int length = aux::read_int32(ptr);
 			write_piece(piece, start, length);
 		}
 		else if (msg == 3) // not-interested
@@ -398,9 +378,9 @@ void peer_conn::on_message(error_code const& ec, size_t bytes_transferred)
 		}
 		else if (msg == 4) // have
 		{
-			int piece = detail::read_int32(ptr);
+			int piece = aux::read_int32(ptr);
 			if (pieces.empty()) pieces.push_back(piece);
-			else pieces.insert(pieces.begin() + static_cast<int>(lt::random(static_cast<std::uint32_t>(pieces.size()))), piece);
+			else pieces.insert(pieces.begin() + static_cast<int>(aux::random(static_cast<std::uint32_t>(pieces.size()))), piece);
 		}
 		else if (msg == 5) // bitfield
 		{
@@ -433,8 +413,8 @@ void peer_conn::on_message(error_code const& ec, size_t bytes_transferred)
 */
 			++blocks_received;
 			--outstanding_requests;
-			int const piece = detail::read_int32(ptr);
-			int const start = detail::read_int32(ptr);
+			int const piece = aux::read_int32(ptr);
+			int const start = aux::read_int32(ptr);
 
 			if ((start + int(bytes_transferred)) / 0x4000 == m_blocks_per_piece)
 			{
@@ -444,7 +424,7 @@ void peer_conn::on_message(error_code const& ec, size_t bytes_transferred)
 		}
 		else if (msg == 13) // suggest
 		{
-			int piece = detail::read_int32(ptr);
+			int piece = aux::read_int32(ptr);
 			std::vector<int>::iterator i = std::find(pieces.begin(), pieces.end(), piece);
 			if (i != pieces.end())
 			{
@@ -454,9 +434,9 @@ void peer_conn::on_message(error_code const& ec, size_t bytes_transferred)
 		}
 		else if (msg == 16) // reject request
 		{
-			int piece = detail::read_int32(ptr);
-			int start = detail::read_int32(ptr);
-			int length = detail::read_int32(ptr);
+			int piece = aux::read_int32(ptr);
+			int start = aux::read_int32(ptr);
+			int length = aux::read_int32(ptr);
 
 			// put it back!
 			if (current_piece != piece)
@@ -487,7 +467,7 @@ void peer_conn::on_message(error_code const& ec, size_t bytes_transferred)
 		}
 		else if (msg == 17) // allowed_fast
 		{
-			int piece = detail::read_int32(ptr);
+			int piece = aux::read_int32(ptr);
 			std::vector<int>::iterator i = std::find(pieces.begin(), pieces.end(), piece);
 			if (i != pieces.end())
 			{
@@ -523,7 +503,7 @@ bool peer_conn::verify_piece(int piece, int start, char const* ptr, int size)
 */
 void peer_conn::write_piece(int piece, int start, int length)
 {
-	using namespace lt::detail;
+	using namespace lt::aux;
 
 //	generate_block(write_buffer, piece, start, length);
 
@@ -542,7 +522,7 @@ void peer_conn::write_piece(int piece, int start, int length)
 
 void peer_conn::write_have(int piece)
 {
-	using namespace lt::detail;
+	using namespace lt::aux;
 
 	char* ptr = write_buf_proto.data();
 	write_uint32(5, ptr);

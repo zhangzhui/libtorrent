@@ -1,59 +1,39 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2016-2020, 2022, Arvid Norberg
+Copyright (c) 2020-2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_DISK_JOB_FENCE_HPP_INCLUDE
 #define TORRENT_DISK_JOB_FENCE_HPP_INCLUDE
 
 #include "libtorrent/config.hpp"
-#include "libtorrent/tailqueue.hpp"
+#include "libtorrent/aux_/tailqueue.hpp"
 
 #include <atomic>
 #include <mutex>
 
 namespace libtorrent {
 
-struct disk_io_job;
 struct counters;
+}
 
-namespace aux {
+namespace libtorrent::aux {
 
-	// implements the disk I/O job fence used by the storage_interface
+	struct disk_job;
+
+	// implements the disk I/O job fence used by the default_storage
 	// to provide to the disk thread. Whenever a disk job needs
 	// exclusive access to the storage for that torrent, it raises
 	// the fence, blocking all new jobs, until there are no longer
 	// any outstanding jobs on the torrent, then the fence is lowered
 	// and it can be performed, along with the backlog of jobs that
 	// accrued while the fence was up
-	struct TORRENT_EXPORT disk_job_fence
+	struct TORRENT_EXTRA_EXPORT disk_job_fence
 	{
 		disk_job_fence() = default;
 
@@ -70,19 +50,19 @@ namespace aux {
 		// storage, fence_post_fence is returned.
 		// fence_post_none if the fence job was queued.
 		enum { fence_post_fence = 0, fence_post_none = 1 };
-		int raise_fence(disk_io_job* fence_job, counters& cnt);
+		int raise_fence(disk_job*, counters&);
 		bool has_fence() const;
 
 		// called whenever a job completes and is posted back to the
 		// main network thread. the tailqueue of jobs will have the
 		// backed-up jobs prepended to it in case this resulted in the
 		// fence being lowered.
-		int job_complete(disk_io_job* j, tailqueue<disk_io_job>& job_queue);
+		int job_complete(disk_job*, tailqueue<disk_job>&);
 		int num_outstanding_jobs() const { return m_outstanding_jobs; }
 
 		// if there is a fence up, returns true and adds the job
 		// to the queue of blocked jobs
-		bool is_blocked(disk_io_job* j);
+		bool is_blocked(disk_job*);
 
 		// the number of blocked jobs
 		int num_blocked() const;
@@ -96,9 +76,9 @@ namespace aux {
 
 		// when there's a fence up, jobs are queued up in here
 		// until the fence is lowered
-		tailqueue<disk_io_job> m_blocked_jobs;
+		tailqueue<disk_job> m_blocked_jobs;
 
-		// the number of disk_io_job objects there are, belonging
+		// the number of disk_job objects there are, belonging
 		// to this torrent, currently pending, hanging off of
 		// cached_piece_entry objects. This is used to determine
 		// when the fence can be lowered
@@ -110,7 +90,6 @@ namespace aux {
 	};
 
 
-}}
+}
 
 #endif
-

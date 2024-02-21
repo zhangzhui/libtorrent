@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2015, Steven Siloti
+Copyright (c) 2016-2017, 2020, Alden Torres
+Copyright (c) 2016-2019, 2021-2022, Arvid Norberg
+Copyright (c) 2016-2017, 2019, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
@@ -36,12 +15,11 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/aux_/listen_socket_handle.hpp"
 #include "libtorrent/aux_/session_impl.hpp"
-#include "libtorrent/udp_socket.hpp"
+#include "libtorrent/aux_/udp_socket.hpp"
 #include "libtorrent/kademlia/dht_tracker.hpp"
 #include "libtorrent/kademlia/dht_state.hpp"
 #include "libtorrent/performance_counters.hpp"
 #include "libtorrent/entry.hpp"
-#include "libtorrent/kademlia/dht_settings.hpp"
 #include "libtorrent/span.hpp"
 #include "libtorrent/kademlia/dht_observer.hpp"
 
@@ -60,8 +38,8 @@ struct obs : dht::dht_observer
 	void set_external_address(lt::aux::listen_socket_handle const&, address const& /* addr */
 		, address const& /* source */) override
 	{}
-	int get_listen_port(lt::aux::transport, lt::aux::listen_socket_handle const& s) override
-	{ return s.get()->udp_external_port; }
+	int get_listen_port(lt::aux::transport, lt::aux::listen_socket_handle const& s) const override
+	{ return s.get()->udp_external_port(); }
 	void get_peers(sha1_hash const&) override {}
 	void outgoing_get_peers(sha1_hash const& /* target */
 		, sha1_hash const& /* sent_target */, udp::endpoint const& /* ep */) override {}
@@ -87,8 +65,8 @@ struct obs : dht::dht_observer
 #endif
 };
 
-void send_packet(lt::udp_socket& sock, lt::aux::listen_socket_handle const&, udp::endpoint const& ep
-	, span<char const> p, error_code& ec, udp_send_flags_t const flags)
+void send_packet(lt::aux::udp_socket& sock, lt::aux::listen_socket_handle const&, udp::endpoint const& ep
+	, span<char const> p, error_code& ec, lt::aux::udp_send_flags_t const flags)
 {
 	sock.send(ep, p, ec, flags);
 }
@@ -104,7 +82,7 @@ TORRENT_TEST(dht_rate_limit)
 	asio::io_context dht_ios(sim, make_address_v4("40.30.20.10"));
 
 	// receiver (the DHT under test)
-	lt::udp_socket sock(dht_ios);
+	lt::aux::udp_socket sock(dht_ios, lt::aux::listen_socket_handle{});
 	obs o;
 	auto ls = std::make_shared<lt::aux::listen_socket_t>();
 	ls->external_address.cast_vote(make_address_v4("40.30.20.10")
@@ -112,19 +90,19 @@ TORRENT_TEST(dht_rate_limit)
 	ls->local_endpoint = tcp::endpoint(make_address_v4("40.30.20.10"), 8888);
 	error_code ec;
 	sock.bind(udp::endpoint(make_address_v4("40.30.20.10"), 8888), ec);
-	dht::dht_settings dhtsett;
-	dhtsett.block_ratelimit = 100000; // disable the DOS blocker
-	dhtsett.ignore_dark_internet = false;
-	dhtsett.upload_rate_limit = 400;
+	lt::aux::session_settings sett;
+	sett.set_int(settings_pack::dht_block_ratelimit, 100000); // disable the DOS blocker
+	sett.set_bool(settings_pack::dht_ignore_dark_internet, false);
+	sett.set_int(settings_pack::dht_upload_rate_limit, 400);
 	float const target_upload_rate = 400;
 	int const num_packets = 2000;
 
 	counters cnt;
 	dht::dht_state state;
-	std::unique_ptr<lt::dht::dht_storage_interface> dht_storage(dht::dht_default_storage_constructor(dhtsett));
+	std::unique_ptr<lt::dht::dht_storage_interface> dht_storage(dht::dht_default_storage_constructor(sett));
 	auto dht = std::make_shared<lt::dht::dht_tracker>(
 		&o, dht_ios, std::bind(&send_packet, std::ref(sock), _1, _2, _3, _4, _5)
-		, dhtsett, cnt, *dht_storage, std::move(state));
+		, sett, cnt, *dht_storage, std::move(state));
 	dht->new_socket(ls);
 
 	bool stop = false;
@@ -132,9 +110,9 @@ TORRENT_TEST(dht_rate_limit)
 		= [&](error_code const& ec)
 	{
 		if (ec) return;
-		udp_socket::packet p;
+		lt::aux::udp_socket::packet p;
 		error_code err;
-		int const num = int(sock.read(lt::span<udp_socket::packet>(&p, 1), err));
+		int const num = int(sock.read(lt::span<lt::aux::udp_socket::packet>(&p, 1), err));
 		if (num) dht->incoming_packet(ls, p.from, p.data);
 		if (stop || err) return;
 		sock.async_read(on_read);
@@ -230,7 +208,7 @@ TORRENT_TEST(dht_delete_socket)
 	sim::simulation sim(cfg);
 	sim::asio::io_context dht_ios(sim, lt::make_address_v4("40.30.20.10"));
 
-	lt::udp_socket sock(dht_ios);
+	lt::aux::udp_socket sock(dht_ios, lt::aux::listen_socket_handle{});
 	error_code ec;
 	sock.bind(udp::endpoint(make_address_v4("40.30.20.10"), 8888), ec);
 
@@ -239,13 +217,13 @@ TORRENT_TEST(dht_delete_socket)
 	ls->external_address.cast_vote(make_address_v4("40.30.20.10")
 		, lt::aux::session_interface::source_dht, lt::address());
 	ls->local_endpoint = tcp::endpoint(make_address_v4("40.30.20.10"), 8888);
-	dht::dht_settings dhtsett;
+	lt::aux::session_settings sett;
 	counters cnt;
 	dht::dht_state state;
-	std::unique_ptr<lt::dht::dht_storage_interface> dht_storage(dht::dht_default_storage_constructor(dhtsett));
+	std::unique_ptr<lt::dht::dht_storage_interface> dht_storage(dht::dht_default_storage_constructor(sett));
 	auto dht = std::make_shared<lt::dht::dht_tracker>(
 		&o, dht_ios, std::bind(&send_packet, std::ref(sock), _1, _2, _3, _4, _5)
-		, dhtsett, cnt, *dht_storage, std::move(state));
+		, sett, cnt, *dht_storage, std::move(state));
 
 	dht->start([](std::vector<std::pair<dht::node_entry, std::string>> const&){});
 	dht->new_socket(ls);

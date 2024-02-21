@@ -1,41 +1,19 @@
 /*
 
-Copyright (c) 2015-2018, Arvid Norberg
+Copyright (c) 2015-2017, 2020-2021, Arvid Norberg
+Copyright (c) 2016-2017, 2019, 2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
-#include "libtorrent/piece_picker.hpp"
+#include "libtorrent/aux_/piece_picker.hpp"
 #include "libtorrent/file_storage.hpp"
 #include "libtorrent/aux_/file_progress.hpp"
-#include "libtorrent/invariant_check.hpp"
+#include "libtorrent/aux_/invariant_check.hpp"
 
-namespace libtorrent { namespace aux {
+namespace libtorrent::aux {
 
 	void file_progress::init(piece_picker const& picker, file_storage const& fs)
 	{
@@ -51,8 +29,13 @@ namespace libtorrent { namespace aux {
 		m_have_pieces.resize(num_pieces, false);
 		m_file_sizes.clear();
 		m_file_sizes.reserve(num_files);
-		for (file_index_t i(0); i < fs.end_file(); ++i)
+		m_pad_file.clear();
+		m_pad_file.reserve(num_files);
+		for (file_index_t i : fs.file_range())
+		{
 			m_file_sizes.push_back(fs.file_size(i));
+			m_pad_file.push_back(fs.pad_file_at(i));
+		}
 #endif
 
 		m_file_progress.resize(num_files, 0);
@@ -92,6 +75,10 @@ namespace libtorrent { namespace aux {
 			{
 				std::int64_t const add = std::min(size, fs.file_size(file_index) - file_offset);
 				TORRENT_ASSERT(add >= 0);
+
+				if (!fs.pad_file_at(file_index))
+					m_total_on_disk += add;
+
 				m_file_progress[file_index] += add;
 
 				TORRENT_ASSERT(m_file_progress[file_index]
@@ -119,6 +106,7 @@ namespace libtorrent { namespace aux {
 	void file_progress::clear()
 	{
 		INVARIANT_CHECK;
+		m_total_on_disk = 0;
 		m_file_progress.clear();
 		m_file_progress.shrink_to_fit();
 #if TORRENT_USE_INVARIANT_CHECKS
@@ -136,7 +124,7 @@ namespace libtorrent { namespace aux {
 
 #if TORRENT_USE_INVARIANT_CHECKS
 		// if this assert fires, we've told the file_progress object that we have
-		// a piece twice. That violates its precondition and will cause incorect
+		// a piece twice. That violates its precondition and will cause incorrect
 		// accounting
 		TORRENT_ASSERT(m_have_pieces.get_bit(index) == false);
 		m_have_pieces.set_bit(index);
@@ -153,6 +141,11 @@ namespace libtorrent { namespace aux {
 			TORRENT_ASSERT(file_offset <= fs.file_size(file_index));
 			std::int64_t const add = std::min(fs.file_size(file_index)
 				- file_offset, size);
+
+			bool const is_pad_file = fs.pad_file_at(file_index);
+			if (!is_pad_file)
+				m_total_on_disk += add;
+
 			m_file_progress[file_index] += add;
 
 			TORRENT_ASSERT(m_file_progress[file_index]
@@ -160,7 +153,7 @@ namespace libtorrent { namespace aux {
 
 			if (m_file_progress[file_index] >= fs.file_size(file_index) && completed_cb)
 			{
-				if (!fs.pad_file_at(file_index))
+				if (!is_pad_file)
 					completed_cb(file_index);
 			}
 			size -= add;
@@ -172,13 +165,28 @@ namespace libtorrent { namespace aux {
 #if TORRENT_USE_INVARIANT_CHECKS
 	void file_progress::check_invariant() const
 	{
-		if (m_file_progress.empty()) return;
+		if (m_file_progress.empty())
+		{
+			TORRENT_ASSERT(m_total_on_disk == 0);
+			return;
+		}
+
+#ifndef TORRENT_EXPENSIVE_INVARIANT_CHECKS
+		// if we have many files, this would be an expensive
+		// invariant check, so don't run it unless we
+		// enabled expensive invariant checks
+		if (m_file_progress.size() > 900) return;
+#endif
 
 		file_index_t index(0);
+		std::int64_t total_on_disk = 0;
 		for (std::int64_t progress : m_file_progress)
 		{
-			TORRENT_ASSERT(progress <= m_file_sizes[index++]);
+			total_on_disk += m_pad_file[index] ? 0 : progress;
+			TORRENT_ASSERT(progress <= m_file_sizes[index]);
+			++index;
 		}
+		TORRENT_ASSERT(m_total_on_disk == total_on_disk);
 	}
 #endif
-} }
+}

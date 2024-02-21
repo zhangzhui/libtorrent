@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2008-2018, Arvid Norberg
+Copyright (c) 2008-2009, 2012-2021, Arvid Norberg
+Copyright (c) 2016-2018, Alden Torres
+Copyright (c) 2017, Falcosc
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_BITFIELD_HPP_INCLUDED
@@ -42,6 +21,13 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include <cstring> // for memset and memcpy
 #include <cstdint> // uint32_t
+
+#ifdef __clang__
+// disable these warnings until this class is re-worked in a way clang likes
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-warning-option"
+#pragma clang diagnostic ignored "-Wunsafe-buffer-usage"
+#endif
 
 namespace libtorrent {
 
@@ -79,7 +65,6 @@ namespace libtorrent {
 		// query bit at ``index``. Returns true if bit is 1, otherwise false.
 		bool operator[](int index) const noexcept
 		{ return get_bit(index); }
-
 		bool get_bit(int index) const noexcept
 		{
 			TORRENT_ASSERT(index >= 0);
@@ -104,6 +89,7 @@ namespace libtorrent {
 		// returns true if all bits in the bitfield are set
 		bool all_set() const noexcept;
 
+		// returns true if no bit in the bitfield is set
 		bool none_set() const noexcept
 		{
 			if(size() == 0) return true;
@@ -125,15 +111,25 @@ namespace libtorrent {
 			return bits;
 		}
 
+		// returns the number of 32 bit words are needed to represent all bits in
+		// this bitfield.
 		int num_words() const noexcept
 		{
 			return (size() + 31) / 32;
 		}
 
+		// returns the number of bytes needed to represent all bits in this
+		// bitfield
+		int num_bytes() const noexcept
+		{
+			return (size() + 7) / 8;
+		}
+
 		// returns true if the bitfield has zero size.
 		bool empty() const noexcept { return size() == 0; }
 
-		// returns a pointer to the internal buffer of the bitfield.
+		// returns a pointer to the internal buffer of the bitfield, or
+		// ``nullptr`` if it's empty.
 		char const* data() const noexcept { return m_buf ? reinterpret_cast<char const*>(&m_buf[1]) : nullptr; }
 		char* data() noexcept { return m_buf ? reinterpret_cast<char*>(&m_buf[1]) : nullptr; }
 
@@ -142,16 +138,16 @@ namespace libtorrent {
 		char const* bytes() const { return data(); }
 #endif
 
-		// assignment operator
-		bitfield& operator=(bitfield const& rhs)
+		// hidden
+		bitfield& operator=(bitfield const& rhs) &
 		{
 			if (&rhs == this) return *this;
 			assign(rhs.data(), rhs.size());
 			return *this;
 		}
+		bitfield& operator=(bitfield&& rhs) & noexcept = default;
 
-		bitfield& operator=(bitfield&& rhs) noexcept = default;
-
+		// swaps the bit-fields two variables refer to
 		void swap(bitfield& rhs) noexcept
 		{
 			std::swap(m_buf, rhs.m_buf);
@@ -159,9 +155,16 @@ namespace libtorrent {
 
 		// count the number of bits in the bitfield that are set to 1.
 		int count() const noexcept;
+
+		// returns the index of the first set bit in the bitfield, i.e. 1 bit.
 		int find_first_set() const noexcept;
+
+		// returns the index to the last cleared bit in the bitfield, i.e. 0 bit.
 		int find_last_clear() const noexcept;
 
+		bool operator==(lt::bitfield const& rhs) const;
+
+		// internal
 		struct const_iterator
 		{
 		friend struct bitfield;
@@ -186,6 +189,24 @@ namespace libtorrent {
 
 			bool operator!=(const_iterator const& rhs) const noexcept
 			{ return buf != rhs.buf || bit != rhs.bit; }
+
+			const_iterator operator+(int const o) const noexcept
+			{
+				auto const* new_buf = buf + (o / 32);
+				auto bit_offset = o & 31;
+				if (bit == 0x80000000)
+					return const_iterator(new_buf, bit_offset);
+				if ((bit >> bit_offset) != 0)
+					return const_iterator(new_buf, bit >> bit_offset, raw_t{});
+
+				const_iterator ret = *this;
+				while (bit_offset > 0)
+				{
+					--bit_offset;
+					ret.inc();
+				}
+				return ret;
+			}
 
 		private:
 			void inc()
@@ -216,10 +237,14 @@ namespace libtorrent {
 			}
 			const_iterator(std::uint32_t const* ptr, int offset)
 				: buf(ptr), bit(0x80000000 >> offset) {}
+			struct raw_t {};
+			const_iterator(std::uint32_t const* ptr, std::uint32_t mask, raw_t)
+				: buf(ptr), bit(mask) {}
 			std::uint32_t const* buf = nullptr;
 			std::uint32_t bit = 0x80000000;
 		};
 
+		// internal
 		const_iterator begin() const noexcept { return const_iterator(m_buf ? buf() : nullptr, 0); }
 		const_iterator end() const noexcept
 		{
@@ -238,13 +263,13 @@ namespace libtorrent {
 		void set_all() noexcept
 		{
 			if (size() == 0) return;
-			std::memset(buf(), 0xff, std::size_t(num_words() * 4));
+			std::memset(buf(), 0xff, std::size_t(num_words()) * 4);
 			clear_trailing_bits();
 		}
 		void clear_all() noexcept
 		{
 			if (size() == 0) return;
-			std::memset(buf(), 0x00, std::size_t(num_words() * 4));
+			std::memset(buf(), 0x00, std::size_t(num_words()) * 4);
 		}
 
 		// make the bitfield empty, of zero size.
@@ -277,12 +302,12 @@ namespace libtorrent {
 		{}
 		typed_bitfield(bitfield&& rhs) noexcept : bitfield(std::forward<bitfield>(rhs)) {} // NOLINT
 		typed_bitfield(bitfield const& rhs) : bitfield(rhs) {} // NOLINT
-		typed_bitfield& operator=(typed_bitfield&& rhs) noexcept
+		typed_bitfield& operator=(typed_bitfield&& rhs) & noexcept
 		{
 			this->bitfield::operator=(std::forward<bitfield>(rhs));
 			return *this;
 		}
-		typed_bitfield& operator=(typed_bitfield const& rhs)
+		typed_bitfield& operator=(typed_bitfield const& rhs) &
 		{
 			this->bitfield::operator=(rhs);
 			return *this;
@@ -311,5 +336,9 @@ namespace libtorrent {
 		IndexType end_index() const noexcept { return IndexType(this->size()); }
 	};
 }
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #endif // TORRENT_BITFIELD_HPP_INCLUDED

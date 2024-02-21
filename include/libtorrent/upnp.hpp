@@ -1,33 +1,14 @@
 /*
 
-Copyright (c) 2007-2018, Arvid Norberg
+Copyright (c) 2007-2010, 2013-2022, Arvid Norberg
+Copyright (c) 2016-2017, 2020-2021, Alden Torres
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2016, Pavel Pimenov
+Copyright (c) 2020, Paul-Louis Ageneau
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_UPNP_HPP
@@ -35,22 +16,37 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/socket.hpp"
 #include "libtorrent/error_code.hpp"
-#include "libtorrent/broadcast_socket.hpp"
-#include "libtorrent/deadline_timer.hpp"
-#include "libtorrent/enum_net.hpp"
-#include "libtorrent/resolver.hpp"
-#include "libtorrent/debug.hpp"
-#include "libtorrent/string_util.hpp"
+#include "libtorrent/aux_/deadline_timer.hpp"
+#include "libtorrent/aux_/enum_net.hpp"
+#include "libtorrent/aux_/resolver.hpp"
+#include "libtorrent/aux_/debug.hpp"
+#include "libtorrent/aux_/string_util.hpp"
 #include "libtorrent/aux_/portmap.hpp"
 #include "libtorrent/aux_/vector.hpp"
+#include "libtorrent/aux_/listen_socket_handle.hpp"
+#include "libtorrent/aux_/noexcept_movable.hpp"
+#include "libtorrent/aux_/session_settings.hpp"
+#include "libtorrent/aux_/ssl.hpp"
 
 #include <memory>
 #include <functional>
 #include <set>
 
 namespace libtorrent {
+
+namespace aux {
+
 	struct http_connection;
 	class http_parser;
+
+	struct socket_package
+	{
+		explicit socket_package(io_context& ios) : socket(ios) {}
+		udp::socket socket;
+		std::array<char, 1500> buffer;
+		udp::endpoint remote;
+	};
+}
 
 namespace upnp_errors {
 	// error codes for the upnp_error_category. They hold error codes
@@ -68,7 +64,7 @@ namespace upnp_errors {
 		// The source IP address cannot be wild-carded, but
 		// must be fully specified
 		source_ip_cannot_be_wildcarded = 715,
-		// The external port cannot be wildcarded, but must
+		// The external port cannot be a wildcard, but must
 		// be specified
 		external_port_cannot_be_wildcarded = 716,
 		// The port mapping entry specified conflicts with a
@@ -112,10 +108,10 @@ struct parse_state
 	{
 		auto i = tag_stack.rbegin();
 		if (i == tag_stack.rend()) return false;
-		if (!string_equal_no_case(*i, str2)) return false;
+		if (!aux::string_equal_no_case(*i, str2)) return false;
 		++i;
 		if (i == tag_stack.rend()) return false;
-		if (!string_equal_no_case(*i, str1)) return false;
+		if (!aux::string_equal_no_case(*i, str1)) return false;
 		return true;
 	}
 };
@@ -144,15 +140,16 @@ TORRENT_EXTRA_EXPORT void find_ip_address(int type, string_view string
 // TODO: support using the windows API for UPnP operations as well
 struct TORRENT_EXTRA_EXPORT upnp final
 	: std::enable_shared_from_this<upnp>
-	, single_threaded
+	, aux::single_threaded
 {
 	upnp(io_context& ios
-		, std::string const& user_agent
+		, aux::session_settings const& settings
 		, aux::portmap_callback& cb
-		, bool ignore_nonrouters);
+		, address_v4 listen_address
+		, address_v4 netmask
+		, std::string listen_device
+		, aux::listen_socket_handle ls);
 	~upnp();
-
-	void set_user_agent(std::string const& v) { m_user_agent = v; }
 
 	void start();
 
@@ -173,7 +170,8 @@ struct TORRENT_EXTRA_EXPORT upnp final
 	// portmap_alert_ respectively. If The mapping fails immediately, the return value
 	// is -1, which means failure. There will not be any error alert notification for
 	// mappings that fail with a -1 return value.
-	port_mapping_t add_mapping(portmap_protocol p, int external_port, tcp::endpoint local_ep);
+	port_mapping_t add_mapping(portmap_protocol p, int external_port, tcp::endpoint local_ep
+		, std::string const& device);
 
 	// This function removes a port mapping. ``mapping_index`` is the index that refers
 	// to the mapping you want to remove, which was returned from add_mapping().
@@ -182,7 +180,6 @@ struct TORRENT_EXTRA_EXPORT upnp final
 	bool get_mapping(port_mapping_t mapping_index, tcp::endpoint& local_ep, int& external_port
 		, portmap_protocol& protocol) const;
 
-	void discover_device();
 	void close();
 
 	// This is only available for UPnP routers. If the model is advertised by
@@ -197,43 +194,48 @@ private:
 
 	std::shared_ptr<upnp> self() { return shared_from_this(); }
 
+	void open_multicast_socket(aux::socket_package& s, error_code& ec);
+	void open_unicast_socket(aux::socket_package& s, error_code& ec);
+
 	void map_timer(error_code const& ec);
-	void try_map_upnp(bool timer = false);
+	void try_map_upnp();
 	void discover_device_impl();
 
 	void resend_request(error_code const& e);
-	void on_reply(udp::endpoint const& from, span<char const> buffer);
+	void on_reply(aux::socket_package& s, error_code const& ec, std::size_t len);
 
 	struct rootdevice;
 	void next(rootdevice& d, port_mapping_t i);
 	void update_map(rootdevice& d, port_mapping_t i);
 
+	int lease_duration(rootdevice const& d) const;
+
 	void connect(rootdevice& d);
 
 	void on_upnp_xml(error_code const& e
-		, libtorrent::http_parser const& p, rootdevice& d
-		, http_connection& c);
+		, aux::http_parser const& p, rootdevice& d
+		, aux::http_connection& c);
 	void on_upnp_get_ip_address_response(error_code const& e
-		, libtorrent::http_parser const& p, rootdevice& d
-		, http_connection& c);
+		, aux::http_parser const& p, rootdevice& d
+		, aux::http_connection& c);
 	void on_upnp_map_response(error_code const& e
-		, libtorrent::http_parser const& p, rootdevice& d
-		, port_mapping_t mapping, http_connection& c);
+		, aux::http_parser const& p, rootdevice& d
+		, port_mapping_t mapping, aux::http_connection& c);
 	void on_upnp_unmap_response(error_code const& e
-		, libtorrent::http_parser const& p, rootdevice& d
-		, port_mapping_t mapping, http_connection& c);
+		, aux::http_parser const& p, rootdevice& d
+		, port_mapping_t mapping, aux::http_connection& c);
 	void on_expire(error_code const& e);
 
 	void disable(error_code const& ec);
 	void return_error(port_mapping_t mapping, int code);
 #ifndef TORRENT_DISABLE_LOGGING
 	bool should_log() const;
-	void log(char const* msg, ...) const TORRENT_FORMAT(2,3);
+	void log(char const* fmt, ...) const TORRENT_FORMAT(2,3);
 #endif
 
 	void get_ip_address(rootdevice& d);
 	void delete_port_mapping(rootdevice& d, port_mapping_t i);
-	void create_port_mapping(http_connection& c, rootdevice& d, port_mapping_t i);
+	void create_port_mapping(aux::http_connection& c, rootdevice& d, port_mapping_t i);
 	void post(upnp::rootdevice const& d, char const* soap
 		, char const* soap_action);
 
@@ -244,6 +246,9 @@ private:
 		portmap_protocol protocol = portmap_protocol::none;
 		int external_port = 0;
 		tcp::endpoint local_ep;
+		// may be set to a device name, if this mapping is for a network bound
+		// to a specific network device
+		std::string device;
 	};
 
 	struct mapping_t : aux::base_mapping
@@ -251,6 +256,9 @@ private:
 		// the local port for this mapping. If this is set
 		// to 0, the mapping is not in use
 		tcp::endpoint local_ep;
+
+		// may be set to a network device name to bind to
+		std::string device;
 
 		// the number of times this mapping has failed
 		int failcount = 0;
@@ -261,9 +269,9 @@ private:
 		rootdevice();
 		~rootdevice();
 		rootdevice(rootdevice const&);
-		rootdevice& operator=(rootdevice const&);
-		rootdevice(rootdevice&&);
-		rootdevice& operator=(rootdevice&&);
+		rootdevice& operator=(rootdevice const&) &;
+		rootdevice(rootdevice&&) noexcept;
+		rootdevice& operator=(rootdevice&&) &;
 
 		// the interface url, through which the list of
 		// supported interfaces are fetched
@@ -282,13 +290,10 @@ private:
 		std::string hostname;
 		int port = 0;
 		std::string path;
-		address external_ip;
+		aux::noexcept_movable<address> external_ip;
 
-		// there are routers that's don't support timed
-		// port maps, without returning error 725. It seems
-		// safer to always assume that we have to ask for
-		// permanent leases
-		int lease_duration = 0;
+		// set to false if the router doesn't support lease durations
+		bool use_lease_duration = true;
 
 		// true if the device supports specifying a
 		// specific external port, false if it doesn't
@@ -296,14 +301,7 @@ private:
 
 		bool disabled = false;
 
-		// this is true if the IP of this device is not
-		// one of our default routes. i.e. it may be someone
-		// else's router, we just happen to have multicast
-		// enabled across networks
-		// this is only relevant if ignore_non_routers is set.
-		bool non_router = false;
-
-		mutable std::shared_ptr<http_connection> upnp_connection;
+		mutable std::shared_ptr<aux::http_connection> upnp_connection;
 
 #if TORRENT_USE_ASSERTS
 		int magic = 1337;
@@ -321,7 +319,7 @@ private:
 
 	aux::vector<global_mapping_t, port_mapping_t> m_mappings;
 
-	std::string m_user_agent;
+	aux::session_settings const& m_settings;
 
 	// the set of devices we've found
 	std::set<rootdevice> m_devices;
@@ -329,39 +327,47 @@ private:
 	aux::portmap_callback& m_callback;
 
 	// current retry count
-	int m_retry_count;
+	int m_retry_count = 0;
 
 	io_context& m_io_service;
 
-	resolver m_resolver;
+	aux::resolver m_resolver;
 
 	// the udp socket used to send and receive
 	// multicast messages on the network
-	broadcast_socket m_socket;
+	aux::socket_package m_multicast;
+	aux::socket_package m_unicast;
 
 	// used to resend udp packets in case
 	// they time out
-	deadline_timer m_broadcast_timer;
+	aux::deadline_timer m_broadcast_timer;
 
 	// timer used to refresh mappings
-	deadline_timer m_refresh_timer;
+	aux::deadline_timer m_refresh_timer;
 
 	// this timer fires one second after the last UPnP response. This is the
 	// point where we assume we have received most or all SSDP responses. If we
 	// are ignoring non-routers and at this point we still haven't received a
 	// response from a router UPnP device, we override the ignoring behavior and
 	// map them anyway.
-	deadline_timer m_map_timer;
+	aux::deadline_timer m_map_timer;
 
-	bool m_disabled;
-	bool m_closing;
-	bool m_ignore_non_routers;
+	bool m_disabled = false;
+	bool m_closing = false;
 
 	std::string m_model;
 
-	// cache of interfaces
-	mutable std::vector<ip_interface> m_interfaces;
-	mutable time_point m_last_if_update;
+	// the network this UPnP mapper is associated with. Don't talk to any other
+	// network
+	address_v4 m_listen_address;
+	address_v4 m_netmask;
+	std::string m_device;
+
+#if TORRENT_USE_SSL
+	aux::ssl::context m_ssl_ctx;
+#endif
+
+	aux::listen_socket_handle m_listen_handle;
 };
 
 } // namespace libtorrent

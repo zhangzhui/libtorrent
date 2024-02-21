@@ -1,37 +1,18 @@
 /*
 
-Copyright (c) 2013, Arvid Norberg
+Copyright (c) 2018, Steven Siloti
+Copyright (c) 2013-2021, Arvid Norberg
+Copyright (c) 2017-2018, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session.hpp"
+#include "libtorrent/session_params.hpp"
 #include <functional>
+#include <thread>
 
 #include "test.hpp"
 #include "setup_transfer.hpp"
@@ -41,9 +22,9 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/bdecode.hpp"
 #include "libtorrent/bencode.hpp"
 #include "libtorrent/torrent_info.hpp"
-#include "libtorrent/session_stats.hpp"
 #include "settings.hpp"
 
+#include <functional>
 #include <fstream>
 
 using namespace std::placeholders;
@@ -102,6 +83,26 @@ TORRENT_TEST(session)
 	// the session object
 }
 
+#if TORRENT_ABI_VERSION < 3
+TORRENT_TEST(async_add_torrent_deprecated_magnet)
+{
+	settings_pack p = settings();
+	p.set_int(settings_pack::alert_mask, ~0);
+	lt::session ses(p);
+
+	add_torrent_params atp;
+	atp.info_hash = sha1_hash("abababababababababab");
+	atp.save_path = ".";
+	ses.async_add_torrent(atp);
+
+	auto* a = alert_cast<add_torrent_alert>(wait_for_alert(ses, add_torrent_alert::alert_type, "ses"));
+	TEST_CHECK(a);
+	if (a == nullptr) return;
+
+	TEST_EQUAL(a->params.info_hashes.v1, sha1_hash("abababababababababab"));
+}
+#endif
+
 TORRENT_TEST(async_add_torrent_duplicate_error)
 {
 	settings_pack p = settings();
@@ -109,7 +110,7 @@ TORRENT_TEST(async_add_torrent_duplicate_error)
 	lt::session ses(p);
 
 	add_torrent_params atp;
-	atp.info_hash.assign("abababababababababab");
+	atp.info_hashes.v1.assign("abababababababababab");
 	atp.save_path = ".";
 	ses.async_add_torrent(atp);
 
@@ -133,7 +134,7 @@ TORRENT_TEST(async_add_torrent_duplicate)
 	lt::session ses(p);
 
 	add_torrent_params atp;
-	atp.info_hash.assign("abababababababababab");
+	atp.info_hashes.v1.assign("abababababababababab");
 	atp.save_path = ".";
 	ses.async_add_torrent(atp);
 
@@ -159,7 +160,7 @@ TORRENT_TEST(async_add_torrent_duplicate_back_to_back)
 	lt::session ses(p);
 
 	add_torrent_params atp;
-	atp.info_hash.assign("abababababababababab");
+	atp.info_hashes.v1.assign("abababababababababab");
 	atp.save_path = ".";
 	atp.flags |= torrent_flags::paused;
 	atp.flags &= ~torrent_flags::apply_ip_filter;
@@ -203,7 +204,7 @@ TORRENT_TEST(load_empty_file)
 	torrent_handle h = ses.add_torrent(std::move(atp), ec);
 
 	TEST_CHECK(!h.is_valid());
-	TEST_CHECK(ec == error_code(errors::no_metadata))
+	TEST_CHECK(ec == error_code(errors::no_metadata));
 }
 
 TORRENT_TEST(session_stats)
@@ -222,6 +223,11 @@ TORRENT_TEST(session_stats)
 
 	TEST_EQUAL(lt::find_metric_idx("peer.incoming_connections")
 		, lt::counters::incoming_connections);
+
+	TEST_EQUAL(lt::find_metric_idx("utp.utp_packet_resend")
+		, lt::counters::utp_packet_resend);
+	TEST_EQUAL(lt::find_metric_idx("utp.utp_fast_retransmit")
+		, lt::counters::utp_fast_retransmit);
 }
 
 TORRENT_TEST(paused_session)
@@ -244,8 +250,8 @@ TORRENT_TEST(paused_session)
 	TEST_CHECK(!(h.flags() & torrent_flags::paused));
 }
 
-template <typename Set, typename Save, typename Default, typename Load>
-void test_save_restore(Set setup, Save s, Default d, Load l)
+template <typename Set, typename Save, typename Test>
+void test_save_restore(Set setup, Save s, Test t)
 {
 	entry st;
 	{
@@ -256,26 +262,13 @@ void test_save_restore(Set setup, Save s, Default d, Load l)
 	}
 
 	{
-		settings_pack p = settings();
-		d(p);
-		lt::session ses(p);
 		// the loading function takes a bdecode_node, so we have to transform the
 		// entry
 		std::printf("%s\n", st.to_string().c_str());
 		std::vector<char> buf;
 		bencode(std::back_inserter(buf), st);
-		bdecode_node state;
-		error_code ec;
-		int ret = bdecode(buf.data(), buf.data() + buf.size()
-			, state, ec, nullptr, 100, 1000);
-		TEST_EQUAL(ret, 0);
-		if (ec)
-		{
-			std::printf("bdecode: %s\n", ec.message().c_str());
-			std::printf("%s\n", std::string(buf.data(), buf.size()).c_str());
-		}
-		TEST_CHECK(!ec);
-		l(ses, state);
+		lt::session ses(read_session_params(buf));
+		t(ses);
 	}
 }
 
@@ -287,13 +280,9 @@ TORRENT_TEST(save_restore_state)
 			p.set_int(settings_pack::request_queue_time, 1337);
 		},
 		[](lt::session& ses, entry& st) {
-			ses.save_state(st);
+			st = write_session_params(ses.session_state());
 		},
-		[](settings_pack& p) {
-			p.set_int(settings_pack::request_queue_time, 90);
-		},
-		[](lt::session& ses, bdecode_node& st) {
-			ses.load_state(st);
+		[](lt::session& ses) {
 			// make sure we loaded the cache size correctly
 			settings_pack sett = ses.get_settings();
 			TEST_EQUAL(sett.get_int(settings_pack::request_queue_time), 1337);
@@ -309,38 +298,12 @@ TORRENT_TEST(save_restore_state_save_filter)
 		},
 		[](lt::session& ses, entry& st) {
 			// save everything _but_ the settings
-			ses.save_state(st, ~session::save_settings);
+			st = write_session_params(ses.session_state(~session::save_settings));
 		},
-		[](settings_pack& p) {
-			p.set_int(settings_pack::request_queue_time, 90);
-		},
-		[](lt::session& ses, bdecode_node& st) {
-			ses.load_state(st);
+		[](lt::session& ses) {
 			// make sure whatever we loaded did not include the cache size
 			settings_pack sett = ses.get_settings();
-			TEST_EQUAL(sett.get_int(settings_pack::request_queue_time), 90);
-		});
-}
-
-TORRENT_TEST(save_restore_state_load_filter)
-{
-	test_save_restore(
-		[](settings_pack& p) {
-			// set the cache size
-			p.set_int(settings_pack::request_queue_time, 1337);
-		},
-		[](lt::session& ses, entry& st) {
-			// save everything
-			ses.save_state(st);
-		},
-		[](settings_pack& p) {
-			p.set_int(settings_pack::request_queue_time, 90);
-		},
-		[](lt::session& ses, bdecode_node& st) {
-			// load everything _but_ the settings
-			ses.load_state(st, ~session::save_settings);
-			settings_pack sett = ses.get_settings();
-			TEST_EQUAL(sett.get_int(settings_pack::request_queue_time), 90);
+			TEST_EQUAL(sett.get_int(settings_pack::request_queue_time), 3);
 		});
 }
 
@@ -350,42 +313,70 @@ TORRENT_TEST(session_shutdown)
 	lt::session ses(pack);
 }
 
-// make sure we don't restore peer_id from session state
-TORRENT_TEST(save_state_peer_id)
+TORRENT_TEST(save_state_fingerprint)
 {
+	lt::session_proxy p1;
+	lt::session_proxy p2;
+
 	lt::settings_pack pack;
 	pack.set_str(settings_pack::peer_fingerprint, "AAA");
 	lt::session ses(pack);
 	TEST_EQUAL(ses.get_settings().get_str(settings_pack::peer_fingerprint), "AAA");
-
-	lt::entry st;
-	ses.save_state(st);
+	auto const st = write_session_params_buf(ses.session_state());
 
 	pack.set_str(settings_pack::peer_fingerprint, "foobar");
 	ses.apply_settings(pack);
-
 	TEST_EQUAL(ses.get_settings().get_str(settings_pack::peer_fingerprint), "foobar");
 
-	std::vector<char> buf;
-	bencode(std::back_inserter(buf), st);
-	bdecode_node state;
-	error_code ec;
-	int ret = bdecode(buf.data(), buf.data() + buf.size()
-		, state, ec, nullptr, 100, 1000);
-	TEST_EQUAL(ret, 0);
-	ses.load_state(state);
+	lt::session ses2(read_session_params(st));
+	TEST_EQUAL(ses2.get_settings().get_str(settings_pack::peer_fingerprint), "AAA");
 
-	TEST_EQUAL(ses.get_settings().get_str(settings_pack::peer_fingerprint), "foobar");
+	p1 = ses.abort();
+	p2 = ses2.abort();
+}
+
+TORRENT_TEST(pop_alert_clear)
+{
+	session s;
+
+	// make sure the vector is cleared if there are no alerts to be popped
+	std::vector<alert*> alerts(100);
+
+	for (int i = 0; i < 10; ++i)
+	{
+		alerts.resize(100);
+		s.pop_alerts(&alerts);
+		if (alerts.empty()) break;
+	}
+	TEST_CHECK(alerts.empty());
+}
+
+namespace {
+
+lt::session_proxy test_move_session(lt::session ses)
+{
+	std::this_thread::sleep_for(lt::milliseconds(100));
+	auto t = ses.get_torrents();
+	return ses.abort();
+}
+}
+
+TORRENT_TEST(move_session)
+{
+	lt::settings_pack pack;
+	lt::session ses(pack);
+	lt::session_proxy p = test_move_session(std::move(ses));
 }
 
 #if !defined TORRENT_DISABLE_LOGGING
+#if !defined TORRENT_DISABLE_ALERT_MSG
 
 #if !defined TORRENT_DISABLE_DHT
 
 auto const count_dht_inits = [](session& ses)
 {
 	int count = 0;
-	int num = 120; // this number is adjusted per version, an estimate
+	int num = 200; // this number is adjusted per version, an estimate
 	time_point const end_time = clock_type::now() + seconds(15);
 	while (true)
 	{
@@ -414,7 +405,7 @@ TORRENT_TEST(init_dht_default_bootstrap)
 {
 	settings_pack p = settings();
 	p.set_bool(settings_pack::enable_dht, true);
-	p.set_int(settings_pack::alert_mask, alert::all_categories);
+	p.set_int(settings_pack::alert_mask, alert_category::all);
 	// default value
 	p.set_str(settings_pack::dht_bootstrap_nodes, "dht.libtorrent.org:25401");
 
@@ -428,7 +419,7 @@ TORRENT_TEST(init_dht_invalid_bootstrap)
 {
 	settings_pack p = settings();
 	p.set_bool(settings_pack::enable_dht, true);
-	p.set_int(settings_pack::alert_mask, alert::all_categories);
+	p.set_int(settings_pack::alert_mask, alert_category::all);
 	// no default value
 	p.set_str(settings_pack::dht_bootstrap_nodes, "test.libtorrent.org:25401:8888");
 
@@ -442,7 +433,7 @@ TORRENT_TEST(init_dht_empty_bootstrap)
 {
 	settings_pack p = settings();
 	p.set_bool(settings_pack::enable_dht, true);
-	p.set_int(settings_pack::alert_mask, alert::all_categories);
+	p.set_int(settings_pack::alert_mask, alert_category::all);
 	// empty value
 	p.set_str(settings_pack::dht_bootstrap_nodes, "");
 
@@ -452,6 +443,45 @@ TORRENT_TEST(init_dht_empty_bootstrap)
 	TEST_EQUAL(count, 1);
 }
 
+TORRENT_TEST(dht_upload_rate_overflow_pack)
+{
+	settings_pack p = settings();
+	// make sure this doesn't cause an overflow
+	p.set_int(settings_pack::dht_upload_rate_limit, std::numeric_limits<int>::max());
+	p.set_int(settings_pack::alert_mask, alert_category_t(std::uint32_t(p.get_int(settings_pack::alert_mask)))
+		| alert_category::dht_log);
+	p.set_bool(settings_pack::enable_dht, true);
+	lt::session s(p);
+
+	p = s.get_settings();
+	TEST_EQUAL(p.get_int(settings_pack::dht_upload_rate_limit), std::numeric_limits<int>::max() / 3);
+
+	int const count = count_dht_inits(s);
+	TEST_EQUAL(count, 1);
+}
+
+#if TORRENT_ABI_VERSION <= 2
+TORRENT_TEST(dht_upload_rate_overflow)
+{
+	settings_pack p = settings();
+	p.set_bool(settings_pack::enable_dht, true);
+	p.set_int(settings_pack::alert_mask, alert_category_t(std::uint32_t(p.get_int(settings_pack::alert_mask)))
+		| alert_category::dht_log);
+	lt::session s(p);
+
+	// make sure this doesn't cause an overflow
+	dht::dht_settings sett;
+	sett.upload_rate_limit = std::numeric_limits<int>::max();
+	s.set_dht_settings(sett);
+
+	p = s.get_settings();
+	TEST_EQUAL(p.get_int(settings_pack::dht_upload_rate_limit), std::numeric_limits<int>::max() / 3);
+
+	int const count = count_dht_inits(s);
+	TEST_EQUAL(count, 1);
+}
+#endif
+
 #endif // TORRENT_DISABLE_DHT
 
 TORRENT_TEST(reopen_network_sockets)
@@ -460,8 +490,8 @@ TORRENT_TEST(reopen_network_sockets)
 	{
 		int count_listen = 0;
 		int count_portmap = 0;
-		int num = 50; // this number is adjusted per version, an estimate
-		time_point const end_time = clock_type::now() + seconds(1);
+		int num = 60; // this number is adjusted per version, an estimate
+		time_point const end_time = clock_type::now() + seconds(3);
 		while (true)
 		{
 			time_point const now = clock_type::now();
@@ -489,24 +519,28 @@ TORRENT_TEST(reopen_network_sockets)
 				break;
 		}
 
-		std::printf("count_listen: %d, count_portmap: %d\n", count_listen, count_portmap);
+		std::printf("count_listen: %d (expect: %d), count_portmap: %d (expect: %d)\n"
+			, count_listen, listen, count_portmap, portmap);
 		return count_listen == listen && count_portmap == portmap;
 	};
 
 	settings_pack p = settings();
-	p.set_int(settings_pack::alert_mask, alert::all_categories);
-	p.set_str(settings_pack::listen_interfaces, "0.0.0.0:6881");
+	p.set_int(settings_pack::alert_mask, alert_category::all);
+	p.set_str(settings_pack::listen_interfaces, "127.0.0.1:6881l");
 
 	p.set_bool(settings_pack::enable_upnp, true);
 	p.set_bool(settings_pack::enable_natpmp, true);
 
 	lt::session s(p);
 
-	TEST_CHECK(count_alerts(s, 2, 4));
+	// NAT-PMP nad UPnP will be disabled when we only listen on loopback
+	TEST_CHECK(count_alerts(s, 2, 0));
 
+	// this is a bit of a pointless test now, since neither UPnP nor NAT-PMP are
+	// enabled for loopback
 	s.reopen_network_sockets(session_handle::reopen_map_ports);
 
-	TEST_CHECK(count_alerts(s, 0, 4));
+	TEST_CHECK(count_alerts(s, 0, 0));
 
 	s.reopen_network_sockets({});
 
@@ -520,5 +554,6 @@ TORRENT_TEST(reopen_network_sockets)
 
 	TEST_CHECK(count_alerts(s, 0, 0));
 }
+#endif // TORRENT_DISABLE_ALERT_MSG
 #endif
 

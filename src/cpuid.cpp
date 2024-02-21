@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2014-2018, Arvid Norberg
+Copyright (c) 2015-2017, 2019-2020, 2022, Arvid Norberg
+Copyright (c) 2016-2018, Alden Torres
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2018, Alexandre Janniaux
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/config.hpp"
@@ -73,16 +53,22 @@ unsigned long int helper_getauxval(unsigned long int type)
 #endif
 #endif // TORRENT_HAS_ARM && TORRENT_HAS_AUXV
 
-namespace libtorrent { namespace aux {
+namespace libtorrent {
+namespace aux {
+namespace {
 
-	namespace {
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-warning-option"
+#pragma clang diagnostic ignored "-Wunsafe-buffer-usage"
+#endif
 
 #if TORRENT_HAS_SSE
 	// internal
-	void cpuid(std::uint32_t* info, int type)
+	void cpuid(std::uint32_t* info, int type) noexcept
 	{
 #if defined _MSC_VER
-		__cpuid((int*)info, type);
+		__cpuid(reinterpret_cast<int*>(info), type);
 
 #elif defined __GNUC__
 		__get_cpuid(std::uint32_t(type), &info[0], &info[1], &info[2], &info[3]);
@@ -94,7 +80,7 @@ namespace libtorrent { namespace aux {
 	}
 #endif
 
-	bool supports_sse42()
+	bool supports_sse42() noexcept
 	{
 #if TORRENT_HAS_SSE
 		std::uint32_t cpui[4] = {0};
@@ -105,7 +91,7 @@ namespace libtorrent { namespace aux {
 #endif
 	}
 
-	bool supports_mmx()
+	bool supports_mmx() noexcept
 	{
 #if TORRENT_HAS_SSE
 		std::uint32_t cpui[4] = {0};
@@ -116,7 +102,7 @@ namespace libtorrent { namespace aux {
 #endif
 	}
 
-	bool supports_arm_neon()
+	bool supports_arm_neon() noexcept
 	{
 #if TORRENT_HAS_ARM_NEON && TORRENT_HAS_AUXV
 #if defined __arm__
@@ -133,7 +119,7 @@ namespace libtorrent { namespace aux {
 #endif
 	}
 
-	bool supports_arm_crc32c()
+	bool supports_arm_crc32c() noexcept
 	{
 #if TORRENT_HAS_ARM_CRC32 && TORRENT_HAS_AUXV
 #if defined TORRENT_FORCE_ARM_CRC32
@@ -150,7 +136,11 @@ namespace libtorrent { namespace aux {
 #endif
 	}
 
-	} // anonymous namespace
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
+} // anonymous namespace
 
 	bool const sse42_support = supports_sse42();
 	bool const mmx_support = supports_mmx();

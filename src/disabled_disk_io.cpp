@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2017, Arvid Norberg, Steven Siloti
+Copyright (c) 2016, 2019-2021, Arvid Norberg
+Copyright (c) 2017-2018, Steven Siloti
+Copyright (c) 2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/config.hpp"
@@ -35,9 +14,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/disk_buffer_holder.hpp"
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/time.hpp"
-#include "libtorrent/disk_buffer_pool.hpp"
 #include "libtorrent/performance_counters.hpp"
-#include "libtorrent/debug.hpp"
+#include "libtorrent/aux_/debug.hpp"
 #include "libtorrent/units.hpp"
 #include "libtorrent/disk_interface.hpp"
 #include "libtorrent/peer_request.hpp"
@@ -61,7 +39,7 @@ struct TORRENT_EXTRA_EXPORT disabled_disk_io final
 		std::memset(m_zero_buffer.get(), 0, default_block_size);
 	}
 
-	storage_holder new_torrent(storage_params
+	storage_holder new_torrent(storage_params const&
 		, std::shared_ptr<void> const&) override
 	{
 		return storage_holder(storage_index_t(0), *this);
@@ -71,7 +49,7 @@ struct TORRENT_EXTRA_EXPORT disabled_disk_io final
 
 	void abort(bool) override {}
 
-	void set_settings(settings_pack const*) override {}
+	void settings_updated() override {}
 
 	void async_read(storage_index_t, peer_request const& r
 		, std::function<void(disk_buffer_holder, storage_error const&)> handler
@@ -100,11 +78,18 @@ struct TORRENT_EXTRA_EXPORT disabled_disk_io final
 	}
 
 	void async_hash(storage_index_t
-		, piece_index_t piece, disk_job_flags_t
+		, piece_index_t piece, span<sha256_hash>, disk_job_flags_t
 		, std::function<void(piece_index_t, sha1_hash const&, storage_error const&)> handler) override
 	{
 		// TODO: it would be nice to return a valid hash of zeroes here
 		post(m_ios, [h = std::move(handler), piece] { h(piece, sha1_hash{}, storage_error{}); });
+	}
+
+	void async_hash2(storage_index_t, piece_index_t piece, int
+		, disk_job_flags_t
+		, std::function<void(piece_index_t, sha256_hash const&, storage_error const&)> handler) override
+	{
+		post(m_ios, [h = std::move(handler), piece]() { h(piece, sha256_hash{}, storage_error{}); });
 	}
 
 	void async_move_storage(storage_index_t
@@ -112,7 +97,7 @@ struct TORRENT_EXTRA_EXPORT disabled_disk_io final
 		, std::function<void(status_t, std::string const&, storage_error const&)> handler) override
 	{
 		post(m_ios, [h = std::move(handler), path = std::move(p)] () mutable
-			{ h(status_t::no_error, std::move(path), storage_error{}); });
+			{ h(status_t{}, std::move(path), storage_error{}); });
 	}
 
 	void async_release_files(storage_index_t, std::function<void()> handler) override
@@ -131,14 +116,14 @@ struct TORRENT_EXTRA_EXPORT disabled_disk_io final
 		, aux::vector<std::string, file_index_t>
 		, std::function<void(status_t, storage_error const&)> handler) override
 	{
-		post(m_ios, [h = std::move(handler)] { h(status_t::no_error, storage_error{}); });
+		post(m_ios, [h = std::move(handler)] { h(status_t{}, storage_error{}); });
 	}
 
 	void async_rename_file(storage_index_t
 		, file_index_t index, std::string name
 		, std::function<void(std::string const&, file_index_t, storage_error const&)> handler) override
 	{
-		post(m_ios, [h = std::move(handler), index, n = std::move(name)]
+		post(m_ios, [h = std::move(handler), index, n = std::move(name)] () mutable
 			{ h(std::move(n), index, storage_error{}); });
 	}
 
@@ -190,7 +175,7 @@ private:
 };
 
 std::unique_ptr<disk_interface> disabled_disk_io_constructor(
-	io_context& ios, counters& cnt)
+	io_context& ios, settings_interface const&, counters& cnt)
 {
 	return std::make_unique<disabled_disk_io>(ios, cnt);
 }

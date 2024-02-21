@@ -1,40 +1,31 @@
 /*
 
-Copyright (c) 2012-2018, Arvid Norberg
+Copyright (c) 2020, zywo
+Copyright (c) 2020, zywo
+Copyright (c) 2010, 2014-2016, 2018, 2020-2022, Arvid Norberg
+Copyright (c) 2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/config.hpp"
-#include "libtorrent/platform_util.hpp"
+#include "libtorrent/aux_/platform_util.hpp"
 
 #include <cstdint>
 #include <limits>
+
+#if TORRENT_HAS_PTHREAD_SET_NAME
+#include <pthread.h>
+#ifdef TORRENT_BSD
+#include <pthread_np.h>
+#endif
+#endif
+
+#ifdef TORRENT_BEOS
+#include <kernel/OS.h>
+#endif
 
 #include "libtorrent/aux_/disable_warnings_push.hpp"
 
@@ -56,11 +47,12 @@ const rlim_t rlim_infinity = RLIM_INFINITY;
 
 #if defined TORRENT_WINDOWS
 #include "libtorrent/aux_/windows.hpp"
+#include "libtorrent/aux_/win_util.hpp"
 #endif
 
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
-namespace libtorrent {
+namespace libtorrent::aux {
 
 	int max_open_files()
 	{
@@ -68,14 +60,14 @@ namespace libtorrent {
 		return 256;
 #elif TORRENT_USE_RLIMIT
 
+		int const inf = 10000000;
+
 		struct rlimit rl{};
 		if (getrlimit(RLIMIT_NOFILE, &rl) == 0)
 		{
-			if (rl.rlim_cur == rlim_infinity)
-				return std::numeric_limits<int>::max();
-
-			return rl.rlim_cur <= std::numeric_limits<int>::max()
-				? int(rl.rlim_cur) : std::numeric_limits<int>::max();
+			if (rl.rlim_cur == rlim_infinity) return inf;
+			return rl.rlim_cur <= static_cast<rlim_t>(inf)
+				? static_cast<int>(rl.rlim_cur) : inf;
 		}
 		return 1024;
 #else
@@ -85,55 +77,33 @@ namespace libtorrent {
 #endif
 	}
 
-	std::int64_t total_physical_ram()
+	void set_thread_name(char const* name)
 	{
-#if defined TORRENT_BUILD_SIMULATOR
-		return std::int64_t(4) * 1024 * 1024 * 1024;
-#else
-		// figure out how much physical RAM there is in
-		// this machine. This is used for automatically
-		// sizing the disk cache size when it's set to
-		// automatic.
-		std::int64_t ret = 0;
-
+		TORRENT_UNUSED(name);
+#if TORRENT_HAS_PTHREAD_SET_NAME
 #ifdef TORRENT_BSD
-#ifdef HW_MEMSIZE
-		int mib[2] = { CTL_HW, HW_MEMSIZE };
+		pthread_set_name_np(pthread_self(), name);
 #else
-		// not entirely sure this sysctl supports 64
-		// bit return values, but it's probably better
-		// than not building
-		int mib[2] = { CTL_HW, HW_PHYSMEM };
+		pthread_setname_np(pthread_self(), name);
 #endif
-		std::size_t len = sizeof(ret);
-		if (sysctl(mib, 2, &ret, &len, nullptr, 0) != 0)
-			ret = 0;
-#elif defined TORRENT_WINDOWS
-		MEMORYSTATUSEX ms;
-		ms.dwLength = sizeof(MEMORYSTATUSEX);
-		if (GlobalMemoryStatusEx(&ms))
-			ret = int(ms.ullTotalPhys);
-		else
-			ret = 0;
-#elif defined TORRENT_LINUX
-		ret = sysconf(_SC_PHYS_PAGES);
-		ret *= sysconf(_SC_PAGESIZE);
-#elif defined TORRENT_AMIGA
-		ret = AvailMem(MEMF_PUBLIC);
 #endif
+#ifdef TORRENT_WINDOWS
+		using SetThreadDescription_t = HRESULT (WINAPI*)(HANDLE, PCWSTR);
+		auto SetThreadDescription =
+			aux::get_library_procedure<aux::kernel32, SetThreadDescription_t>("SetThreadDescription");
+		if (SetThreadDescription) {
 
-#if TORRENT_USE_RLIMIT
-		if (ret > 0)
-		{
-			struct rlimit r{};
-			if (getrlimit(rlimit_as, &r) == 0 && r.rlim_cur != rlim_infinity)
-			{
-				if (ret > std::int64_t(r.rlim_cur))
-					ret = std::int64_t(r.rlim_cur);
-			}
+			wchar_t wide_name[50];
+			int i = -1;
+			do {
+				++i;
+				wide_name[i] = name[i];
+			} while (name[i] != 0);
+			SetThreadDescription(GetCurrentThread(), wide_name);
 		}
 #endif
-		return ret;
-#endif // TORRENT_BUILD_SIMULATOR
+#ifdef TORRENT_BEOS
+		rename_thread(find_thread(nullptr), name);
+#endif
 	}
 }

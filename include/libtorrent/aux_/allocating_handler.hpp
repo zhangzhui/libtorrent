@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2015, Arvid Norberg
+Copyright (c) 2015-2017, 2019-2022, Arvid Norberg
+Copyright (c) 2016, 2021, Alden Torres
+Copyright (c) 2019, Steven Siloti
+Copyright (c) 2020, Paul-Louis Ageneau
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_ALLOCATING_HANDLER_HPP_INCLUDED
@@ -37,13 +17,16 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/aux_/aligned_storage.hpp"
 
+#include "libtorrent/aux_/debug.hpp" // for TORRENT_ASSERT
+
 #include <type_traits>
+#include <memory> // for shared_ptr
 
 #ifdef TORRENT_ASIO_DEBUGGING
-#include "libtorrent/debug.hpp"
+#include "libtorrent/aux_/debug.hpp"
 #endif
 
-namespace libtorrent { namespace aux {
+namespace libtorrent::aux {
 
 #ifdef BOOST_ASIO_ENABLE_HANDLER_TRACKING
 	constexpr std::size_t tracking = 8;
@@ -51,75 +34,92 @@ namespace libtorrent { namespace aux {
 	constexpr std::size_t tracking = 0;
 #endif
 
-#ifdef _MSC_VER
-#ifdef TORRENT_USE_OPENSSL
-#ifdef NDEBUG
-	constexpr std::size_t write_handler_max_size = tracking + 224;
-	constexpr std::size_t read_handler_max_size = tracking + 224;
+#if defined _MSC_VER || defined __MINGW64__
+
+	// windows
+#if _HAS_ITERATOR_DEBUGGING > 0
+	constexpr std::size_t debug_read_iter = 34 * sizeof(void*);
+	constexpr std::size_t debug_write_iter = 34 * sizeof(void*);
+	constexpr std::size_t debug_tick = 4 * sizeof(void*);
 #else
-	constexpr std::size_t write_handler_max_size = tracking + 352;
-	constexpr std::size_t read_handler_max_size = tracking + 416;
-#endif
-#else
-	constexpr std::size_t write_handler_max_size = tracking + 146;
-#ifdef NDEBUG
-	constexpr std::size_t read_handler_max_size = tracking + 152;
-#else
-	constexpr std::size_t read_handler_max_size = tracking + 192;
-#endif
-#endif
-	constexpr std::size_t udp_handler_max_size = tracking + 144;
-	constexpr std::size_t utp_handler_max_size = tracking + 168;
-	constexpr std::size_t tick_handler_max_size = tracking + 96;
-	constexpr std::size_t abort_handler_max_size = tracking + 104;
-	constexpr std::size_t deferred_handler_max_size = tracking + 112;
-#elif defined __clang__
-#ifdef _GLIBCXX_DEBUG
-	constexpr std::size_t debug_iter = 4 * sizeof(void*);
-#else
-	constexpr std::size_t debug_iter = 0;
-#endif
-#ifdef TORRENT_USE_OPENSSL
-	constexpr std::size_t write_handler_max_size = tracking + 352;
-	constexpr std::size_t read_handler_max_size = tracking + debug_iter + 400;
-	constexpr std::size_t utp_handler_max_size = tracking + 136;
-	constexpr std::size_t udp_handler_max_size = tracking + 136;
-#else
-	constexpr std::size_t write_handler_max_size = tracking + 120;
-	constexpr std::size_t read_handler_max_size = tracking + debug_iter + 120;
-	constexpr std::size_t utp_handler_max_size = tracking + 120;
-	constexpr std::size_t udp_handler_max_size = tracking + 96;
-#endif
-	constexpr std::size_t tick_handler_max_size = tracking + 64;
-	constexpr std::size_t deferred_handler_max_size = tracking + 80;
-	constexpr std::size_t abort_handler_max_size = tracking + 72;
-#else
-#ifdef _GLIBCXX_DEBUG
-	constexpr std::size_t debug_write_iter = 5 * sizeof(void*);
-	constexpr std::size_t debug_read_iter = 10 * sizeof(void*);
-#else
-	constexpr std::size_t debug_write_iter = 0;
 	constexpr std::size_t debug_read_iter = 0;
+	constexpr std::size_t debug_write_iter = 0;
+	constexpr std::size_t debug_tick = 0;
 #endif
-#ifdef TORRENT_USE_OPENSSL
-	constexpr std::size_t write_handler_max_size = tracking + debug_write_iter + 248;
-	constexpr std::size_t read_handler_max_size = tracking + debug_read_iter + 240;
-	constexpr std::size_t utp_handler_max_size = tracking + 136;
-	constexpr std::size_t udp_handler_max_size = tracking + 136;
+#if TORRENT_USE_SSL
+#ifdef __MINGW64__
+	constexpr std::size_t openssl_read_cost = 26 + 21 * sizeof(void*);
+	constexpr std::size_t openssl_write_cost = 26 + 21 * sizeof(void*);
 #else
-	constexpr std::size_t write_handler_max_size = tracking + 120;
-	constexpr std::size_t read_handler_max_size = tracking + 152;
-	constexpr std::size_t utp_handler_max_size = tracking + 120;
-	constexpr std::size_t udp_handler_max_size = tracking + 96;
+	constexpr std::size_t openssl_read_cost = 26 + 14 * sizeof(void*);
+	constexpr std::size_t openssl_write_cost = 26 + 14 * sizeof(void*);
 #endif
+#else
+	constexpr std::size_t openssl_read_cost = 0;
+	constexpr std::size_t openssl_write_cost = 0;
+#endif
+
+	constexpr std::size_t read_handler_max_size = tracking + debug_read_iter + openssl_read_cost + 102 + 9 * sizeof(void*);
+	constexpr std::size_t write_handler_max_size = tracking + debug_write_iter + openssl_write_cost + 102 + 9 * sizeof(void*);
+	constexpr std::size_t udp_handler_max_size = tracking + debug_tick + 144 + 9 * sizeof(void*);
+	constexpr std::size_t utp_handler_max_size = tracking + debug_tick + 168 + 9 * sizeof(void*);
+	constexpr std::size_t tick_handler_max_size = tracking + debug_tick + 168;
+	constexpr std::size_t abort_handler_max_size = tracking + debug_tick + 104;
+	constexpr std::size_t submit_handler_max_size = tracking + debug_tick + 104;
+	constexpr std::size_t deferred_handler_max_size = tracking + debug_tick + 112;
+#else
+
+	// non-windows
+
+#ifdef _GLIBCXX_DEBUG
+#if defined __clang__
+	constexpr std::size_t debug_read_iter = 12 * sizeof(void*);
+	constexpr std::size_t debug_write_iter = 12 * sizeof(void*);
+#else
+	constexpr std::size_t debug_write_iter = 8 * sizeof(void*);
+	constexpr std::size_t debug_read_iter = 12 * sizeof(void*);
+#endif
+#else
+	constexpr std::size_t debug_read_iter = 0;
+	constexpr std::size_t debug_write_iter = 0;
+#endif
+
+#if TORRENT_USE_SSL
+#ifdef __clang__
+	constexpr std::size_t openssl_read_cost = 264;
+	constexpr std::size_t openssl_write_cost = 216;
+#else
+	constexpr std::size_t openssl_read_cost = 152;
+	constexpr std::size_t openssl_write_cost = 152;
+#endif
+#else
+	constexpr std::size_t openssl_read_cost = 0;
+	constexpr std::size_t openssl_write_cost = 0;
+#endif
+
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+	constexpr std::size_t fuzzer_write_cost = 32;
+	constexpr std::size_t fuzzer_read_cost = 80;
+#else
+	constexpr std::size_t fuzzer_write_cost = 0;
+	constexpr std::size_t fuzzer_read_cost = 0;
+#endif
+	constexpr std::size_t write_handler_max_size = tracking + debug_write_iter + openssl_write_cost + fuzzer_write_cost + 176;
+	constexpr std::size_t read_handler_max_size = tracking + debug_read_iter + openssl_read_cost + fuzzer_read_cost + 176;
+	constexpr std::size_t udp_handler_max_size = tracking + 168;
+	constexpr std::size_t utp_handler_max_size = tracking + 192;
 	constexpr std::size_t abort_handler_max_size = tracking + 72;
+	constexpr std::size_t submit_handler_max_size = tracking + 72;
 	constexpr std::size_t deferred_handler_max_size = tracking + 80;
-	constexpr std::size_t tick_handler_max_size = tracking + 64;
+	constexpr std::size_t tick_handler_max_size = tracking + 136;
 #endif
 
 	enum HandlerName
 	{
-		write_handler, read_handler, udp_handler, tick_handler, abort_handler, defer_handler, utp_handler
+		// when adding a handler here, be sure to update handler_names in
+		// debug.hpp as well
+		write_handler, read_handler, udp_handler, tick_handler, abort_handler,
+		defer_handler, utp_handler, submit_handler
 	};
 
 	// this is meant to provide the actual storage for the handler allocator.
@@ -130,11 +130,14 @@ namespace libtorrent { namespace aux {
 	template <std::size_t Size, HandlerName Name>
 	struct handler_storage
 	{
+		handler_storage() = default;
+		static constexpr std::size_t size = Size;
+		static constexpr HandlerName name = Name;
+
+		typename aux::aligned_storage<Size, alignof(std::max_align_t)>::type bytes;
 #if TORRENT_USE_ASSERTS
 		bool used = false;
 #endif
-		handler_storage() = default;
-		typename aux::aligned_storage<Size>::type bytes;
 		handler_storage(handler_storage const&) = delete;
 	};
 
@@ -180,6 +183,7 @@ namespace libtorrent { namespace aux {
 			using other = handler_allocator<U
 				, assert_message<required_size<sizeof(U)>
 				, available_size<Size>, Name>::value, Name>;
+			static_assert(alignof(U) <= alignof(std::max_align_t), "handler storage is not correctly aligned");
 		};
 
 		explicit handler_allocator(handler_storage<Size, Name>* s) : m_storage(s) {}
@@ -236,7 +240,7 @@ namespace libtorrent { namespace aux {
 		{}
 
 		template <class... A>
-		void operator()(A&&... a) const
+		void operator()(A&&... a)
 		{
 #ifdef BOOST_NO_EXCEPTIONS
 			handler(std::forward<A>(a)...);
@@ -263,7 +267,7 @@ namespace libtorrent { namespace aux {
 #endif
 		}
 
-		using allocator_type = handler_allocator<allocating_handler<Handler, Size, Name>, Size, Name>;
+		using allocator_type = handler_allocator<int, Size, Name>;
 
 		allocator_type get_allocator() const noexcept
 		{ return allocator_type{storage}; }
@@ -286,7 +290,54 @@ namespace libtorrent { namespace aux {
 		return aux::allocating_handler<Handler, Size, Name>(
 			std::forward<Handler>(handler), &storage, &err_handler);
 	}
-}
+
+	// TODO: in C++17, Handler and Storage could just use "auto"
+	template <typename T
+		, typename HandlerType
+		, HandlerType Handler
+		, void (T::*ErrorHandler)(error_code const&)
+		, void (T::*ExceptHandler)(std::exception const&)
+		, typename StorageType
+		, StorageType T::* Storage>
+	struct handler
+	{
+		explicit handler(std::shared_ptr<T> p) : ptr_(std::move(p)) {}
+
+		std::shared_ptr<T> ptr_;
+
+		template <class... A>
+		void operator()(A&&... a)
+		{
+#ifdef BOOST_NO_EXCEPTIONS
+			(ptr_.get()->*Handler)(std::forward<A>(a)...);
+#else
+			try
+			{
+				(ptr_.get()->*Handler)(std::forward<A>(a)...);
+			}
+			catch (system_error const& e)
+			{
+				(ptr_.get()->*ErrorHandler)(e.code());
+			}
+			catch (std::exception const& e)
+			{
+				(ptr_.get()->*ExceptHandler)(e);
+			}
+			catch (...)
+			{
+				// this is pretty bad
+				TORRENT_ASSERT(false);
+				std::runtime_error e("unknown exception");
+				(ptr_.get()->*ExceptHandler)(e);
+			}
+#endif
+		}
+
+		using allocator_type = handler_allocator<handler, StorageType::size, StorageType::name>;
+
+		allocator_type get_allocator() const noexcept
+		{ return allocator_type{&(ptr_.get()->*Storage)}; }
+	};
 }
 
 #endif

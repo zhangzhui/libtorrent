@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2015, Arvid Norberg
+Copyright (c) 2015-2022, Arvid Norberg
+Copyright (c) 2017, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
@@ -1200,7 +1178,7 @@ TORRENT_TEST(non_owning_refs)
 }
 
 // test that a partial parse can be still be printed up to the
-// point where it faild
+// point where it failed
 TORRENT_TEST(partial_parse)
 {
 	char b[] = "d1:ai1e1:b3:foo1:cli1ei2ee1:dd1:xi1-eee";
@@ -1298,3 +1276,69 @@ TORRENT_TEST(switch_buffer)
 	TEST_EQUAL(string1, string2);
 }
 
+TORRENT_TEST(long_string_99999999)
+{
+	std::string input;
+	input += "99999999:";
+	input.resize(9 + 99999999, '_');
+
+	error_code ec;
+	int pos;
+	bdecode_node e = bdecode(input, ec, &pos);
+	TEST_EQUAL(e.type(), bdecode_node::string_t);
+	TEST_EQUAL(e.string_value(), input.substr(9));
+}
+
+TORRENT_TEST(long_string_100000000)
+{
+	std::string input;
+	input += "100000000:";
+	input.resize(10 + 100000000, '_');
+
+	error_code ec;
+	int pos;
+	bdecode_node e = bdecode(input, ec, &pos);
+	TEST_EQUAL(e.type(), bdecode_node::string_t);
+	TEST_EQUAL(e.string_value(), input.substr(10));
+}
+
+TORRENT_TEST(data_offset)
+{
+	char const b[] = "li1e3:fooli1ei2eed1:xi1eee";
+	error_code ec;
+	bdecode_node e = bdecode(b, ec);
+	TEST_CHECK(!ec);
+	std::printf("%s\n", print_entry(e).c_str());
+
+	TEST_EQUAL(e.data_offset(), 0);
+	TEST_EQUAL(e.list_at(0).data_offset(), 1);
+	TEST_EQUAL(e.list_at(1).data_offset(), 4);
+	TEST_EQUAL(e.list_at(2).data_offset(), 9);
+	TEST_EQUAL(e.list_at(3).data_offset(), 17);
+}
+
+TORRENT_TEST(string_offset)
+{
+	char const b[] = "l3:foo3:bare";
+	error_code ec;
+	bdecode_node e = bdecode(b, ec);
+	TEST_CHECK(!ec);
+	std::printf("%s\n", print_entry(e).c_str());
+
+	TEST_EQUAL(e.list_at(0).string_offset(), 3);
+	TEST_EQUAL(e.list_at(1).string_offset(), 8);
+}
+
+TORRENT_TEST(dict_at_node)
+{
+	char const b[] = "d3:foo3:bar4:test4:teste";
+	error_code ec;
+	bdecode_node e = bdecode(b, ec);
+	TEST_CHECK(!ec);
+	std::printf("%s\n", print_entry(e).c_str());
+
+	TEST_EQUAL(e.dict_at_node(0).first.string_offset(), 3);
+	TEST_EQUAL(e.dict_at_node(0).second.string_offset(), 8);
+	TEST_EQUAL(e.dict_at_node(1).first.string_offset(), 13);
+	TEST_EQUAL(e.dict_at_node(1).second.string_offset(), 19);
+}

@@ -1,73 +1,27 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg, Magnus Jonsson
+Copyright (c) 2003, Magnus Jonsson
+Copyright (c) 2003, 2006, 2008-2022, Arvid Norberg
+Copyright (c) 2016, 2021, Alden Torres
+Copyright (c) 2017, 2020, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/config.hpp"
-#include "libtorrent/extensions/ut_pex.hpp"
-#include "libtorrent/extensions/ut_metadata.hpp"
-#include "libtorrent/extensions/smart_ban.hpp"
 #include "libtorrent/session.hpp"
 #include "libtorrent/extensions.hpp"
 #include "libtorrent/aux_/session_impl.hpp"
 #include "libtorrent/aux_/session_call.hpp"
 #include "libtorrent/extensions.hpp" // for add_peer_flags_t
 #include "libtorrent/disk_interface.hpp"
+#include "libtorrent/mmap_disk_io.hpp"
 #include "libtorrent/posix_disk_io.hpp"
+#include "libtorrent/aux_/platform_util.hpp"
 
 namespace libtorrent {
-
-#ifndef TORRENT_DISABLE_EXTENSIONS
-	// declared in extensions.hpp
-	// remove this once C++17 is required
-	constexpr feature_flags_t plugin::optimistic_unchoke_feature;
-	constexpr feature_flags_t plugin::tick_feature;
-	constexpr feature_flags_t plugin::dht_request_feature;
-	constexpr feature_flags_t plugin::alert_feature;
-#endif
-
-namespace aux {
-	constexpr torrent_list_index_t session_interface::torrent_state_updates;
-	constexpr torrent_list_index_t session_interface::torrent_want_tick;
-	constexpr torrent_list_index_t session_interface::torrent_want_peers_download;
-	constexpr torrent_list_index_t session_interface::torrent_want_peers_finished;
-	constexpr torrent_list_index_t session_interface::torrent_want_scrape;
-	constexpr torrent_list_index_t session_interface::torrent_downloading_auto_managed;
-	constexpr torrent_list_index_t session_interface::torrent_seeding_auto_managed;
-	constexpr torrent_list_index_t session_interface::torrent_checking_auto_managed;
-}
-
-#ifndef TORRENT_DISABLE_EXTENSIONS
-constexpr add_peer_flags_t torrent_plugin::first_time;
-constexpr add_peer_flags_t torrent_plugin::filtered;
-#endif
 
 namespace {
 
@@ -75,14 +29,14 @@ namespace {
 	void wait_for_asio_handlers()
 	{
 		int counter = 0;
-		while (log_async())
+		while (aux::log_async())
 		{
-			std::this_thread::sleep_for(seconds(1));
+			std::this_thread::sleep_for(milliseconds(300));
 			++counter;
 			std::printf("\x1b[2J\x1b[0;0H\x1b[33m==== Waiting to shut down: %d ==== \x1b[0m\n\n"
 				, counter);
 		}
-		async_dec_threads();
+		aux::async_dec_threads();
 
 		std::fprintf(stderr, "\n\nEXPECTS NO MORE ASYNC OPS\n\n\n");
 	}
@@ -140,10 +94,6 @@ namespace {
 		// socket until the disk write is complete
 		set.set_int(settings_pack::max_queued_disk_bytes, 1);
 
-		// don't keep track of all upnp devices, keep
-		// the device list small
-		set.set_bool(settings_pack::upnp_ignore_nonrouters, true);
-
 		// never keep more than one 16kB block in
 		// the send buffer
 		set.set_int(settings_pack::send_buffer_watermark, 9);
@@ -198,11 +148,8 @@ namespace {
 		// allow lots of peers to try to connect simultaneously
 		set.set_int(settings_pack::listen_queue_size, 3000);
 
-		// unchoke many peers
-		set.set_int(settings_pack::unchoke_slots_limit, 2000);
-
-		set.set_int(settings_pack::read_cache_line_size, 32);
-		set.set_int(settings_pack::write_cache_line_size, 256);
+		// unchoke all peers
+		set.set_int(settings_pack::unchoke_slots_limit, -1);
 
 		// the max number of bytes pending write before we throttle
 		// download rate
@@ -219,8 +166,7 @@ namespace {
 
 		set.set_int(settings_pack::max_rejects, 10);
 
-		set.set_int(settings_pack::recv_socket_buffer_size, 1024 * 1024);
-		set.set_int(settings_pack::send_socket_buffer_size, 1024 * 1024);
+		set.set_int(settings_pack::send_not_sent_low_watermark, 524288);
 
 		// don't let connections linger for too long
 		set.set_int(settings_pack::request_timeout, 10);
@@ -259,122 +205,250 @@ namespace {
 		return set;
 	}
 
-	session_params read_session_params(bdecode_node const& e, save_state_flags_t const flags)
-	{
-		session_params params;
-
-		bdecode_node settings;
-		if (e.type() != bdecode_node::dict_t) return params;
-
-		if (flags & session_handle::save_settings)
-		{
-			settings = e.dict_find_dict("settings");
-			if (settings)
-			{
-				params.settings = load_pack_from_dict(settings);
-			}
-		}
-
-#ifndef TORRENT_DISABLE_DHT
-		if (flags & session_handle::save_dht_settings)
-		{
-			settings = e.dict_find_dict("dht");
-			if (settings)
-			{
-				params.dht_settings = dht::read_dht_settings(settings);
-			}
-		}
-
-		if (flags & session_handle::save_dht_state)
-		{
-			settings = e.dict_find_dict("dht state");
-			if (settings)
-			{
-				params.dht_state = dht::read_dht_state(settings);
-			}
-		}
-#endif
-
-		return params;
-	}
-
-	void session::start(session_params&& params, io_context* ios)
+	void session::start(session_flags_t const flags, session_params&& params, io_context* ios)
 	{
 		bool const internal_executor = ios == nullptr;
 
 		if (internal_executor)
 		{
 			// the user did not provide an executor, we have to use our own
-			m_io_service = std::make_shared<io_context>();
+			m_io_service = std::make_shared<io_context>(1);
 			ios = m_io_service.get();
 		}
 
+#if TORRENT_ABI_VERSION <= 2
+#ifndef TORRENT_DISABLE_DHT
+		// in case the session_params has its dht_settings in use, pick out the
+		// non-default settings from there and move them into the main settings.
+		// any conflicting options set in main settings take precedence
+		{
+		dht::dht_settings const def_sett{};
+#define SET_BOOL(name) if (!params.settings.has_val(settings_pack::dht_ ## name) && \
+	def_sett.name != params.dht_settings.name) \
+		params.settings.set_bool(settings_pack::dht_ ## name, params.dht_settings.name)
+#define SET_INT(name) if (!params.settings.has_val(settings_pack::dht_ ## name) && \
+	def_sett.name != params.dht_settings.name) \
+		params.settings.set_int(settings_pack::dht_ ## name, params.dht_settings.name)
+
+		SET_INT(max_peers_reply);
+		SET_INT(search_branching);
+		SET_INT(max_fail_count);
+		SET_INT(max_torrents);
+		SET_INT(max_dht_items);
+		SET_INT(max_peers);
+		SET_INT(max_torrent_search_reply);
+		SET_BOOL(restrict_routing_ips);
+		SET_BOOL(restrict_search_ips);
+		SET_BOOL(extended_routing_table);
+		SET_BOOL(aggressive_lookups);
+		SET_BOOL(privacy_lookups);
+		SET_BOOL(enforce_node_id);
+		SET_BOOL(ignore_dark_internet);
+		SET_INT(block_timeout);
+		SET_INT(block_ratelimit);
+		SET_BOOL(read_only);
+		SET_INT(item_lifetime);
+		SET_INT(upload_rate_limit);
+		SET_INT(sample_infohashes_interval);
+		SET_INT(max_infohashes_sample_count);
+#undef SET_BOOL
+#undef SET_INT
+		}
+#endif
+#endif
+
+		// TODO: start() should just use flags out of the session_params object,
 		m_impl = std::make_shared<aux::session_impl>(std::ref(*ios)
 			, std::move(params.settings)
-			, std::move(params.disk_io_constructor));
+			, std::move(params.disk_io_constructor)
+			, flags);
 		*static_cast<session_handle*>(this) = session_handle(m_impl);
 
 #ifndef TORRENT_DISABLE_EXTENSIONS
 		for (auto& ext : params.extensions)
 		{
+			ext->load_state(params.ext_state);
 			m_impl->add_ses_extension(std::move(ext));
 		}
 #endif
 
 #ifndef TORRENT_DISABLE_DHT
-		m_impl->set_dht_settings(std::move(params.dht_settings));
 		m_impl->set_dht_state(std::move(params.dht_state));
 
 		TORRENT_ASSERT(params.dht_storage_constructor);
 		m_impl->set_dht_storage(std::move(params.dht_storage_constructor));
 #endif
 
+		if (!params.ip_filter.empty())
+		{
+			std::shared_ptr<ip_filter> copy = std::make_shared<ip_filter>(std::move(params.ip_filter));
+			m_impl->set_ip_filter(std::move(copy));
+		}
+
 		m_impl->start_session();
 
 		if (internal_executor)
 		{
 			// start a thread for the message pump
-			m_thread = std::make_shared<std::thread>(
-				[&] { m_io_service->run(); });
+			auto s = m_io_service;
+			m_thread = std::make_shared<std::thread>([=]
+			{
+				aux::set_thread_name("libtorrent-network-thread");
+				s->run();
+			});
 		}
 	}
 
-namespace {
-
-		std::vector<std::shared_ptr<plugin>> default_plugins(
-			bool empty = false)
-		{
-#ifndef TORRENT_DISABLE_EXTENSIONS
-			if (empty) return {};
-			using wrapper = aux::session_impl::session_plugin_wrapper;
-			return {
-				std::make_shared<wrapper>(create_ut_pex_plugin),
-				std::make_shared<wrapper>(create_ut_metadata_plugin),
-				std::make_shared<wrapper>(create_smart_ban_plugin)
-			};
-#else
-			TORRENT_UNUSED(empty);
-			return {};
-#endif
-		}
-	}
-
+#if TORRENT_ABI_VERSION <= 2
 	void session::start(session_flags_t const flags, settings_pack&& sp, io_context* ios)
 	{
-		start({std::move(sp),
-			default_plugins(!(flags & add_default_plugins))}, ios);
+		if (flags & add_default_plugins)
+		{
+			session_params sp_(std::move(sp));
+			start(flags, std::move(sp_), ios);
+		}
+		else
+		{
+			session_params sp_(std::move(sp), {});
+			start(flags, std::move(sp_), ios);
+		}
 	}
+#endif
+
+	session::session(session&&) = default;
+
+	session::session(session_params const& params)
+	{
+		start(params.flags, session_params(params), nullptr);
+	}
+
+	session::session(session_params&& params)
+	{
+		start(params.flags, std::move(params), nullptr);
+	}
+
+#if TORRENT_ABI_VERSION < 4
+	session::session(session_params const& params, session_flags_t const flags)
+	{
+		start(flags, session_params(params), nullptr);
+	}
+
+	session::session(session_params&& params, session_flags_t const flags)
+	{
+		start(flags, std::move(params), nullptr);
+	}
+#endif
+
+	session::session()
+	{
+		session_params params;
+		start(params.flags, std::move(params), nullptr);
+	}
+
+	session::session(session_params&& params, io_context& ios)
+	{
+		start(params.flags, std::move(params), &ios);
+	}
+
+	session::session(session_params const& params, io_context& ios)
+	{
+		start(params.flags, session_params(params), &ios);
+	}
+
+#if TORRENT_ABI_VERSION < 4
+	session::session(session_params&& params, io_context& ios, session_flags_t const flags)
+	{
+		start(flags, std::move(params), &ios);
+	}
+
+	session::session(session_params const& params, io_context& ios, session_flags_t const flags)
+	{
+		start(flags, session_params(params), &ios);
+	}
+#endif
+
+#if TORRENT_ABI_VERSION <= 2
+	session::session(settings_pack&& pack, session_flags_t const flags)
+	{
+		start(flags, std::move(pack), nullptr);
+	}
+
+	session::session(settings_pack const& pack, session_flags_t const flags)
+	{
+		start(flags, settings_pack(pack), nullptr);
+	}
+
+	session::session(settings_pack&& pack, io_context& ios, session_flags_t const flags)
+	{
+		start(flags, std::move(pack), &ios);
+	}
+
+	session::session(settings_pack const& pack, io_context& ios, session_flags_t const flags)
+	{
+		start(flags, settings_pack(pack), &ios);
+	}
+#endif
+
+#if TORRENT_ABI_VERSION == 1
+#include "libtorrent/aux_/disable_deprecation_warnings_push.hpp"
+	session::session(fingerprint const& print, session_flags_t const flags
+		, alert_category_t const alert_mask)
+	{
+		settings_pack pack;
+		pack.set_int(settings_pack::alert_mask, int(alert_mask));
+		pack.set_str(settings_pack::peer_fingerprint, print.to_string());
+		if (!(flags & start_default_features))
+		{
+			pack.set_bool(settings_pack::enable_upnp, false);
+			pack.set_bool(settings_pack::enable_natpmp, false);
+			pack.set_bool(settings_pack::enable_lsd, false);
+			pack.set_bool(settings_pack::enable_dht, false);
+		}
+
+		start(flags, std::move(pack), nullptr);
+	}
+
+	session::session(fingerprint const& print, std::pair<int, int> listen_port_range
+		, char const* listen_interface, session_flags_t const flags
+		, alert_category_t const alert_mask)
+	{
+		TORRENT_ASSERT(listen_port_range.first > 0);
+		TORRENT_ASSERT(listen_port_range.first <= listen_port_range.second);
+
+		settings_pack pack;
+		pack.set_int(settings_pack::alert_mask, int(alert_mask));
+		pack.set_int(settings_pack::max_retry_port_bind, listen_port_range.second - listen_port_range.first);
+		pack.set_str(settings_pack::peer_fingerprint, print.to_string());
+		char if_string[100];
+
+		if (listen_interface == nullptr) listen_interface = "0.0.0.0";
+		std::snprintf(if_string, sizeof(if_string), "%s:%d", listen_interface, listen_port_range.first);
+		pack.set_str(settings_pack::listen_interfaces, if_string);
+
+		if (!(flags & start_default_features))
+		{
+			pack.set_bool(settings_pack::enable_upnp, false);
+			pack.set_bool(settings_pack::enable_natpmp, false);
+			pack.set_bool(settings_pack::enable_lsd, false);
+			pack.set_bool(settings_pack::enable_dht, false);
+		}
+		start(flags, std::move(pack), nullptr);
+	}
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
+#endif // TORRENT_ABI_VERSION
+	session& session::operator=(session&&) & = default;
 
 	session::~session()
 	{
+		if (!m_impl) return;
+
 		aux::dump_call_profile();
-		TORRENT_ASSERT(m_impl);
 
 		// capture the shared_ptr in the dispatched function
 		// to keep the session_impl alive
 		m_impl->call_abort();
 
-		if (m_thread && m_thread.unique())
+		if (m_thread && m_thread.use_count() == 1)
 		{
 #if defined TORRENT_ASIO_DEBUGGING
 			wait_for_asio_handlers();
@@ -400,12 +474,12 @@ namespace {
 		, m_impl(std::move(impl))
 	{}
 	session_proxy::session_proxy(session_proxy const&) = default;
-	session_proxy& session_proxy::operator=(session_proxy const&) = default;
+	session_proxy& session_proxy::operator=(session_proxy const&) & = default;
 	session_proxy::session_proxy(session_proxy&&) noexcept = default;
-	session_proxy& session_proxy::operator=(session_proxy&&) noexcept = default;
+	session_proxy& session_proxy::operator=(session_proxy&&) & noexcept = default;
 	session_proxy::~session_proxy()
 	{
-		if (m_thread && m_thread.unique())
+		if (m_thread && m_thread.use_count() == 1)
 		{
 #if defined TORRENT_ASIO_DEBUGGING
 			wait_for_asio_handlers();
@@ -414,46 +488,19 @@ namespace {
 		}
 	}
 
-	session_params::session_params(settings_pack&& sp)
-		: session_params(std::move(sp), default_plugins())
-	{}
-
-	session_params::session_params(settings_pack const& sp)
-		: session_params(sp, default_plugins())
-	{}
-
-	session_params::session_params()
-		: extensions(default_plugins())
-#ifndef TORRENT_DISABLE_DHT
-		, dht_storage_constructor(dht::dht_default_storage_constructor)
-#endif
-	{}
-
-	session_params::session_params(settings_pack&& sp
-		, std::vector<std::shared_ptr<plugin>> exts)
-		: settings(std::move(sp))
-		, extensions(std::move(exts))
-#ifndef TORRENT_DISABLE_DHT
-		, dht_storage_constructor(dht::dht_default_storage_constructor)
-#endif
-	{}
-
-	session_params::session_params(settings_pack const& sp
-		, std::vector<std::shared_ptr<plugin>> exts)
-		: settings(sp)
-		, extensions(std::move(exts))
-#ifndef TORRENT_DISABLE_DHT
-		, dht_storage_constructor(dht::dht_default_storage_constructor)
-#endif
-	{}
-
 	TORRENT_EXPORT std::unique_ptr<disk_interface> default_disk_io_constructor(
-		io_context& ios, counters& cnt)
+		io_context& ios, settings_interface const& sett, counters& cnt)
 	{
 #if TORRENT_HAVE_MMAP || TORRENT_HAVE_MAP_VIEW_OF_FILE
-		return mmap_disk_io_constructor(ios, cnt);
+		// TODO: In C++17. use if constexpr instead
+#include "libtorrent/aux_/disable_deprecation_warnings_push.hpp"
+		if (sizeof(void*) == 8)
+			return mmap_disk_io_constructor(ios, sett, cnt);
+		else
+			return posix_disk_io_constructor(ios, sett, cnt);
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
 #else
-		return posix_disk_io_constructor(ios, cnt);
+		return posix_disk_io_constructor(ios, sett, cnt);
 #endif
 	}
 

@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2016, Arvid Norberg
+Copyright (c) 2016-2019, 2021-2022, Arvid Norberg
+Copyright (c) 2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include <array>
@@ -40,7 +18,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/ip_filter.hpp"
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/aux_/proxy_settings.hpp"
-#include "libtorrent/random.hpp"
+#include "libtorrent/aux_/random.hpp"
 #include "libtorrent/settings_pack.hpp"
 #include "simulator/simulator.hpp"
 #include "simulator/socks_server.hpp"
@@ -56,20 +34,10 @@ using namespace sim;
 #error "msvc's standard library does not support bad_alloc with debug iterators. This test only works with debug iterators disabled on msvc. _ITERATOR_DEBUG_LEVEL=0"
 #endif
 
-std::string make_ep_string(char const* address, bool const is_v6
-	, char const* port)
-{
-	std::string ret;
-	if (is_v6) ret += '[';
-	ret += address;
-	if (is_v6) ret += ']';
-	ret += ':';
-	ret += port;
-	return ret;
-}
+int g_alloc_counter = 1000000;
 
 template <typename HandleAlerts, typename Test>
-void run_test(HandleAlerts const& on_alert, Test const& test)
+void run_test(int const round, HandleAlerts const& on_alert, Test const& test)
 {
 	using namespace lt;
 
@@ -100,8 +68,9 @@ void run_test(HandleAlerts const& on_alert, Test const& test)
 
 	pack.set_str(settings_pack::listen_interfaces, peer0.to_string() + ":6881");
 
-	// create session
 	std::shared_ptr<lt::session> ses[2];
+
+	// create session
 	ses[0] = std::make_shared<lt::session>(pack, ios0);
 
 	pack.set_str(settings_pack::listen_interfaces, peer1.to_string() + ":6881");
@@ -142,10 +111,32 @@ void run_test(HandleAlerts const& on_alert, Test const& test)
 		}
 	});
 
+	// we're only interested in allocation failures after construction has
+	// completed
+	g_alloc_counter = round;
 	sim.run();
 }
 
-int g_alloc_counter = 1000000;
+#ifdef _MSC_VER
+namespace libtorrent {
+namespace aux {
+	// this is unfortunate. Some MSVC standard containers really don't move
+	// with noexcept, by actually allocating memory (i.e. it's not just a matter
+	// of accidentally missing noexcept specifiers). The heterogeneous queue used
+	// by the alert manager requires alerts to be noexcept move constructable and
+	// move assignable, which they claim to be, even though on MSVC some of them
+	// aren't. Things will improve in C++17 and it doesn't seem worth the trouble
+	// to make the heterogeneous queue support throwing moves, nor to replace all
+	// standard types with variants that can move noexcept.
+	// this thread local variable is set to true whenever such throwing
+	// container is wrapped, to make it pretend that it cannot throw. This
+	// signals to the test that it can't exercise that failure path.
+	// this is defined in simulation/utils.cpp
+	// TODO: in C++17, make this inline
+	extern thread_local int g_must_not_fail;
+}
+}
+#endif
 
 void* operator new(std::size_t sz)
 {
@@ -154,16 +145,7 @@ void* operator new(std::size_t sz)
 		char stack[10000];
 		libtorrent::print_backtrace(stack, sizeof(stack), 40, nullptr);
 #ifdef _MSC_VER
-		// this is a bit unfortunate. Some MSVC standard containers really don't move
-		// with noexcept, by actually allocating memory (i.e. it's not just a matter
-		// of accidentally missing noexcept specifiers). The heterogeneous queue used
-		// by the alert manager requires alerts to be noexcept move constructable and
-		// move assignable, which they claim to be, even though on MSVC some of them
-		// aren't. Things will improve in C++17 and it doesn't seem worth the trouble
-		// to make the heterogeneous queue support throwing moves, nor to replace all
-		// standard types with variants that can move noexcept.
-		if (std::strstr(stack, " libtorrent::entry::operator= ") != nullptr
-			|| std::strstr(stack, " libtorrent::aux::noexcept_movable<std::map<") != nullptr)
+		if (libtorrent::aux::g_must_not_fail)
 		{
 			++g_alloc_counter;
 			return std::malloc(sz);
@@ -192,7 +174,7 @@ TORRENT_TEST(error_handling)
 		// this will clear the history of all output we've printed so far.
 		// if we encounter an error from now on, we'll only print the relevant
 		// iteration
-		reset_output();
+		unit_test::reset_output();
 
 		// re-seed the random engine each iteration, to make the runs
 		// deterministic
@@ -201,9 +183,8 @@ TORRENT_TEST(error_handling)
 		std::printf("\n\n === ROUND %d ===\n\n", i);
 		try
 		{
-			g_alloc_counter = i;
 			using namespace lt;
-			run_test(
+			run_test(i,
 				[](lt::session&, lt::alert const*) {},
 				[](std::shared_ptr<lt::session>[2]) {}
 			);

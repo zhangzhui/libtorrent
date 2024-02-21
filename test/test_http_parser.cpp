@@ -1,47 +1,26 @@
 /*
 
-Copyright (c) 2012, Arvid Norberg
+Copyright (c) 2013-2021, Arvid Norberg
+Copyright (c) 2018, 2020-2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
-#include "libtorrent/http_parser.hpp"
-#include "libtorrent/parse_url.hpp"
+#include "libtorrent/aux_/http_parser.hpp"
+#include "libtorrent/aux_/parse_url.hpp"
 #include "libtorrent/string_view.hpp"
 
 #include <tuple>
 
 using namespace lt;
+using namespace lt::aux;
 
 namespace {
 
-std::tuple<int, int, bool> feed_bytes(http_parser& parser, string_view str)
+std::tuple<int, int, bool> feed_bytes(aux::http_parser& parser, string_view str)
 {
 	std::tuple<int, int, bool> ret(0, 0, false);
 	std::tuple<int, int, bool> prev(0, 0, false);
@@ -60,7 +39,18 @@ std::tuple<int, int, bool> feed_bytes(http_parser& parser, string_view str)
 			std::tie(payload, protocol) = parser.incoming(recv_buf, error);
 			std::get<0>(ret) += payload;
 			std::get<1>(ret) += protocol;
+
+#ifdef _MSC_VER
+#pragma warning(push, 1)
+// this ia a buggy diagnostic on msvc
+// warning C4834: discarding return value of function with 'nodiscard' attribute
+#pragma warning( disable : 4834 )
+#endif
 			std::get<2>(ret) |= error;
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 			TORRENT_ASSERT(payload + protocol == chunk_size || std::get<2>(ret));
 		}
 		TEST_CHECK(prev == std::make_tuple(0, 0, false) || ret == prev || std::get<2>(ret));
@@ -79,7 +69,7 @@ std::tuple<int, int, bool> feed_bytes(http_parser& parser, string_view str)
 TORRENT_TEST(http_parser)
 {
 	// HTTP request parser
-	http_parser parser;
+	aux::http_parser parser;
 	std::tuple<int, int, bool> received;
 
 	received = feed_bytes(parser
@@ -94,9 +84,9 @@ TORRENT_TEST(http_parser)
 	span<char const> body = parser.get_body();
 	TEST_CHECK(std::equal(body.begin(), body.end(), "test"));
 	TEST_CHECK(parser.header("content-type") == "text/plain");
-	TEST_CHECK(atoi(parser.header("content-length").c_str()) == 4);
+	TEST_CHECK(std::atoi(parser.header("content-length").c_str()) == 4);
 	TEST_CHECK(*parser.header_duration("content-length") == lt::seconds32(4));
-	TEST_CHECK(parser.header_duration("content-length-x") == boost::none);
+	TEST_CHECK(parser.header_duration("content-length-x") == std::nullopt);
 
 	parser.reset();
 
@@ -386,6 +376,25 @@ TORRENT_TEST(http_parser)
 	TEST_CHECK(parse_url_components("http://[2001:ff00::1]:42/path/to/file", ec)
 		== std::make_tuple("http", "", "2001:ff00::1", 42, "/path/to/file"));
 
+	// if there is no path component, "/" is added
+	TEST_CHECK(parse_url_components("http://test.com:42", ec)
+		== std::make_tuple("http", "", "test.com", 42, "/"));
+
+	TEST_CHECK(parse_url_components("http://test.com:42/", ec)
+		== std::make_tuple("http", "", "test.com", 42, "/"));
+
+	TEST_CHECK(parse_url_components("http://test.com:42?query=string", ec)
+		== std::make_tuple("http", "", "test.com", 42, "/?query=string"));
+
+	TEST_CHECK(parse_url_components("http://test.com:42/?query=string", ec)
+		== std::make_tuple("http", "", "test.com", 42, "/?query=string"));
+
+	TEST_CHECK(parse_url_components("http://test.com:42#fragment", ec)
+		== std::make_tuple("http", "", "test.com", 42, "/#fragment"));
+
+	TEST_CHECK(parse_url_components("http://test.com:42/#fragment", ec)
+		== std::make_tuple("http", "", "test.com", 42, "/#fragment"));
+
 	// leading spaces are supposed to be stripped
 	TEST_CHECK(parse_url_components(" \thttp://[2001:ff00::1]:42/path/to/file", ec)
 		== std::make_tuple("http", "", "2001:ff00::1", 42, "/path/to/file"));
@@ -400,6 +409,9 @@ TORRENT_TEST(http_parser)
 	parse_url_components("http:", ec);
 	TEST_CHECK(ec == error_code(errors::unsupported_url_protocol));
 	ec.clear();
+
+	parse_url_components("http://test.com:42abc", ec);
+	TEST_CHECK(ec == error_code(errors::invalid_port));
 
 	// test split_url
 
@@ -449,84 +461,159 @@ TORRENT_TEST(http_parser)
 
 	// test resolve_redirect_location
 
-	TEST_EQUAL(resolve_redirect_location("http://example.com/a/b", "a")
+	TEST_EQUAL(aux::resolve_redirect_location("http://example.com/a/b", "a")
 		, "http://example.com/a/a");
 
-	TEST_EQUAL(resolve_redirect_location("http://example.com/a/b", "c/d/e/")
+	TEST_EQUAL(aux::resolve_redirect_location("http://example.com/a/b", "c/d/e/")
 		, "http://example.com/a/c/d/e/");
 
-	TEST_EQUAL(resolve_redirect_location("http://example.com/a/b", "../a")
+	TEST_EQUAL(aux::resolve_redirect_location("http://example.com/a/b", "../a")
 		, "http://example.com/a/../a");
 
-	TEST_EQUAL(resolve_redirect_location("http://example.com/a/b", "/c")
+	TEST_EQUAL(aux::resolve_redirect_location("http://example.com/a/b", "/c")
 		, "http://example.com/c");
 
-	TEST_EQUAL(resolve_redirect_location("http://example.com/a/b", "http://test.com/d")
+	TEST_EQUAL(aux::resolve_redirect_location("http://example.com/a/b", "http://test.com/d")
 		, "http://test.com/d");
 
-	TEST_EQUAL(resolve_redirect_location("my-custom-scheme://example.com/a/b", "http://test.com/d")
+	TEST_EQUAL(aux::resolve_redirect_location("my-custom-scheme://example.com/a/b", "http://test.com/d")
 		, "http://test.com/d");
 
-	TEST_EQUAL(resolve_redirect_location("http://example.com", "/d")
+	TEST_EQUAL(aux::resolve_redirect_location("http://example.com", "/d")
 		, "http://example.com/d");
 
-	TEST_EQUAL(resolve_redirect_location("http://example.com", "d")
+	TEST_EQUAL(aux::resolve_redirect_location("http://example.com", "d")
 		, "http://example.com/d");
 
-	TEST_EQUAL(resolve_redirect_location("my-custom-scheme://example.com/a/b", "/d")
+	TEST_EQUAL(aux::resolve_redirect_location("my-custom-scheme://example.com/a/b", "/d")
 		, "my-custom-scheme://example.com/d");
 
-	TEST_EQUAL(resolve_redirect_location("my-custom-scheme://example.com/a/b", "c/d")
+	TEST_EQUAL(aux::resolve_redirect_location("my-custom-scheme://example.com/a/b", "c/d")
 		, "my-custom-scheme://example.com/a/c/d");
 
 	// if the referrer is invalid, just respond the verbatim location
 
-	TEST_EQUAL(resolve_redirect_location("example.com/a/b", "/c/d")
+	TEST_EQUAL(aux::resolve_redirect_location("example.com/a/b", "/c/d")
 		, "/c/d");
 
 	// is_ok_status
 
-	TEST_EQUAL(is_ok_status(200), true);
-	TEST_EQUAL(is_ok_status(206), true);
-	TEST_EQUAL(is_ok_status(299), false);
-	TEST_EQUAL(is_ok_status(300), true);
-	TEST_EQUAL(is_ok_status(399), true);
-	TEST_EQUAL(is_ok_status(400), false);
-	TEST_EQUAL(is_ok_status(299), false);
+	TEST_EQUAL(aux::is_ok_status(200), true);
+	TEST_EQUAL(aux::is_ok_status(206), true);
+	TEST_EQUAL(aux::is_ok_status(299), false);
+	TEST_EQUAL(aux::is_ok_status(300), true);
+	TEST_EQUAL(aux::is_ok_status(399), true);
+	TEST_EQUAL(aux::is_ok_status(400), false);
+	TEST_EQUAL(aux::is_ok_status(299), false);
 
 	// is_redirect
 
-	TEST_EQUAL(is_redirect(299), false);
-	TEST_EQUAL(is_redirect(100), false);
-	TEST_EQUAL(is_redirect(300), true);
-	TEST_EQUAL(is_redirect(399), true);
-	TEST_EQUAL(is_redirect(400), false);
+	TEST_EQUAL(aux::is_redirect(299), false);
+	TEST_EQUAL(aux::is_redirect(100), false);
+	TEST_EQUAL(aux::is_redirect(300), true);
+	TEST_EQUAL(aux::is_redirect(399), true);
+	TEST_EQUAL(aux::is_redirect(400), false);
+}
+
+namespace {
+std::string test_collapse_chunks(std::string chunked_input, bool const expect_error = false)
+{
+	http_parser parser;
+
+	std::string input = "HTTP/1.1 200 OK\r\n"
+		"Transfer-Encoding: chunked\r\n"
+		"Content-Type: text/plain\r\n"
+		"\r\n";
+
+	input += chunked_input;
+
+	bool error = false;
+	int payload = 0;
+	int protocol = 0;
+	std::tie(payload, protocol) = parser.incoming(input, error);
+
+	TEST_CHECK(protocol > 0);
+	TEST_CHECK(payload > 0);
+	if (expect_error)
+	{
+		TEST_CHECK(std::size_t(protocol + payload) <= input.size());
+	}
+	else
+	{
+		TEST_EQUAL(std::size_t(protocol + payload), input.size());
+		TEST_CHECK(parser.finished());
+	}
+
+	std::vector<char> mutable_buffer;
+	span<char const> body = parser.get_body();
+	std::copy(body.begin(), body.end(), std::back_inserter(mutable_buffer));
+	body = parser.collapse_chunk_headers(mutable_buffer);
+	return std::string(body.data(), std::size_t(body.size()));
+}
 }
 
 TORRENT_TEST(chunked_encoding)
 {
+	auto const collapsed = test_collapse_chunks(
+		"4\r\ntest\r\n4\r\n1234\r\n10\r\n0123456789abcdef\r\n"
+		"0\r\n\r\n");
+	TEST_EQUAL(collapsed, "test12340123456789abcdef");
+}
+
+TORRENT_TEST(chunked_encoding_beyond_end)
+{
+	auto const collapsed = test_collapse_chunks(
+		"4\r\ntest\r\n4\r\n1234\r\n20\r\n0123456789abcdef\r\n"
+		"0\r\n\r\n", true);
+	TEST_EQUAL(collapsed, "test1234");
+}
+
+TORRENT_TEST(chunked_encoding_end_of_buffer)
+{
+	auto const collapsed = test_collapse_chunks(
+		"4\r\ntest\r\n4\r\n1234\r\n17\r\n0123456789abcdef\r\n"
+		"0\r\n\r\n", true);
+	TEST_EQUAL(collapsed, "test12340123456789abcdef\r\n0\r\n\r\n");
+}
+
+TORRENT_TEST(chunked_encoding_past_end)
+{
+	auto const collapsed = test_collapse_chunks(
+		"4\r\ntest\r\n4\r\n1234\r\n18\r\n0123456789abcdef\r\n"
+		"0\r\n\r\n", true);
+	TEST_EQUAL(collapsed, "test1234");
+}
+
+TORRENT_TEST(chunked_encoding_negative)
+{
+	auto const collapsed = test_collapse_chunks(
+		"4\r\ntest\r\n4\r\n1234\r\n-10\r\n0123456789abcdef\r\n"
+		"0\r\n\r\n", true);
+	TEST_EQUAL(collapsed, "");
+}
+
+TORRENT_TEST(chunked_encoding_end)
+{
+	auto const collapsed = test_collapse_chunks(
+		"4\r\ntest\r\n4\r\n1234\r\n11\r\n0123456789abcdef\r\n"
+		"0\r\n\r\n", true);
+	TEST_EQUAL(collapsed, "test12340123456789abcdef\r");
+}
+
+TORRENT_TEST(chunked_encoding_overflow)
+{
 	char const chunked_input[] =
 		"HTTP/1.1 200 OK\r\n"
 		"Transfer-Encoding: chunked\r\n"
-		"Content-Type: text/plain\r\n"
 		"\r\n"
-		"4\r\ntest\r\n4\r\n1234\r\n10\r\n0123456789abcdef\r\n"
-		"0\r\n\r\n";
+		"7FFFFFFFFFFFFFBF\r\n";
 
-	http_parser parser;
-	std::tuple<int, int, bool> const received
-		= feed_bytes(parser, chunked_input);
+	aux::http_parser parser;
+	bool error = false;
+	parser.incoming(chunked_input, error);
 
-	TEST_EQUAL(strlen(chunked_input), 24 + 94)
-	TEST_CHECK(received == std::make_tuple(24, 94, false));
-	TEST_CHECK(parser.finished());
-
-	char mutable_buffer[100];
-	span<char const> body = parser.get_body();
-	std::copy(body.begin(), body.end(), mutable_buffer);
-	body = parser.collapse_chunk_headers({mutable_buffer, body.size()});
-
-	TEST_CHECK(body == span<char const>("test12340123456789abcdef", 24));
+	// it should have encountered an error
+	TEST_CHECK(error == true);
 }
 
 TORRENT_TEST(invalid_content_length)
@@ -537,7 +624,7 @@ TORRENT_TEST(invalid_content_length)
 		"Content-Length: -45345\r\n"
 		"\r\n";
 
-	http_parser parser;
+	aux::http_parser parser;
 	std::tuple<int, int, bool> const received
 		= feed_bytes(parser, chunked_input);
 
@@ -553,7 +640,7 @@ TORRENT_TEST(invalid_chunked)
 		"-53465234545\r\n"
 		"foobar";
 
-	http_parser parser;
+	aux::http_parser parser;
 	std::tuple<int, int, bool> const received
 		= feed_bytes(parser, chunked_input);
 
@@ -567,7 +654,7 @@ TORRENT_TEST(invalid_content_range_start)
 		"Content-Range: bYTes -3-4\n"
 		"\n";
 
-	http_parser parser;
+	aux::http_parser parser;
 	std::tuple<int, int, bool> const received
 		= feed_bytes(parser, chunked_input);
 
@@ -581,7 +668,7 @@ TORRENT_TEST(invalid_content_range_end)
 		"Content-Range: bYTes 3--434\n"
 		"\n";
 
-	http_parser parser;
+	aux::http_parser parser;
 	std::tuple<int, int, bool> const received
 		= feed_bytes(parser, chunked_input);
 
@@ -595,7 +682,7 @@ TORRENT_TEST(overflow_content_length)
 		"Content-Length: 9999999999999999999999999999\r\n"
 		"\r\n";
 
-	http_parser parser;
+	aux::http_parser parser;
 	std::tuple<int, int, bool> const received
 		= feed_bytes(parser, chunked_input);
 
@@ -609,7 +696,7 @@ TORRENT_TEST(overflow_content_range_end)
 		"Content-Range: bytes 0-999999999999999999999999\n"
 		"\n";
 
-	http_parser parser;
+	aux::http_parser parser;
 	std::tuple<int, int, bool> const received
 		= feed_bytes(parser, chunked_input);
 
@@ -623,7 +710,7 @@ TORRENT_TEST(overflow_content_range_begin)
 		"Content-Range: bytes 999999999999999999999999-0\n"
 		"\n";
 
-	http_parser parser;
+	aux::http_parser parser;
 	std::tuple<int, int, bool> const received
 		= feed_bytes(parser, chunked_input);
 
@@ -638,12 +725,12 @@ TORRENT_TEST(missing_chunked_header)
 		"\r\n"
 		"\n";
 
-	// make the inpout not be null terminated. If the parser reads off the end,
+	// make the input not be null terminated. If the parser reads off the end,
 	// address sanitizer will trigger
 	char chunked_input[sizeof(input)-1];
 	std::memcpy(chunked_input, input, sizeof(chunked_input));
 
-	http_parser parser;
+	aux::http_parser parser;
 	std::tuple<int, int, bool> const received
 		= feed_bytes(parser, {chunked_input, sizeof(chunked_input)});
 
@@ -675,7 +762,7 @@ TORRENT_TEST(invalid_chunk_1)
 		0x0a, 0x00
 	};
 
-	http_parser parser;
+	aux::http_parser parser;
 	std::tuple<int, int, bool> const received
 		= feed_bytes(parser, {reinterpret_cast<char const*>(invalid_chunked_input), sizeof(invalid_chunked_input)});
 
@@ -701,7 +788,7 @@ TORRENT_TEST(invalid_chunk_2)
 		0x0a
 	};
 
-	http_parser parser;
+	aux::http_parser parser;
 	feed_bytes(parser, {reinterpret_cast<char const*>(invalid_chunked_input), sizeof(invalid_chunked_input)});
 }
 
@@ -724,6 +811,80 @@ TORRENT_TEST(invalid_chunk_3)
 		0x6a, 0x76, 0x73, 0x66, 0x63, 0x6b, 0x65, 0x0a, 0x30, 0x0a, 0x0a, 0x0a,              // jvsfcke.0...
 	};
 
-	http_parser parser;
+	aux::http_parser parser;
 	feed_bytes(parser, {reinterpret_cast<char const*>(invalid_chunked_input), sizeof(invalid_chunked_input)});
+}
+
+TORRENT_TEST(idna)
+{
+	TEST_CHECK(!is_idna("a.b.com"));
+	TEST_CHECK(!is_idna("example.com"));
+	TEST_CHECK(!is_idna("exn--ample.com"));
+
+	// xn-- is the ACE introducer for a punycoded label. It can appear at the
+	// start of any label, but not in the middle (if it does, it's not
+	// interpreted as an ACE). Since hostnames are case insensitive, the ACE
+	// introducer has to be as well
+	TEST_CHECK(is_idna("xn--example.com"));
+	TEST_CHECK(is_idna("xN--example.com"));
+	TEST_CHECK(is_idna("xn--example-.com"));
+	TEST_CHECK(is_idna("subdomain.xn--example-.com"));
+	TEST_CHECK(is_idna("subdomain.example.xn--com-"));
+
+	// this isn't valid IDNA, but it's suspicious
+	TEST_CHECK(is_idna("xn--.com"));
+
+	// some weird edge-cases
+	TEST_CHECK(!is_idna(".............."));
+	TEST_CHECK(is_idna(".....xn--........."));
+	TEST_CHECK(is_idna(".....Xn--........."));
+	TEST_CHECK(is_idna(".....xN--........."));
+	TEST_CHECK(is_idna(".....XN--........."));
+	TEST_CHECK(!is_idna(".....-xn--........."));
+	TEST_CHECK(is_idna("xn--"));
+	TEST_CHECK(is_idna("Xn--"));
+	TEST_CHECK(is_idna("XN--"));
+	TEST_CHECK(is_idna("xN--"));
+	TEST_CHECK(is_idna("xn--.xn--"));
+	TEST_CHECK(is_idna(".....xn--"));
+	TEST_CHECK(is_idna("xn--..."));
+	TEST_CHECK(is_idna("xN--..."));
+	TEST_CHECK(!is_idna(""));
+	TEST_CHECK(!is_idna("."));
+
+	TEST_CHECK(!is_idna("x"));
+	TEST_CHECK(!is_idna("xn"));
+	TEST_CHECK(!is_idna("xn-"));
+	TEST_CHECK(!is_idna("-xn--"));
+
+	TEST_CHECK(!is_idna(".x"));
+	TEST_CHECK(!is_idna(".xn"));
+	TEST_CHECK(!is_idna(".xn-"));
+	TEST_CHECK(!is_idna(".-xn--"));
+
+	TEST_CHECK(!is_idna("x."));
+	TEST_CHECK(!is_idna("xn."));
+	TEST_CHECK(!is_idna("xn-."));
+	TEST_CHECK(!is_idna("-xn--."));
+}
+
+TORRENT_TEST(has_tracker_query_string)
+{
+	TEST_CHECK(has_tracker_query_string("foo=bar&info_hash=abc&a=b"_sv));
+	TEST_CHECK(has_tracker_query_string("info_hash=abc&a=b"_sv));
+	TEST_CHECK(has_tracker_query_string("&&info_hash=abc&a=b"_sv));
+	TEST_CHECK(has_tracker_query_string("foo=bar&info_hash=abc"_sv));
+
+	TEST_CHECK(has_tracker_query_string("foo=bar&port=abc&a=b"_sv));
+	TEST_CHECK(has_tracker_query_string("foo=bar&event=abc&a=b"_sv));
+	TEST_CHECK(has_tracker_query_string("foo=bar&downloaded=abc&a=b"_sv));
+	TEST_CHECK(has_tracker_query_string("foo=bar&key=abc&a=b"_sv));
+	TEST_CHECK(has_tracker_query_string("foo=bar&uploaded=abc&a=b"_sv));
+	TEST_CHECK(has_tracker_query_string("foo=bar&corrupt=abc&a=b"_sv));
+	TEST_CHECK(has_tracker_query_string("foo=bar&peer_id=abc&a=b"_sv));
+
+	TEST_CHECK(!has_tracker_query_string("foo=bar&a=b"_sv));
+	TEST_CHECK(!has_tracker_query_string(""_sv));
+	TEST_CHECK(!has_tracker_query_string("info_hash1=abc"_sv));
+	TEST_CHECK(!has_tracker_query_string("&1port=abc"_sv));
 }

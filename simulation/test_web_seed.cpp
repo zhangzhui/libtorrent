@@ -1,38 +1,19 @@
 /*
 
-Copyright (c) 2016, Arvid Norberg
+Copyright (c) 2016, 2021, Alden Torres
+Copyright (c) 2016-2021, Arvid Norberg
+Copyright (c) 2016, tnextday
+Copyright (c) 2017, Andrei Kurushin
+Copyright (c) 2017, 2019, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session.hpp"
 #include "libtorrent/settings_pack.hpp"
-#include "libtorrent/deadline_timer.hpp"
+#include "libtorrent/aux_/deadline_timer.hpp"
 #include "libtorrent/torrent_info.hpp"
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/aux_/path.hpp"
@@ -44,6 +25,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "setup_swarm.hpp"
 #include "utils.hpp"
 #include "make_proxy_settings.hpp"
+#include "setup_transfer.hpp"
 #include "simulator/utils.hpp"
 #include <iostream>
 #include <numeric>
@@ -54,50 +36,58 @@ using namespace lt;
 
 int const piece_size = 0x4000;
 
-add_torrent_params create_torrent(file_storage& fs, bool const pad_files = false)
+add_torrent_params create_torrent(std::vector<lt::create_file_entry> files
+	, bool const v1_only = false)
 {
-	lt::create_torrent t(fs, piece_size
-		, pad_files ? piece_size : -1
-		, pad_files ? create_torrent::optimize_alignment : create_flags_t{});
-
-	std::vector<char> piece;
-	piece.reserve(fs.piece_length());
-	piece_index_t const num = fs.end_piece();
-	for (piece_index_t i(0); i < num; ++i)
-	{
-		int k = 0;
-		std::vector<file_slice> files = fs.map_block(i, 0, fs.piece_size(i));
-		for (auto& f : files)
-		{
-			if (fs.pad_file_at(f.file_index))
-			{
-				for (int j = 0; j < f.size; ++j, ++k)
-					piece.push_back('\0');
-			}
-			else
-			{
-				for (int j = 0; j < f.size; ++j, ++k)
-					piece.push_back((k % 26) + 'A');
-			}
-		}
-
-		t.set_hash(i, hasher(piece).final());
-		piece.clear();
-	}
-
-	std::vector<char> tmp;
-	std::back_insert_iterator<std::vector<char>> out(tmp);
-
-	entry tor = t.generate();
-
-	bencode(out, tor);
 	add_torrent_params ret;
-	ret.ti = std::make_shared<torrent_info>(tmp, from_span);
+	ret.ti = ::make_torrent(std::move(files), 0, v1_only ? create_torrent::v1_only : create_flags_t{});
 	ret.flags &= ~lt::torrent_flags::auto_managed;
 	ret.flags &= ~lt::torrent_flags::paused;
 	ret.save_path = ".";
 	return ret;
 }
+
+struct sim_config : sim::default_config
+{
+	explicit sim_config() {}
+
+	chrono::high_resolution_clock::duration hostname_lookup(
+		asio::ip::address const& requestor
+		, std::string hostname
+		, std::vector<asio::ip::address>& result
+		, boost::system::error_code& ec) override
+	{
+		auto const ret = duration_cast<chrono::high_resolution_clock::duration>(chrono::milliseconds(100));
+		if (hostname == "2.server.com")
+		{
+			result.push_back(make_address_v4("2.2.2.2"));
+			return ret;
+		}
+		if (hostname == "2.xn--server-.com")
+		{
+			result.push_back(make_address_v4("2.2.2.2"));
+			return ret;
+		}
+		if (hostname == "3.server.com")
+		{
+			result.push_back(make_address_v4("3.3.3.3"));
+			return ret;
+		}
+		if (hostname == "3.xn--server-.com")
+		{
+			result.push_back(make_address_v4("3.3.3.3"));
+			return ret;
+		}
+		if (hostname == "local-network.com")
+		{
+			result.push_back(make_address_v4("192.168.1.13"));
+			return ret;
+		}
+
+		return default_config::hostname_lookup(requestor, hostname, result, ec);
+	}
+};
+
 // this is the general template for these tests. create the session with custom
 // settings (Settings), set up the test, by adding torrents with certain
 // arguments (Setup), run the test and verify the end state (Test)
@@ -108,7 +98,7 @@ void run_test(Setup const& setup
 	, lt::seconds const timeout = lt::seconds{100})
 {
 	// setup the simulation
-	sim::default_config network_cfg;
+	sim_config network_cfg;
 	sim::simulation sim{network_cfg};
 	std::unique_ptr<sim::asio::io_context> ios = make_io_context(sim, 0);
 	lt::session_proxy zombie;
@@ -142,9 +132,9 @@ TORRENT_TEST(single_file)
 {
 	using namespace lt;
 
-	file_storage fs;
-	fs.add_file("abc'abc", 0x8000); // this filename will have to be escaped
-	lt::add_torrent_params params = ::create_torrent(fs);
+	std::vector<lt::create_file_entry> files;
+	files.emplace_back("abc'abc", 0x8000); // this filename will have to be escaped
+	lt::add_torrent_params params = ::create_torrent(std::move(files));
 	params.url_seeds.push_back("http://2.2.2.2:8080/");
 
 	bool expected = false;
@@ -179,10 +169,10 @@ TORRENT_TEST(single_file)
 TORRENT_TEST(multi_file)
 {
 	using namespace lt;
-	file_storage fs;
-	fs.add_file(combine_path("foo", "abc'abc"), 0x8000); // this filename will have to be escaped
-	fs.add_file(combine_path("foo", "bar"), 0x3000);
-	lt::add_torrent_params params = ::create_torrent(fs);
+	std::vector<lt::create_file_entry> files;
+	files.emplace_back(combine_path("foo", "abc'abc"), 0x8000); // this filename will have to be escaped
+	files.emplace_back(combine_path("foo", "bar"), 0x3000);
+	lt::add_torrent_params params = ::create_torrent(std::move(files));
 	params.url_seeds.push_back("http://2.2.2.2:8080/");
 
 	std::array<bool, 2> expected{{ false, false }};
@@ -220,24 +210,35 @@ TORRENT_TEST(multi_file)
 	TEST_CHECK(expected[1]);
 }
 
-std::string generate_content(lt::file_storage const& fs, file_index_t file
-	, std::int64_t offset, std::int64_t len)
+std::string generate_content(std::int64_t const file_offset, int const piece_size
+	, std::int64_t const offset, std::int64_t len)
 {
 	std::string ret;
 	ret.reserve(lt::aux::numeric_cast<std::size_t>(len));
-	std::int64_t const file_offset = fs.file_offset(file);
-	int const piece_sz = fs.piece_length();
-	for (std::int64_t i = offset + file_offset; i < offset + file_offset + len; ++i)
-		ret.push_back(((i % piece_sz) % 26) + 'A');
+	piece_index_t piece(int((file_offset + offset) / piece_size));
+	int piece_offset = (file_offset + offset) % piece_size;
+
+	while (len > 0)
+	{
+		auto piece_buf = generate_piece(piece, piece_size);
+		int const step = int(std::min(len, std::int64_t(piece_size - piece_offset)));
+		ret.append(piece_buf.data() + piece_offset, step);
+		len -= step;
+		piece_offset = 0;
+		++piece;
+	}
 	return ret;
 }
 
 void serve_content_for(sim::http_server& http, std::string const& path
 	, lt::file_storage const& fs, file_index_t const file)
 {
-	http.register_content(path, fs.file_size(file_index_t(file))
-		, [&fs,file](std::int64_t offset, std::int64_t len)
-		{ return generate_content(fs, file, offset, len); });
+	TORRENT_ASSERT(!fs.pad_file_at(file));
+	std::int64_t const file_offset = fs.file_offset(file);
+	int const piece_size = fs.piece_length();
+	http.register_content(path, fs.file_size(file)
+		, [file_offset, piece_size](std::int64_t const offset, std::int64_t const len)
+		{ return generate_content(file_offset, piece_size, offset, len); });
 }
 
 // test redirecting *unaligned* files to the same server still working. i.e. the
@@ -245,13 +246,15 @@ void serve_content_for(sim::http_server& http, std::string const& path
 TORRENT_TEST(unaligned_file_redirect)
 {
 	using namespace lt;
-	file_storage fs;
-	fs.add_file(combine_path("foo", "1"), 0xc030);
-	fs.add_file(combine_path("foo", "2"), 0xc030);
-	lt::add_torrent_params params = ::create_torrent(fs);
+	std::vector<lt::create_file_entry> files;
+	files.emplace_back(combine_path("foo", "1"), 0xc030);
+	files.emplace_back(combine_path("foo", "2"), 0xc030);
+	lt::add_torrent_params params = ::create_torrent(std::move(files), true);
 	params.url_seeds.push_back("http://2.2.2.2:8080/");
 
 	bool seeding = false;
+
+	lt::file_storage const& fs = params.ti->files();
 
 	run_test(
 		[&params](lt::session& ses)
@@ -289,11 +292,11 @@ TORRENT_TEST(unaligned_file_redirect)
 TORRENT_TEST(multi_file_redirect_pad_files)
 {
 	using namespace lt;
-	file_storage fs_;
-	fs_.add_file(combine_path("foo", "1"), 0xc030);
-	fs_.add_file(combine_path("foo", "2"), 0xc030);
+	std::vector<lt::create_file_entry> files;
+	files.emplace_back(combine_path("foo", "1"), 0xc030);
+	files.emplace_back(combine_path("foo", "2"), 0xc030);
 	// true means use padfiles
-	lt::add_torrent_params params = ::create_torrent(fs_, true);
+	lt::add_torrent_params params = ::create_torrent(std::move(files));
 	params.url_seeds.push_back("http://2.2.2.2:8080/");
 
 	// since the final torrent is different than what we built (because of pad
@@ -342,11 +345,13 @@ TORRENT_TEST(multi_file_redirect_pad_files)
 TORRENT_TEST(multi_file_redirect)
 {
 	using namespace lt;
-	file_storage fs;
-	fs.add_file(combine_path("foo", "1"), 0xc000);
-	fs.add_file(combine_path("foo", "2"), 0xc030);
-	lt::add_torrent_params params = ::create_torrent(fs);
+	std::vector<lt::create_file_entry> files;
+	files.emplace_back(combine_path("foo", "1"), 0xc000);
+	files.emplace_back(combine_path("foo", "2"), 0xc030);
+	lt::add_torrent_params params = ::create_torrent(std::move(files));
 	params.url_seeds.push_back("http://2.2.2.2:8080/");
+
+	file_storage const& fs = params.ti->files();
 
 	bool seeding = false;
 
@@ -390,11 +395,13 @@ TORRENT_TEST(multi_file_redirect)
 TORRENT_TEST(multi_file_redirect_through_proxy)
 {
 	using namespace lt;
-	file_storage fs;
-	fs.add_file(combine_path("foo", "1"), 0xc000);
-	fs.add_file(combine_path("foo", "2"), 0xc030);
-	lt::add_torrent_params params = ::create_torrent(fs);
+	std::vector<lt::create_file_entry> files;
+	files.emplace_back(combine_path("foo", "1"), 0xc000);
+	files.emplace_back(combine_path("foo", "2"), 0xc030);
+	lt::add_torrent_params params = ::create_torrent(std::move(files));
 	params.url_seeds.push_back("http://2.2.2.2:8080/");
+
+	file_storage const& fs = params.ti->files();
 
 	bool seeding = false;
 
@@ -453,11 +460,13 @@ TORRENT_TEST(multi_file_redirect_through_proxy)
 TORRENT_TEST(multi_file_unaligned_redirect)
 {
 	using namespace lt;
-	file_storage fs;
-	fs.add_file(combine_path("foo", "1"), 0xc030);
-	fs.add_file(combine_path("foo", "2"), 0xc030);
-	lt::add_torrent_params params = ::create_torrent(fs);
+	std::vector<lt::create_file_entry> files;
+	files.emplace_back(combine_path("foo", "1"), 0xc030);
+	files.emplace_back(combine_path("foo", "2"), 0xc030);
+	lt::add_torrent_params params = ::create_torrent(std::move(files), true);
 	params.url_seeds.push_back("http://2.2.2.2:8080/");
+
+	file_storage const& fs = params.ti->files();
 
 	run_test(
 		[&params](lt::session& ses)
@@ -498,9 +507,9 @@ TORRENT_TEST(urlseed_timeout)
 	run_test(
 		[](lt::session& ses)
 		{
-			file_storage fs;
-			fs.add_file("timeout_test", 0x8000);
-			lt::add_torrent_params params = ::create_torrent(fs);
+			std::vector<lt::create_file_entry> files;
+			files.emplace_back("timeout_test", 0x8000);
+			lt::add_torrent_params params = ::create_torrent(std::move(files));
 			params.url_seeds.push_back("http://2.2.2.2:8080/");
 			params.flags &= ~lt::torrent_flags::auto_managed;
 			params.flags &= ~lt::torrent_flags::paused;
@@ -533,9 +542,9 @@ TORRENT_TEST(no_close_redudant_webseed)
 {
 	using namespace lt;
 
-	file_storage fs;
-	fs.add_file("file1", 1);
-	lt::add_torrent_params params = ::create_torrent(fs);
+	std::vector<lt::create_file_entry> files;
+	files.emplace_back("file1", 1);
+	lt::add_torrent_params params = ::create_torrent(std::move(files));
 	params.url_seeds.push_back("http://2.2.2.2:8080/");
 
 	bool expected = false;
@@ -578,9 +587,9 @@ TORRENT_TEST(web_seed_connection_limit)
 {
 	using namespace lt;
 
-	file_storage fs;
-	fs.add_file("file1", 1);
-	lt::add_torrent_params params = ::create_torrent(fs);
+	std::vector<lt::create_file_entry> files;
+	files.emplace_back("file1", 1);
+	lt::add_torrent_params params = ::create_torrent(std::move(files));
 	params.url_seeds.push_back("http://2.2.2.1:8080/");
 	params.url_seeds.push_back("http://2.2.2.2:8080/");
 	params.url_seeds.push_back("http://2.2.2.3:8080/");
@@ -634,3 +643,193 @@ TORRENT_TEST(web_seed_connection_limit)
 	TEST_CHECK(std::accumulate(expected.begin(), expected.end(), 0) == 2);
 }
 
+bool test_idna(char const* url, char const* redirect, bool allow_idna)
+{
+	using namespace lt;
+	std::vector<lt::create_file_entry> files;
+	files.emplace_back("1", 0xc030);
+	lt::add_torrent_params params = ::create_torrent(std::move(files));
+	params.url_seeds.emplace_back(url);
+
+	file_storage const& fs = params.ti->files();
+
+	bool seeding = false;
+
+	error_code ignore;
+	remove("1", ignore);
+
+	run_test(
+		[&](lt::session& ses)
+		{
+			settings_pack pack;
+			pack.set_bool(settings_pack::allow_idna, allow_idna);
+			ses.apply_settings(pack);
+			ses.async_add_torrent(params);
+		},
+		[&](lt::session&, lt::alert const* alert) {
+			if (lt::alert_cast<lt::torrent_finished_alert>(alert))
+				seeding = true;
+		},
+		[&](sim::simulation& sim, lt::session&)
+		{
+			// http1 is the root web server that will just redirect requests to
+			// other servers
+			sim::asio::io_context web_server1(sim, make_address_v4("2.2.2.2"));
+			sim::http_server http1(web_server1, 8080);
+			// redirect file 1 and file 2 to the same servers
+			if (redirect)
+				http1.register_redirect("/1", redirect);
+
+			// server for serving the content
+			sim::asio::io_context web_server2(sim, make_address_v4("3.3.3.3"));
+			sim::http_server http2(web_server2, 8080);
+			serve_content_for(http2, "/1", fs, file_index_t(0));
+
+			sim.run();
+		}
+	);
+
+	return seeding;
+}
+
+TORRENT_TEST(idna)
+{
+	// disallow IDNA hostnames
+	TEST_EQUAL(test_idna("http://3.server.com:8080", nullptr, false), true);
+	TEST_EQUAL(test_idna("http://3.xn--server-.com:8080", nullptr, false), false);
+
+	// allow IDNA hostnames
+	TEST_EQUAL(test_idna("http://3.server.com:8080", nullptr, true), true);
+	TEST_EQUAL(test_idna("http://3.xn--server-.com:8080", nullptr, true), true);
+}
+
+TORRENT_TEST(idna_redirect)
+{
+	// disallow IDNA hostnames
+	TEST_EQUAL(test_idna("http://2.server.com:8080", "http://3.server.com:8080/1", false), true);
+	TEST_EQUAL(test_idna("http://2.server.com:8080", "http://3.xn--server-.com:8080/1", false), false);
+
+	TEST_EQUAL(test_idna("http://2.xn--server-.com:8080", "http://3.server.com:8080/1", false), false);
+	TEST_EQUAL(test_idna("http://2.xn--server-.com:8080", "http://3.xn--server-.com:8080/1", false), false);
+
+	// allow IDNA hostnames
+	TEST_EQUAL(test_idna("http://2.server.com:8080", "http://3.server.com:8080/1", true), true);
+	TEST_EQUAL(test_idna("http://2.server.com:8080", "http://3.xn--server-.com:8080/1", true), true);
+
+	TEST_EQUAL(test_idna("http://2.xn--server-.com:8080", "http://3.server.com:8080/1", true), true);
+	TEST_EQUAL(test_idna("http://2.xn--server-.com:8080", "http://3.xn--server-.com:8080/1", true), true);
+}
+
+bool test_ssrf(char const* url, char const* redirect, bool enable_feature)
+{
+	using namespace lt;
+	std::vector<lt::create_file_entry> files;
+	files.emplace_back("1", 0xc030);
+	lt::add_torrent_params params = ::create_torrent(std::move(files));
+	params.url_seeds.emplace_back(url);
+
+	file_storage const& fs = params.ti->files();
+
+	bool seeding = false;
+
+	error_code ignore;
+	remove("1", ignore);
+
+	run_test(
+		[&](lt::session& ses)
+		{
+			settings_pack pack;
+			pack.set_bool(settings_pack::ssrf_mitigation, enable_feature);
+			ses.apply_settings(pack);
+			ses.async_add_torrent(params);
+		},
+		[&](lt::session&, lt::alert const* alert) {
+			if (lt::alert_cast<lt::torrent_finished_alert>(alert))
+				seeding = true;
+		},
+		[&](sim::simulation& sim, lt::session&)
+		{
+			// http1 is the root web server that will just redirect requests to
+			// other servers
+			sim::asio::io_context web_server1(sim, make_address_v4("2.2.2.2"));
+			sim::http_server http1(web_server1, 8080);
+			// redirect file 1 and file 2 to the same servers
+			if (redirect)
+				http1.register_redirect("/1", redirect);
+
+			// server for serving the content. This is on the local network
+			sim::asio::io_context web_server2(sim, make_address_v4("192.168.1.13"));
+			sim::http_server http2(web_server2, 8080);
+			serve_content_for(http2, "/1", fs, file_index_t(0));
+			serve_content_for(http2, "/1?query_string=1", fs, file_index_t(0));
+
+			sim::asio::io_context web_server3(sim, make_address_v4("3.3.3.3"));
+			sim::http_server http3(web_server3, 8080);
+			serve_content_for(http3, "/1", fs, file_index_t(0));
+			serve_content_for(http3, "/1?query_string=1", fs, file_index_t(0));
+
+			// a local network server that redurects
+			sim::asio::io_context web_server4(sim, make_address_v4("192.168.1.14"));
+			sim::http_server http4(web_server4, 8080);
+			if (redirect)
+				http4.register_redirect("/1", redirect);
+
+			sim.run();
+		}
+	);
+
+	return seeding;
+}
+
+TORRENT_TEST(ssrf_mitigation)
+{
+	TEST_CHECK(test_ssrf("http://192.168.1.13:8080/1", nullptr, true));
+	TEST_CHECK(test_ssrf("http://192.168.1.13:8080/1", nullptr, false));
+	TEST_CHECK(test_ssrf("http://local-network.com:8080/1", nullptr, true));
+	TEST_CHECK(test_ssrf("http://local-network.com:8080/1", nullptr, false));
+
+	TEST_CHECK(!test_ssrf("http://192.168.1.13:8080/1?query_string=1", nullptr, true));
+	TEST_CHECK(test_ssrf("http://192.168.1.13:8080/1?query_string=1", nullptr, false));
+	TEST_CHECK(!test_ssrf("http://local-network.com:8080/1?query_string=1", nullptr, true));
+	TEST_CHECK(test_ssrf("http://local-network.com:8080/1?query_string=1", nullptr, false));
+}
+
+TORRENT_TEST(ssrf_mitigation_redirect)
+{
+	// All Global-IP -> Local-IP redirects are prevented by SSRF mitigation
+	TEST_CHECK(!test_ssrf("http://2.2.2.2:8080/1", "http://192.168.1.13:8080/1", true));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://192.168.1.13:8080/1", false));
+	TEST_CHECK(!test_ssrf("http://2.2.2.2:8080/1", "http://local-network.com:8080/1", true));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://local-network.com:8080/1", false));
+	TEST_CHECK(!test_ssrf("http://2.2.2.2:8080/1", "http://192.168.1.13:8080/1?query_string=1", true));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://192.168.1.13:8080/1?query_string=1", false));
+	TEST_CHECK(!test_ssrf("http://2.2.2.2:8080/1", "http://local-network.com:8080/1?query_string=1", true));
+
+
+	// Global-IP -> Global-IP is OK
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.server.com:8080/1", true));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.server.com:8080/1", false));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.server.com:8080/1", true));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.server.com:8080/1", false));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.server.com:8080/1?query_string=1", true));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.server.com:8080/1?query_string=1", false));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.server.com:8080/1?query_string=1", true));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.server.com:8080/1?query_string=1", false));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.3.3.3:8080/1", true));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.3.3.3:8080/1", false));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.3.3.3:8080/1", true));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.3.3.3:8080/1", false));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.3.3.3:8080/1?query_string=1", true));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.3.3.3:8080/1?query_string=1", false));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.3.3.3:8080/1?query_string=1", true));
+	TEST_CHECK(test_ssrf("http://2.2.2.2:8080/1", "http://3.3.3.3:8080/1?query_string=1", false));
+
+	// Local-IP -> Local-IP are OK, with the normal query string restrictions
+	TEST_CHECK(test_ssrf("http://192.168.1.14:8080/1", "http://192.168.1.13:8080/1", true));
+	TEST_CHECK(test_ssrf("http://192.168.1.14:8080/1", "http://192.168.1.13:8080/1", false));
+	TEST_CHECK(test_ssrf("http://192.168.1.14:8080/1", "http://local-network.com:8080/1", true));
+	TEST_CHECK(test_ssrf("http://192.168.1.14:8080/1", "http://local-network.com:8080/1", false));
+	TEST_CHECK(!test_ssrf("http://192.168.1.14:8080/1", "http://192.168.1.13:8080/1?query_string=1", true));
+	TEST_CHECK(test_ssrf("http://192.168.1.14:8080/1", "http://192.168.1.13:8080/1?query_string=1", false));
+	TEST_CHECK(!test_ssrf("http://192.168.1.14:8080/1", "http://local-network.com:8080/1?query_string=1", true));
+}

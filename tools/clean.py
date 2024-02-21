@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # vim: tabstop=8 expandtab shiftwidth=4 softtabstop=4
 
 import os
@@ -29,8 +29,9 @@ def clean():
         '*.cpp.rej',
         '*.hpp.orig',
         '*.hpp.rej',
-        '*.hpp.gcov',
-        '*.cpp.gcov',
+        '*.gcov',
+        '*.gcno',
+        '*.gcda',
         'lib*.a',
         'Jamfile.rej',
         'Jamfile.orig',
@@ -41,6 +42,10 @@ def clean():
         'config.report',
         'config.log',
         '.lib',
+        'CMakeFiles',
+        'CMakeCache.txt',
+        'checking_benchmark',
+        'cpu_benchmark',
     ]
 
     directories = [
@@ -50,6 +55,7 @@ def clean():
         'tools',
         'src',
         'simulation',
+        'fuzzers',
         os.path.join('src', 'kademlia'),
         os.path.join('include', 'libtorrent'),
         os.path.join('include', os.path.join('libtorrent', '_aux')),
@@ -69,7 +75,8 @@ def clean():
                 try:
                     shutil.rmtree(p)
                     print(p)
-                except Exception:
+                except Exception as e:
+                    print(p, e)
                     try:
                         os.remove(p)
                         print(p)

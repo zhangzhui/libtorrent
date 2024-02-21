@@ -11,77 +11,183 @@ libtorrent python binding
 building
 ========
 
-Building the libtorrent python bindings will produce a shared library (DLL)
-which is a python module that can be imported in a python program.
+libtorrent can be built as a python module.
 
-building using boost build (windows)
+The best way to build the python bindings is using ``setup.py``. This invokes
+``b2`` under the hood, so you must have all of libtorrent's build dependencies
+installed.
+
+If you just want to build the shared library python extension without python
+packaging semantics, you can also invoke ``b2`` directly.
+
+prerequisites
+=============
+
+Whether building with ``setup.py`` or directly invoking ``b2``, you must
+install the build prerequisites on your system:
+
+1. All `the build prerequisites for the main libtorrent library`__, including
+   boost libraries and ``b2``, and your building toolchain (``gcc``, visual
+   studio, etc).
+2. Boost.Python, if not otherwise included in your boost installation
+3. Python 3.7+. Older versions may work, but are not tested.
+
+.. __: building.html
+
+environment variables
+---------------------
+
+``b2`` is very sensitive to environment variables. At least the following are
+required:
+
+1. ``BOOST_ROOT``
+2. ``BOOST_BUILD_PATH``
+
+``b2`` is also known to reference dozens of other environment variables when
+detecting toolsets. Keep this in mind if you are building in an isolation
+environment like ``tox``.
+
+building with setup.py
+======================
+
+By default, ``setup.py`` will invoke ``b2`` to build libtorrent::
+
+	python setup.py build
+
+``setup.py`` is a normal ``distutils``-based setup script.
+
+To install into your python environment::
+
+	python setup.py install
+
+To build a binary wheel package::
+
+	python -m pip install wheel
+	python setup.py bdist_wheel
+
+build for a different python version
 ------------------------------------
 
-Download and install `Visual C++ 2015 Build Tools`__
+``setup.py`` will target the running interpreter. To build for different python
+versions, you must change how you invoke ``setup.py``::
 
-.. __: http://landinghub.visualstudio.com/visual-cpp-build-tools
+	# build for python3.7
+	python3.7 setup.py build
+	# build for python3.7
+	python3.7 setup.py build
 
-Download `Boost libraries`__ Extract it to c:/Libraries/boost_1_63_0 and create these environmental vars:
 
-.. __: http://www.boost.org/users/history/
+customizing the build
+---------------------
 
-1. BOOST_BUILD_PATH: "c:/Libraries/boost_1_63_0/tools/build/"
-2. BOOST_ROOT: "c:/Libraries/boost_1_63_0/"
+You can customize the build by passing options to the ``build_ext`` step of
+``setup.py`` by passing arguments directly to ``b2`` via ``--b2-args=``::
 
-Navigate to BOOST_ROOT, execute "bootstrap.bat" and add to the path "c:/Libraries/boost_1_63_0/tools/build/src/engine/bin.ntx86/"
-	
-Move the file ``user-config.jam`` from ``%BOOST_BUILD_PATH%/example/`` to ``%BOOST_BUILD_PATH%/user-config.jam`` and add this at the end:
+	python setup.py build_ext --b2-args="toolset=msvc-14.2 linkflags=-L../../src/.libs"
 
-::
+For a full list of ``b2`` build options, see `libtorrent build features`_.
 
-	using msvc : 14.0 : : /std:c++14 ;
-	using python : 3.5 : C:/Users/<UserName>/AppData/Local/Programs/Python/Python35 : C:/Users/<UserName>/AppData/Local/Programs/Python/Python35/include : C:/Users/<UserName>/AppData/Local/Programs/Python/Python35/libs ;
+.. _`libtorrent build features`: building.html#build-features
 
-(change the python path for yours)
+Here, it's important to note that ``build_ext`` has no "memory" of the build
+config and arguments you passed to it before. This is *different* from the way
+``distutils`` normally works. Consider::
 
-Navigate to bindings/python and execute::
-	python setup.py build --bjam
-	
-Note: If you are using 64 bits python you should edit setup.py and add this to the b2 command:
-``address-model=64``
+	python setup.py build_ext --b2-args="optimization=space"
+	# the following will build with DEFAULT optimization
+	python setup.py install
 
-This will create the file libtorrent.pyd inside build/lib/ that contains the binding.
-	
-building using boost build (others)
------------------------------------
-To set up your build environment, you need to add some settings to your
-``$BOOST_BUILD_PATH/user-config.jam``.
+In order to customize the build *and* run other steps like installation, you
+should run the steps inline with ``build_ext``::
 
-A similar line to this line should be in the file (could be another python version)::
+	python setup.py build_ext --b2-args="optimization=space" install
 
-	#using python : 2.3 ;
 
-Uncomment it and change it with the version of python you have installed or want to use. If
-you've installed python in a non-standard location, you have to add the prefix
-path used when you installed python as a second option. Like this::
+building with b2
+================
 
-	using python : 2.6 : /usr/bin/python2.6 : /usr/include/python2.6 : /usr/lib/python2.6 ;
+You will need to update your ``user-config.jam`` so ``b2`` can find your python
+installation.
 
-The bindings require *at least* python version 2.2.
+``b2`` has some auto-detection capabilities. You may be able to do just this::
 
-For more information on how to install and set up boost-build, see the
-`building libtorrent`__ section.
+	using python : 3.7 ;
 
-.. __: building.html#step-2-setup-bbv2
+However you may need to specify full paths. On windows, it make look like
+this::
 
-Once you have boost-build set up, you cd to the ``bindings/python``
-directory and invoke ``bjam`` with the appropriate settings. For the available
-build variants, see `libtorrent build options`_.
+	using python : 3.7 : C:/Users/<UserName>/AppData/Local/Programs/Python/Python36 : C:/Users/<UserName>/AppData/Local/Programs/Python/Python36/include : C:/Users/<UserName>/AppData/Local/Programs/Python/Python36/libs ;
 
-.. _`libtorrent build options`: building.html#step-3-building-libtorrent
+Or on Linux, like this::
 
-For example::
+	using python : 3.7 : /usr/bin/python3.7 : /usr/include/python3.7 : /usr/lib/python3.7 ;
 
-	$ bjam dht-support=on link=static
+Note that ``b2``'s python path detection is known to only work for global
+python installations. It is known to be broken for virtualenvs or ``pyenv``. If
+you are using ``pyenv`` to manage your python versions, you must specify full
+include and library paths yourself.
 
-On Mac OS X, this will produce the following python module::
+invoking b2
+-----------
 
-	bin/darwin-4.0/release/dht-support-on/link-static/logging-none/threading-multi/libtorrent.so
+Build the bindings like so::
+
+	cd bindings/python
+	b2 release python=3.7 address-model=64
+
+Note that ``address-model`` should match the python installation you are
+building for.
+
+For other build features, see `libtorrent build options`_.
+
+.. _`libtorrent build options`: building.html#build-features
+
+
+static linking
+--------------
+
+A python module is a shared library. Specifying ``link=static`` when building
+the binding won't work, as it would try to produce a static library.
+
+Instead, control whether the libtorrent main library or boost is linked
+statically with ``libtorrent-link=static`` and ``boost-link=static``
+respectively.
+
+By default both are built and linked as shared libraries.
+
+Building and linking boost as static library is only possibly by building it
+from source. Specify the ``BOOST_ROOT`` environment variable to point to the
+root directory of the boost source distribution.
+
+For example, to build a self-contained python module::
+
+	b2 release python=3.7 libtorrent-link=static boost-link=static
+
+helper targets
+--------------
+
+There are some targets for placing the build artifact in a helpful location::
+
+	$ b2 release python=3.7 stage_module stage_dependencies
+
+This will produce a ``libtorrent`` python module in the current directory (file
+name extension depends on operating system). The libraries the python module depends
+on will be copied into ``./dependencies``.
+
+To install the python module, build it with the following command::
+
+	b2 release python=3.7 install_module
+
+By default the module will be installed to the python user site. This can be
+changed with the ``python-install-scope`` feature. The valid values are ``user``
+(default) and ``system``. e.g.::
+
+	b2 release python=3.7 install_module python-install-scope=system
+
+To specify a custom installation path for the python module, specify the desired
+path with the ``python-install-path`` feature. e.g.::
+
+	b2 release python=3.7 install_module python-install-path=/home/foobar/python-site/
 
 using libtorrent in python
 ==========================
@@ -117,9 +223,33 @@ To get a python dictionary of the settings, call ``session::get_settings``.
 
 .. _`library reference`: reference.html
 
-Retrieving session statistics in Python is more convenient than that in C++.
-The statistics are stored as an array in ``session_stats_alert``, which will be posted after calling ``post_session_stats()`` in the ``session`` object.
-In order to interpret the statistics array, in C++ it is required to call ``session_stats_metrics()`` to get the indices of these metrics, while in Python it can be done using ``session_stats_alert.values["NAME_OF_METRIC"]``, where ``NAME_OF_METRIC`` is the name of a metric.
+Retrieving session statistics in Python is more convenient than that in C++. The
+statistics are stored as an array in ``session_stats_alert``, which will be
+posted after calling ``post_session_stats()`` in the ``session`` object. In
+order to interpret the statistics array, in C++ it is required to call
+``session_stats_metrics()`` to get the indices of these metrics, while in Python
+it can be done using ``session_stats_alert.values["NAME_OF_METRIC"]``, where
+``NAME_OF_METRIC`` is the name of a metric.
+
+set_alert_notify
+================
+
+The ``set_alert_notify()`` function is not compatible with python. Since it
+requires locking the GIL from within the libtorrent thread, to call the callback,
+it can cause a deadlock with the main thread.
+
+Instead, use the python-specific ``set_alert_fd()`` which takes a file descriptor
+that will have 1 byte written to it to notify the client that there are new
+alerts to be popped.
+
+The file descriptor should be set to non-blocking mode. If writing to the
+file/sending to the socket blocks, libtorrent's internal thread will stall.
+
+This can be used with ``socket.socketpair()``, for example. The file descriptor
+is what ``fileno()`` returns on a socket.
+
+Example
+=======
 
 For an example python program, see ``client.py`` in the ``bindings/python``
 directory.

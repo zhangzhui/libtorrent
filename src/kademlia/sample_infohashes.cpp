@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2017, Arvid Norberg, Alden Torres
+Copyright (c) 2017, 2021, Alden Torres
+Copyright (c) 2017, 2019-2021, Arvid Norberg
+Copyright (c) 2020, Fonic
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include <libtorrent/kademlia/sample_infohashes.hpp>
@@ -36,26 +15,27 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <libtorrent/kademlia/io.hpp>
 #include <libtorrent/performance_counters.hpp>
 #include <libtorrent/aux_/numeric_cast.hpp>
-#include <libtorrent/socket_io.hpp>
+#include <libtorrent/aux_/socket_io.hpp>
 
-namespace libtorrent { namespace dht
+namespace libtorrent::dht
 {
 
 sample_infohashes::sample_infohashes(node& dht_node
 	, node_id const& target
-	, data_callback const& dcallback)
+	, data_callback dcallback)
 	: traversal_algorithm(dht_node, target)
-	, m_data_callback(dcallback) {}
+	, m_data_callback(std::move(dcallback)) {}
 
 char const* sample_infohashes::name() const { return "sample_infohashes"; }
 
-void sample_infohashes::got_samples(time_duration interval
+void sample_infohashes::got_samples(sha1_hash const& nid
+	, time_duration interval
 	, int num, std::vector<sha1_hash> samples
 	, std::vector<std::pair<sha1_hash, udp::endpoint>> nodes)
 {
 	if (m_data_callback)
 	{
-		m_data_callback(interval, num, std::move(samples), std::move(nodes));
+		m_data_callback(nid, interval, num, std::move(samples), std::move(nodes));
 		m_data_callback = nullptr;
 		done();
 	}
@@ -82,7 +62,7 @@ void sample_infohashes_observer::reply(msg const& m)
 	// look for nodes
 	std::vector<std::pair<sha1_hash, udp::endpoint>> nodes;
 	udp const protocol = algorithm()->get_node().protocol();
-	int const protocol_size = int(detail::address_size(protocol));
+	int const protocol_size = int(aux::address_size(protocol));
 	char const* nodes_key = algorithm()->get_node().protocol_nodes_key();
 	bdecode_node const n = r.dict_find_string(nodes_key);
 	if (n)
@@ -95,6 +75,17 @@ void sample_infohashes_observer::reply(msg const& m)
 			node_endpoint nep = read_node_endpoint(protocol, ptr);
 			nodes.emplace_back(nep.id, nep.ep);
 		}
+	}
+
+	bdecode_node const id = r.dict_find_string("id");
+	if (!id || id.string_length() != 20)
+	{
+#ifndef TORRENT_DISABLE_LOGGING
+		get_observer()->log(dht_logger::traversal, "[%u] wrong or missing id value"
+			, algorithm()->id());
+#endif
+		timeout();
+		return;
 	}
 
 	std::int64_t const interval = r.dict_find_int_value("interval", -1);
@@ -126,7 +117,7 @@ void sample_infohashes_observer::reply(msg const& m)
 		std::memcpy(v.data(), samples.string_ptr(), v.size() * 20);
 
 		static_cast<sample_infohashes*>(algorithm())->got_samples(
-			seconds(interval), int(num), std::move(v), std::move(nodes));
+			node_id(id.string_ptr()), seconds(interval), int(num), std::move(v), std::move(nodes));
 	}
 	else
 	{
@@ -137,10 +128,11 @@ void sample_infohashes_observer::reply(msg const& m)
 		timeout();
 	}
 
+	// we deliberately do not call
 	traversal_observer::reply(m);
 	// this is necessary to play nice with
 	// observer::abort(), observer::done() and observer::timeout()
 	flags |= flag_done;
 }
 
-}} // namespace libtorrent::dht
+} // namespace libtorrent::dht

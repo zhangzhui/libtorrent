@@ -1,38 +1,17 @@
 /*
 
-Copyright (c) 2014-2015, Arvid Norberg
+Copyright (c) 2015-2021, Arvid Norberg
+Copyright (c) 2016, 2018, 2020-2021, Alden Torres
+Copyright (c) 2016-2017, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/kademlia/dht_settings.hpp"
 #include "libtorrent/io_context.hpp"
-#include "libtorrent/deadline_timer.hpp"
+#include "libtorrent/aux_/deadline_timer.hpp"
 #include "libtorrent/address.hpp"
 #include "libtorrent/time.hpp"
 #include "libtorrent/kademlia/node.hpp"
@@ -41,9 +20,9 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "setup_transfer.hpp"
 #include <memory> // for unique_ptr
 #include <random>
-#include "libtorrent/socket_io.hpp" // print_endpoint
-#include "libtorrent/random.hpp"
-#include "libtorrent/crc32c.hpp"
+#include "libtorrent/aux_/socket_io.hpp" // print_endpoint
+#include "libtorrent/aux_/random.hpp"
+#include "libtorrent/aux_/crc32c.hpp"
 #include "libtorrent/alert_types.hpp" // for dht_routing_bucket
 #include "libtorrent/aux_/listen_socket_handle.hpp"
 
@@ -65,14 +44,14 @@ namespace {
 	asio::ip::address addr6_from_int(int /* idx */)
 	{
 		asio::ip::address_v6::bytes_type bytes;
-		for (uint8_t& b : bytes) b = uint8_t(lt::random(0xff));
+		for (uint8_t& b : bytes) b = uint8_t(lt::aux::random(0xff));
 		return asio::ip::address_v6(bytes);
 	}
 
 	// this is the node ID assigned to node 'idx'
 	dht::node_id id_from_addr(lt::address const& addr)
 	{
-		return dht::generate_id(addr);
+		return dht::generate_id_impl(addr, 0);
 	}
 
 	std::shared_ptr<lt::aux::listen_socket_t> sim_listen_socket(tcp::endpoint ep)
@@ -88,17 +67,17 @@ namespace {
 
 struct dht_node final : lt::dht::socket_manager
 {
-	dht_node(sim::simulation& sim, lt::dht::dht_settings const& sett, lt::counters& cnt
+	dht_node(sim::simulation& sim, lt::aux::session_settings const& sett, lt::counters& cnt
 		, int const idx, std::uint32_t const flags)
 		: m_io_context(sim, (flags & dht_network::bind_ipv6) ? addr6_from_int(idx) : addr_from_int(idx))
-		, m_dht_storage(lt::dht::dht_default_storage_constructor(sett))
+		, m_dht_storage(lt::dht::dht_default_storage_constructor(m_settings))
 		, m_add_dead_nodes((flags & dht_network::add_dead_nodes) != 0)
 		, m_ipv6((flags & dht_network::bind_ipv6) != 0)
 		, m_socket(m_io_context)
 		, m_ls(sim_listen_socket(tcp::endpoint(m_io_context.get_ips().front(), 6881)))
 		, m_dht(m_ls, this, sett, id_from_addr(m_io_context.get_ips().front())
 			, nullptr, cnt
-			, [](lt::dht::node_id const&, std::string const&) -> lt::dht::node* { return nullptr; }
+			, [](lt::dht::node_id const&, string_view) -> lt::dht::node* { return nullptr; }
 			, *m_dht_storage)
 	{
 		m_dht_storage->update_node_ids({id_from_addr(m_io_context.get_ips().front())});
@@ -174,7 +153,7 @@ struct dht_node final : lt::dht::socket_manager
 		// expensive. instead. pick a random subset of nodes proportionate to the
 		// bucket it would fall into
 
-		dht::node_id id = dht().nid();
+		dht::node_id const id = dht().nid();
 
 		// the number of slots left per bucket
 		std::array<int, 160> nodes_per_bucket;
@@ -186,8 +165,18 @@ struct dht_node final : lt::dht::socket_manager
 		nodes_per_bucket[2] = 32;
 		nodes_per_bucket[3] = 16;
 
-		for (auto const& n : nodes)
+		// pick nodes in random order to provide good connectivity
+		std::vector<std::size_t> order(nodes.size());
+		for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+
+		while (!order.empty())
 		{
+			auto const idx = lt::aux::random(static_cast<uint32_t>(order.size() - 1));
+			assert(idx >= 0 && idx < order.size());
+			auto const& n = nodes[order[idx]];
+			if (idx < order.size() - 1) order[idx] = order.back();
+			order.pop_back();
+
 			if (n.first == id) continue;
 			int const bucket = 159 - dht::distance_exp(id, n.first);
 
@@ -200,16 +189,16 @@ struct dht_node final : lt::dht::socket_manager
 			// there are no more slots in this bucket, just move on
 			if (nodes_per_bucket[bucket] == 0) continue;
 			--nodes_per_bucket[bucket];
-			bool const added = dht().m_table.node_seen(n.first, n.second, lt::random(300) + 10);
+			bool const added = dht().m_table.node_seen(n.first, n.second, lt::aux::random(300) + 10);
 			TEST_CHECK(added);
 			if (m_add_dead_nodes)
 			{
 				// generate a random node ID that would fall in `bucket`
 				dht::node_id const mask = dht::generate_prefix_mask(bucket + 1);
-				dht::node_id target = dht::generate_random_id() & ~mask;
+				udp::endpoint const ep = rand_udp_ep(m_ipv6 ? rand_v6 : rand_v4);
+				dht::node_id target = dht::generate_id_impl(ep.address(), 0) & ~mask;
 				target |= id & mask;
-				dht().m_table.node_seen(target, rand_udp_ep(m_ipv6 ? rand_v6 : rand_v4)
-					, lt::random(300) + 10);
+				dht().m_table.node_seen(target, ep, lt::aux::random(300) + 10);
 			}
 		}
 /*
@@ -231,6 +220,7 @@ struct dht_node final : lt::dht::socket_manager
 	lt::dht::node const& dht() const { return m_dht; }
 
 private:
+	lt::aux::session_settings m_settings;
 	asio::io_context m_io_context;
 	std::shared_ptr<dht::dht_storage_interface> m_dht_storage;
 	bool const m_add_dead_nodes;
@@ -245,8 +235,8 @@ private:
 
 dht_network::dht_network(sim::simulation& sim, int num_nodes, std::uint32_t flags)
 {
-	m_sett.ignore_dark_internet = false;
-	m_sett.restrict_routing_ips = false;
+	m_sett.set_bool(settings_pack::dht_ignore_dark_internet, false);
+	m_sett.set_bool(settings_pack::dht_restrict_routing_ips, false);
 
 // TODO: how can we introduce churn among peers?
 
@@ -260,18 +250,7 @@ dht_network::dht_network(sim::simulation& sim, int num_nodes, std::uint32_t flag
 		all_nodes.push_back(m_nodes.back().node_info());
 	}
 
-	int cnt = 0;
-	for (auto& n : m_nodes)
-	{
-		n.bootstrap(all_nodes);
-		if (++cnt == 25)
-		{
-			// every now and then, shuffle all_nodes to make the
-			// routing tables more randomly distributed
-			lt::aux::random_shuffle(all_nodes);
-			cnt = 0;
-		}
-	}
+	for (auto& n : m_nodes) n.bootstrap(all_nodes);
 }
 
 dht_network::~dht_network() = default;
@@ -315,4 +294,3 @@ void dht_network::stop()
 }
 
 #endif // TORRENT_DISABLE_DHT
-

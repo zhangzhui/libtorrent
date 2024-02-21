@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2003-2017, Arvid Norberg
+Copyright (c) 2014, 2016-2020, Arvid Norberg
+Copyright (c) 2016, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef SESSION_VIEW_HPP_
@@ -38,6 +16,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/session_stats.hpp"
 #include "libtorrent/span.hpp"
+#include "libtorrent/time.hpp"
 
 struct session_view
 {
@@ -52,7 +31,7 @@ struct session_view
 
 	void render();
 
-	void update_counters(lt::span<std::int64_t const> stats_counters, std::uint64_t t);
+	void update_counters(lt::span<std::int64_t const> stats_counters, lt::clock_type::time_point t);
 
 private:
 
@@ -63,9 +42,12 @@ private:
 	// is used to calculate rates
 	std::vector<std::int64_t> m_cnt[2];
 
+	std::int64_t value(int idx) const;
+	std::int64_t prev_value(int idx) const;
+
 	// the timestamps of the counters in m_cnt[0] and m_cnt[1]
-	// respectively. The timestamps are microseconds since session start
-	std::uint64_t m_timestamp[2];
+	// respectively.
+	lt::clock_type::time_point m_timestamp[2];
 
 	int const m_queued_bytes_idx = lt::find_metric_idx("disk.queued_write_bytes");
 	int const m_wasted_bytes_idx = lt::find_metric_idx("net.recv_redundant_bytes");
@@ -90,6 +72,8 @@ private:
 	int const m_utp_connected = lt::find_metric_idx("utp.num_utp_connected");
 	int const m_utp_fin_sent = lt::find_metric_idx("utp.num_utp_fin_sent");
 	int const m_utp_close_wait = lt::find_metric_idx("utp.num_utp_close_wait");
+
+	int const m_queued_tracker_announces = lt::find_metric_idx("tracker.num_queued_tracker_announces");
 };
 
 #endif

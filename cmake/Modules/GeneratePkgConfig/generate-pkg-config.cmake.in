@@ -1,4 +1,7 @@
-include(@_variables_file_name@)
+cmake_policy(SET CMP0007 NEW)
+cmake_policy(SET CMP0011 NEW)
+
+include("@_variables_file_name@")
 
 function (cmake_list_to_pkg_config _result _list _prefix)
 	set(_tmp_list "${_list}")
@@ -34,7 +37,12 @@ function(split_library_dirs _libraries _base_library_dir _library_dirs_var _libr
 endfunction()
 
 split_library_dirs("${_TARGET_INTERFACE_LINK_LIBRARIES}" "${CMAKE_INSTALL_PREFIX}/${_INSTALL_LIBDIR}" _lib_dirs _library_names)
+set(_linker_options "${_library_names}")
+list(FILTER _linker_options INCLUDE REGEX "^-.*")
+list(FILTER _library_names EXCLUDE REGEX "^-.*")
 cmake_list_to_pkg_config(_libs "${_library_names}" "-l")
+list(JOIN _linker_options " " _linker_options)
+string(JOIN " " _libs "${_linker_options}" "${_libs}")
 list(LENGTH _lib_dirs _additional_libdirs_count)
 if (_additional_libdirs_count GREATER 0)
 	cmake_list_to_pkg_config(_additional_libdirs "${_lib_dirs}" "-L")
@@ -49,4 +57,4 @@ set(_interface_compile_options "${_TARGET_INTERFACE_COMPILE_OPTIONS}")
 string(REPLACE ";" " " _interface_compile_options "${_interface_compile_options}")
 
 configure_file("@_pkg_config_file_template_filename@" "@_generate_target_dir@/@_package_name@.pc" @ONLY)
-file(INSTALL "@_generate_target_dir@/@_package_name@.pc" DESTINATION "@CMAKE_INSTALL_PREFIX@/@CMAKE_INSTALL_LIBDIR@/pkgconfig")
+file(INSTALL "@_generate_target_dir@/@_package_name@.pc" DESTINATION "@CMAKE_INSTALL_FULL_LIBDIR@/pkgconfig")

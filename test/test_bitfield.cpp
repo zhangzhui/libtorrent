@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2008-2013, Arvid Norberg
+Copyright (c) 2013-2020, 2022, Arvid Norberg
+Copyright (c) 2016-2018, Alden Torres
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2017, Falcosc
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
@@ -71,6 +51,8 @@ TORRENT_TEST(bitfield)
 {
 	bitfield test1(10, false);
 	TEST_EQUAL(test1.size(), 10);
+	TEST_EQUAL(test1.num_words(), 1);
+	TEST_EQUAL(test1.num_bytes(), 2);
 	TEST_EQUAL(test1.empty(), false);
 	TEST_EQUAL(test1.count(), 0);
 	test1.set_bit(9);
@@ -148,6 +130,8 @@ TORRENT_TEST(bitfield)
 
 	test1 = test2;
 	TEST_EQUAL(test1.size(), 20);
+	TEST_EQUAL(test1.num_words(), 1);
+	TEST_EQUAL(test1.num_bytes(), 3);
 	TEST_EQUAL(test1.count(), 19);
 	TEST_EQUAL(test1.get_bit(0), true);
 	TEST_EQUAL(test1.get_bit(1), false);
@@ -176,6 +160,22 @@ TORRENT_TEST(test_iterators)
 		test1.resize(i, false);
 		test_iterators(test1);
 	}
+}
+
+TORRENT_TEST(test_iterator_arithmetic)
+{
+	bitfield test1(128);
+	test1.set_bit(0);
+	test1.set_bit(1);
+	test1.set_bit(40);
+	test1.set_bit(127);
+	TEST_EQUAL(std::count(test1.begin(), test1.end(), true), 4);
+	TEST_EQUAL(std::count(test1.begin() + 1, test1.end(), true), 3);
+	TEST_EQUAL(std::count(test1.begin() + 2, test1.end(), true), 2);
+	TEST_EQUAL(std::count(test1.begin() + 2, test1.begin() + 41, true), 1);
+	TEST_EQUAL(std::count(test1.begin() + 41, test1.end(), true), 1);
+	TEST_EQUAL(std::count(test1.begin() + 41, test1.begin() + 126, true), 0);
+	TEST_EQUAL(std::count((test1.begin() + 30) + 10, test1.begin() + 50, true), 1);
 }
 
 TORRENT_TEST(test_assign)
@@ -207,9 +207,7 @@ TORRENT_TEST(test_assign2)
 		TEST_EQUAL(test1.all_set(), true);
 	}
 
-#if TORRENT_HAS_ARM
-	TORRENT_ASSERT(aux::arm_neon_support);
-#else
+#if !TORRENT_HAS_ARM
 	TORRENT_ASSERT(!aux::arm_neon_support);
 #endif
 }
@@ -368,6 +366,7 @@ TORRENT_TEST(not_initialized)
 	TEST_EQUAL(test1.all_set(), false);
 	TEST_EQUAL(test1.size(), 0);
 	TEST_EQUAL(test1.num_words(), 0);
+	TEST_EQUAL(test1.num_bytes(), 0);
 	TEST_EQUAL(test1.empty(), true);
 	TEST_CHECK(test1.data() == nullptr);
 	TEST_EQUAL(test1.count(), 0);
@@ -390,9 +389,12 @@ TORRENT_TEST(not_initialized)
 TORRENT_TEST(self_assign)
 {
 	bitfield test1(123, false);
-	test1 = test1;
+	bitfield* self_ptr = &test1;
+	test1 = *self_ptr;
 	TEST_EQUAL(test1.size(), 123);
 	TEST_EQUAL(test1.count(), 0);
+	TEST_EQUAL(test1.num_words(), (123 + 31) / 32);
+	TEST_EQUAL(test1.num_bytes(), (123 + 7) / 8);
 }
 
 TORRENT_TEST(not_initialized_assign)
@@ -414,6 +416,8 @@ TORRENT_TEST(not_initialized_resize)
 	bitfield test2(0);
 	test2.resize(8);
 	TEST_EQUAL(test2.size(), 8);
+	TEST_EQUAL(test2.num_words(), 1);
+	TEST_EQUAL(test2.num_bytes(), 1);
 }
 
 TORRENT_TEST(bitfield_index_range)

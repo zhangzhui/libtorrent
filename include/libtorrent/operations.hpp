@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2015-2018, Arvid Norberg
+Copyright (c) 2015, 2017-2021, Arvid Norberg
+Copyright (c) 2016, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_OPERATIONS_HPP_INCLUDED
@@ -52,7 +30,7 @@ namespace libtorrent {
 		// a call to iocontrol failed
 		iocontrol,
 
-		// a call to getpeername failed (querying the remote IP of a
+		// a call to ``getpeername()`` failed (querying the remote IP of a
 		// connection)
 		getpeername,
 
@@ -107,7 +85,7 @@ namespace libtorrent {
 		sock_listen,
 
 		// a call to the ioctl to bind a socket to a specific network device or
-		// adaptor
+		// adapter
 		sock_bind_to_device,
 
 		// a call to accept() on a socket
@@ -119,27 +97,78 @@ namespace libtorrent {
 		// enumeration network devices or adapters
 		enum_if,
 
+		// invoking stat() on a file
 		file_stat,
+
+		// copying a file
 		file_copy,
+
+		// allocating storage for a file
 		file_fallocate,
+
+		// creating a hard link
 		file_hard_link,
+
+		// removing a file
 		file_remove,
+
+		// renaming a file
 		file_rename,
+
+		// opening a file
 		file_open,
+
+		// creating a directory
 		mkdir,
+
+		// check fast resume data against files on disk
 		check_resume,
+
+		// an unknown exception
 		exception,
+
+		// allocate space for a piece in the cache
 		alloc_cache_piece,
+
+		// move a part-file
 		partfile_move,
+
+		// read from a part file
 		partfile_read,
+
+		// write to a part-file
 		partfile_write,
+
+		// a hostname lookup
 		hostname_lookup,
-		file_seek,
+
+		// create or read a symlink
 		symlink,
+
+		// handshake with a peer or server
+		handshake,
+
+		// set socket option
+		sock_option,
+
+		// enumeration of network routes
+		enum_route,
+
+		// moving read/write position in a file, operation_t::hostname_lookup
+		file_seek,
+
+		// an async wait operation on a timer
+		timer,
+
+		// call to mmap() (or windows counterpart)
+		file_mmap,
+
+		// call to ftruncate() (or SetEndOfFile() on windows)
+		file_truncate,
 	};
 
 	// maps an operation id (from peer_error_alert and peer_disconnected_alert)
-	// to its name. See peer_connection for the constants
+	// to its name. See operation_t for the constants
 	TORRENT_EXPORT char const* operation_name(operation_t op);
 
 #if TORRENT_ABI_VERSION == 1
@@ -152,14 +181,14 @@ namespace libtorrent {
 		// determines to disconnect
 		op_bittorrent TORRENT_DEPRECATED_ENUM ,
 
-		// a call to iocontrol failed
+		// a call to ``iocontrol()`` failed
 		op_iocontrol TORRENT_DEPRECATED_ENUM,
 
-		// a call to getpeername failed (querying the remote IP of a
+		// a call to ``getpeername()`` failed (querying the remote IP of a
 		// connection)
 		op_getpeername TORRENT_DEPRECATED_ENUM,
 
-		// a call to getname failed (querying the local IP of a
+		// a call to ``getsockname()`` failed (querying the local IP of a
 		// connection)
 		op_getname TORRENT_DEPRECATED_ENUM,
 

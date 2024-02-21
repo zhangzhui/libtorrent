@@ -1,38 +1,19 @@
 /*
 
-Copyright (c) 2008-2018, Arvid Norberg
+Copyright (c) 2008-2014, 2016-2022, Arvid Norberg
+Copyright (c) 2017, Pavel Pimenov
+Copyright (c) 2017, 2019, Steven Siloti
+Copyright (c) 2019-2020, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/config.hpp"
 #include "libtorrent/error_code.hpp"
-#include "libtorrent/string_util.hpp" // for to_string()
+#include "libtorrent/aux_/string_util.hpp" // for to_string()
+#include "libtorrent/aux_/array.hpp"
 
 #include <sstream>
 
@@ -43,7 +24,7 @@ namespace libtorrent {
 		const char* name() const BOOST_SYSTEM_NOEXCEPT override;
 		std::string message(int ev) const override;
 		boost::system::error_condition default_error_condition(int ev) const BOOST_SYSTEM_NOEXCEPT override
-		{ return boost::system::error_condition(ev, *this); }
+		{ return {ev, *this}; }
 	};
 
 	const char* libtorrent_error_category::name() const BOOST_SYSTEM_NOEXCEPT
@@ -53,7 +34,7 @@ namespace libtorrent {
 
 	std::string libtorrent_error_category::message(int ev) const
 	{
-		static char const* msgs[] =
+		static aux::array<char const*, errors::error_code_max> msgs{
 		{
 			"no error",
 			"torrent file collides with file from another torrent",
@@ -172,9 +153,9 @@ namespace libtorrent {
 			"banned by port filter",
 			"invalid session handle used",
 			"listen socket has been closed",
-			"",
-			"",
-			"",
+			"invalid hash request",
+			"invalid hashes",
+			"invalid hash reject",
 
 // natpmp errors
 			"unsupported protocol version",
@@ -203,7 +184,7 @@ namespace libtorrent {
 			"invalid piece index in slot list",
 			"pieces needs to be reordered",
 			"fastresume not modified since last save",
-			"",
+			"too many duplicate filenames",
 			"",
 			"",
 			"",
@@ -245,8 +226,7 @@ namespace libtorrent {
 			"udp tracker response packet has invalid size",
 			"invalid transaction id in udp tracker response",
 			"invalid action field in udp tracker response",
-#if TORRENT_ABI_VERSION == 1
-			"",
+			"skipping tracker announce (unreachable)",
 			"",
 			"",
 			"",
@@ -257,6 +237,7 @@ namespace libtorrent {
 			"",
 			"",
 
+#if TORRENT_ABI_VERSION == 1
 // bdecode errors
 			"expected string in bencoded string",
 			"expected colon in bencoded string",
@@ -268,10 +249,32 @@ namespace libtorrent {
 			"",
 			"",
 			"",
+#else
+			"", "", "", "", "",
+			"", "", "", "", "",
 #endif
 			"random number generator failed",
-		};
-		if (ev < 0 || ev >= int(sizeof(msgs)/sizeof(msgs[0])))
+			"blocked by SSRF mitigation",
+			"blocked by IDNA ban",
+			"",
+			"",
+			"",
+			"",
+			"",
+			"",
+			"",
+
+			"the torrent file has an unknown meta version",
+			"the v2 torrent file has no file tree",
+			"the torrent contains v2 keys but does not specify meta version 2",
+			"the v1 and v2 file metadata does not match",
+			"one or more files are missing piece layer hashes",
+			"a piece layer is invalid",
+			"a v2 file entry has no root hash",
+			"v1 and v2 hashes do not describe the same data",
+			"a file in the v2 metadata has the pad attribute set"
+		}};
+		if (ev < 0 || ev >= msgs.end_index())
 			return "Unknown error";
 		return msgs[ev];
 	}
@@ -289,7 +292,7 @@ namespace libtorrent {
 		std::string message(int ev) const override
 		{
 			std::string ret;
-			ret += to_string(ev).data();
+			ret += aux::to_string(ev).data();
 			ret += ' ';
 			switch (ev)
 			{
@@ -316,7 +319,7 @@ namespace libtorrent {
 		}
 		boost::system::error_condition default_error_condition(
 			int ev) const BOOST_SYSTEM_NOEXCEPT override
-		{ return boost::system::error_condition(ev, *this); }
+		{ return {ev, *this}; }
 	};
 
 	boost::system::error_category& http_category()
@@ -330,7 +333,7 @@ namespace libtorrent {
 		// hidden
 		boost::system::error_code make_error_code(error_code_enum e)
 		{
-			return boost::system::error_code(e, libtorrent_category());
+			return {e, libtorrent_category()};
 		}
 	}
 

@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg
+Copyright (c) 2006-2007, 2011, 2013-2020, Arvid Norberg
+Copyright (c) 2014-2019, Steven Siloti
+Copyright (c) 2016, 2022, Alden Torres
+Copyright (c) 2018, Greg Hazel
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_EXTENSIONS_HPP_INCLUDED
@@ -55,8 +35,6 @@ POSSIBILITY OF SUCH DAMAGE.
 // * save and restore state via the session state
 // * see all alerts that are posted
 //
-// .. _extensions: extension_protocol.html
-//
 // a word of caution
 // -----------------
 //
@@ -81,7 +59,7 @@ POSSIBILITY OF SUCH DAMAGE.
 //
 //
 // plugin-interface
-// ================
+// ----------------
 //
 // The plugin interface consists of three base classes that the plugin may
 // implement. These are called plugin, torrent_plugin and peer_plugin.
@@ -96,9 +74,11 @@ POSSIBILITY OF SUCH DAMAGE.
 // torrent has already been started and you want to hook in the extension at
 // run-time).
 //
-// The signature of the function is::
+// The signature of the function is:
 //
-// 	std::shared_ptr<torrent_plugin> (*)(torrent_handle const&, void*);
+// .. code:: c++
+//
+// 	std::shared_ptr<torrent_plugin> (*)(torrent_handle const&, client_data_t);
 //
 // The second argument is the userdata passed to ``session::add_torrent()`` or
 // ``torrent_handle::add_extension()``.
@@ -114,7 +94,7 @@ POSSIBILITY OF SUCH DAMAGE.
 // it in to ``session::add_extension()``.
 //
 // custom alerts
-// =============
+// -------------
 //
 // Since plugins are running within internal libtorrent threads, one convenient
 // way to communicate with the client is to post custom alerts.
@@ -178,6 +158,8 @@ namespace libtorrent {
 	// indicating which callbacks this plugin is interested in
 	using feature_flags_t = flags::bitfield_flag<std::uint8_t, struct feature_flags_tag>;
 
+TORRENT_VERSION_NAMESPACE_3
+
 	// this is the base class for a session plugin. One primary feature
 	// is that it is notified of all torrents that are added to the session,
 	// and can add its own torrent_plugins.
@@ -186,21 +168,29 @@ namespace libtorrent {
 		// hidden
 		virtual ~plugin() {}
 
+#if TORRENT_ABI_VERSION == 1
+		using feature_flags_t = libtorrent::feature_flags_t;
+#endif
+
 		// include this bit if your plugin needs to alter the order of the
 		// optimistic unchoke of peers. i.e. have the on_optimistic_unchoke()
 		// callback be called.
-		static constexpr feature_flags_t optimistic_unchoke_feature = 1_bit;
+		static inline constexpr feature_flags_t optimistic_unchoke_feature = 1_bit;
 
 		// include this bit if your plugin needs to have on_tick() called
-		static constexpr feature_flags_t tick_feature = 2_bit;
+		static inline constexpr feature_flags_t tick_feature = 2_bit;
 
 		// include this bit if your plugin needs to have on_dht_request()
 		// called
-		static constexpr feature_flags_t dht_request_feature = 3_bit;
+		static inline constexpr feature_flags_t dht_request_feature = 3_bit;
 
 		// include this bit if your plugin needs to have on_alert()
 		// called
-		static constexpr feature_flags_t alert_feature = 4_bit;
+		static inline constexpr feature_flags_t alert_feature = 4_bit;
+
+		// include this bit if your plugin needs to have on_unknown_torrent()
+		// called even if there is no active torrent in the session
+		static inline constexpr feature_flags_t unknown_torrent_feature = 5_bit;
 
 		// This function is expected to return a bitmask indicating which features
 		// this plugin implements. Some callbacks on this object may not be called
@@ -212,17 +202,22 @@ namespace libtorrent {
 
 		// this is called by the session every time a new torrent is added.
 		// The ``torrent*`` points to the internal torrent object created
-		// for the new torrent. The ``void*`` is the userdata pointer as
+		// for the new torrent. The client_data_t is the userdata pointer as
 		// passed in via add_torrent_params.
 		//
 		// If the plugin returns a torrent_plugin instance, it will be added
 		// to the new torrent. Otherwise, return an empty shared_ptr to a
 		// torrent_plugin (the default).
-		virtual std::shared_ptr<torrent_plugin> new_torrent(torrent_handle const&, void*)
+		virtual std::shared_ptr<torrent_plugin> new_torrent(torrent_handle const&, client_data_t)
 		{ return std::shared_ptr<torrent_plugin>(); }
 
 		// called when plugin is added to a session
 		virtual void added(session_handle const&) {}
+
+		// called when the session is aborted
+		// the plugin should perform any cleanup necessary to allow the session's
+		// destruction (e.g. cancel outstanding async operations)
+		virtual void abort() {}
 
 		// called when a dht request is received.
 		// If your plugin expects this to be called, make sure to include the flag
@@ -238,7 +233,7 @@ namespace libtorrent {
 		virtual void on_alert(alert const*) {}
 
 		// return true if the add_torrent_params should be added
-		virtual bool on_unknown_torrent(sha1_hash const& /* info_hash */
+		virtual bool on_unknown_torrent(info_hash_t const& /* info_hash */
 			, peer_connection_handle const& /* pc */, add_torrent_params& /* p */)
 		{ return false; }
 
@@ -258,12 +253,21 @@ namespace libtorrent {
 		virtual uint64_t get_unchoke_priority(peer_connection_handle const& /* peer */)
 		{ return (std::numeric_limits<uint64_t>::max)(); }
 
+#if TORRENT_ABI_VERSION <= 2
 		// called when saving settings state
 		virtual void save_state(entry&) {}
 
 		// called when loading settings state
 		virtual void load_state(bdecode_node const&) {}
+#endif
+
+		virtual std::map<std::string, std::string> save_state() const { return {}; }
+
+		// called on startup while loading settings state from the session_params
+		virtual void load_state(std::map<std::string, std::string> const&) {}
 	};
+
+TORRENT_VERSION_NAMESPACE_3_END
 
 	using add_peer_flags_t = flags::bitfield_flag<std::uint8_t, struct add_peer_flags_tag>;
 
@@ -274,6 +278,10 @@ namespace libtorrent {
 	{
 		// hidden
 		virtual ~torrent_plugin() {}
+
+#if TORRENT_ABI_VERSION == 1
+		using flags_t = libtorrent::add_peer_flags_t;
+#endif
 
 		// This function is called each time a new peer is connected to the torrent. You
 		// may choose to ignore this by just returning a default constructed
@@ -330,16 +338,12 @@ namespace libtorrent {
 		// enum members
 		virtual void on_state(torrent_status::state_t) {}
 
-		// called every time policy::add_peer is called
-		// src is a bitmask of which sources this peer
-		// has been seen from. flags is a bitmask of:
-
 		// this is the first time we see this peer
-		static constexpr add_peer_flags_t first_time = 1_bit;
+		static inline constexpr add_peer_flags_t first_time = 1_bit;
 
 		// this peer was not added because it was
 		// filtered by the IP filter
-		static constexpr add_peer_flags_t filtered = 2_bit;
+		static inline constexpr add_peer_flags_t filtered = 2_bit;
 
 		// called every time a new peer is added to the peer list.
 		// This is before the peer is connected to. For ``flags``, see
@@ -353,7 +357,7 @@ namespace libtorrent {
 
 	// peer plugins are associated with a specific peer. A peer could be
 	// both a regular bittorrent peer (``bt_peer_connection``) or one of the
-	// web seed connections (``web_peer_connection`` or ``http_seed_connection``).
+	// web seed connections (``web_peer_connection``).
 	// In order to only attach to certain peers, make your
 	// torrent_plugin::new_connection only return a plugin for certain peer
 	// connection types

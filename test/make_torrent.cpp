@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2016, Arvid Norberg
+Copyright (c) 2016, Alden Torres
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2016-2020, 2022, Arvid Norberg
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include <deque>
@@ -36,12 +15,13 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/hasher.hpp"
 #include "libtorrent/entry.hpp"
 #include "libtorrent/bencode.hpp"
+#include "libtorrent/load_torrent.hpp"
 #include "libtorrent/aux_/session_settings.hpp"
 #include "libtorrent/aux_/posix_storage.hpp"
 
 using namespace lt;
 
-std::shared_ptr<lt::torrent_info> make_test_torrent(torrent_args const& args)
+lt::add_torrent_params make_test_torrent(torrent_args const& args)
 {
 	entry e;
 
@@ -120,6 +100,12 @@ std::shared_ptr<lt::torrent_info> make_test_torrent(torrent_args const& args)
 		e["httpseeds"] = args.m_http_seed;
 	}
 
+	if (!args.m_collection.empty())
+	{
+		auto& l = info["collections"].list();
+		l.push_back(args.m_collection);
+	}
+
 	std::string piece_hashes;
 
 	int num_pieces = (total_size + piece_length - 1) / piece_length;
@@ -152,29 +138,24 @@ std::shared_ptr<lt::torrent_info> make_test_torrent(torrent_args const& args)
 
 	info["pieces"] = piece_hashes;
 
-	std::vector<char> tmp;
-	std::back_insert_iterator<std::vector<char>> out(tmp);
-	bencode(out, e);
+	std::vector<char> const tmp = bencode(e);
 
-	FILE* f = fopen("test.torrent", "w+");
-	fwrite(&tmp[0], 1, tmp.size(), f);
-	fclose(f);
-
-	return std::make_shared<torrent_info>(tmp, from_span);
+	return lt::load_torrent_buffer(tmp);
 }
 
 void generate_files(lt::torrent_info const& ti, std::string const& path
 	, bool alternate_data)
 {
 	aux::vector<download_priority_t, file_index_t> priorities;
-	sha1_hash info_hash;
 	storage_params params{
 		ti.files(),
 		nullptr,
 		path,
 		storage_mode_t::storage_mode_sparse,
 		priorities,
-		info_hash
+		sha1_hash{},
+		true, // v1-hashes
+		true // v2-hashes
 	};
 
 	// default settings
@@ -195,9 +176,9 @@ void generate_files(lt::torrent_info const& ti, std::string const& path
 			buffer[static_cast<std::size_t>(o)] = data;
 		}
 
-		iovec_t b = { &buffer[0], piece_size };
+		span<char> const b = { &buffer[0], piece_size };
 		storage_error ec;
-		int ret = st.writev(sett, b, i, 0, ec);
+		int ret = st.write(sett, b, i, 0, ec);
 		if (ret != piece_size || ec)
 		{
 			std::printf("ERROR writing files: (%d expected %d) %s\n"

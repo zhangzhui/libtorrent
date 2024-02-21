@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2012-2018, Arvid Norberg, Alden Torres
+Copyright (c) 2015-2017, Alden Torres
+Copyright (c) 2015-2020, Arvid Norberg
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2019, Mike Tzou
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_DHT_STORAGE_HPP
@@ -44,13 +24,12 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <libtorrent/string_view.hpp>
 
 namespace libtorrent {
-
-	class entry;
+	struct entry;
+	struct settings_interface;
 }
 
 namespace libtorrent {
 namespace dht {
-	struct dht_settings;
 
 	// This structure hold the relevant counters for the storage
 	struct TORRENT_EXPORT dht_storage_counters
@@ -76,20 +55,17 @@ namespace dht {
 	// constructor function is called dht_default_storage_constructor().
 	// You should know that if this storage becomes full of DHT items,
 	// the current implementation could degrade in performance.
-	//
 	struct TORRENT_EXPORT dht_storage_interface
 	{
 #if TORRENT_ABI_VERSION == 1
 		// This function returns the number of torrents tracked by
 		// the DHT at the moment. It's used to fill session_status.
 		// It's deprecated.
-		//
 		virtual size_t num_torrents() const = 0;
 
 		// This function returns the sum of all of peers per torrent
 		// tracker byt the DHT at the moment.
 		// It's deprecated.
-		//
 		virtual size_t num_peers() const = 0;
 #endif
 
@@ -110,20 +86,21 @@ namespace dht {
 		//
 		// If the scrape parameter is true, you should fill these keys:
 		//
-		//    peers["BFpe"] - with the standard bit representation of a
-		//                    256 bloom filter containing the downloaders
-		//    peers["BFsd"] - with the standard bit representation of a
-		//                    256 bloom filter containing the seeders
+		//    peers["BFpe"]
+		//       with the standard bit representation of a
+		//       256 bloom filter containing the downloaders
+		//    peers["BFsd"]
+		//       with the standard bit representation of a
+		//       256 bloom filter containing the seeders
 		//
 		// If the scrape parameter is false, you should fill the
 		// key peers["values"] with a list containing a subset of
 		// peers tracked by the given info_hash. Such a list should
-		// consider the value of dht_settings::max_peers_reply.
+		// consider the value of settings_pack::dht_max_peers_reply.
 		// If noseed is true only peers marked as no seed should be included.
 		//
 		// returns true if the maximum number of peers are stored
 		// for this info_hash.
-		//
 		virtual bool get_peers(sha1_hash const& info_hash
 			, bool noseed, bool scrape, address const& requester
 			, entry& peers) const = 0;
@@ -137,7 +114,6 @@ namespace dht {
 		// the announce_peer DHT message. The length of this value should
 		// have a maximum length in the final storage. The default
 		// implementation truncate the value for a maximum of 50 characters.
-		//
 		virtual void announce_peer(sha1_hash const& info_hash
 			, tcp::endpoint const& endp
 			, string_view name, bool seed) = 0;
@@ -149,7 +125,6 @@ namespace dht {
 		//
 		// returns true if the item is found and the data is returned
 		// inside the (entry) out parameter item.
-		//
 		virtual bool get_immutable_item(sha1_hash const& target
 			, entry& item) const = 0;
 
@@ -159,7 +134,7 @@ namespace dht {
 		// For implementers:
 		// This data can be stored only if the target is not already
 		// present. The implementation should consider the value of
-		// dht_settings::max_dht_items.
+		// settings_pack::dht_max_dht_items.
 		//
 		virtual void put_immutable_item(sha1_hash const& target
 			, span<char const> buf
@@ -169,7 +144,6 @@ namespace dht {
 		//
 		// returns true if the item is found and the data is returned
 		// inside the out parameter seq.
-		//
 		virtual bool get_mutable_item_seq(sha1_hash const& target
 			, sequence_number& seq) const = 0;
 
@@ -185,7 +159,6 @@ namespace dht {
 		//
 		// returns true if the item is found and the data is returned
 		// inside the (entry) out parameter item.
-		//
 		virtual bool get_mutable_item(sha1_hash const& target
 			, sequence_number seq, bool force_fill
 			, entry& item) const = 0;
@@ -196,7 +169,7 @@ namespace dht {
 		// For implementers:
 		// The sequence number should be checked if the item is already
 		// present. The implementation should consider the value of
-		// dht_settings::max_dht_items.
+		// settings_pack::dht_max_dht_items.
 		//
 		virtual void put_mutable_item(sha1_hash const& target
 			, span<char const> buf
@@ -209,7 +182,7 @@ namespace dht {
 		// This function retrieves a sample info-hashes
 		//
 		// For implementers:
-		// The info-hashes should be stored in ["samples"] (N × 20 bytes).
+		// The info-hashes should be stored in ["samples"] (N x 20 bytes).
 		// the following keys should be filled
 		// item["interval"] - the subset refresh interval in seconds.
 		// item["num"] - number of info-hashes in storage.
@@ -218,7 +191,6 @@ namespace dht {
 		// and modify the actual sample to put in ``item``
 		//
 		// returns the number of info-hashes in the sample.
-		//
 		virtual int get_infohashes_sample(entry& item) = 0;
 
 		// This function is called periodically (non-constant frequency).
@@ -226,19 +198,23 @@ namespace dht {
 		// For implementers:
 		// Use this functions for expire peers or items or any other
 		// storage cleanup.
-		//
 		virtual void tick() = 0;
 
+		// return stats counters for the store
 		virtual dht_storage_counters counters() const = 0;
 
+		// hidden
 		virtual ~dht_storage_interface() {}
 	};
 
 	using dht_storage_constructor_type
-		= std::function<std::unique_ptr<dht_storage_interface>(dht_settings const& settings)>;
+		= std::function<std::unique_ptr<dht_storage_interface>(settings_interface const& settings)>;
 
+	// constructor for the default DHT storage. The DHT storage is responsible
+	// for maintaining peers and mutable and immutable items announced and
+	// stored/put to the DHT node.
 	TORRENT_EXPORT std::unique_ptr<dht_storage_interface> dht_default_storage_constructor(
-		dht_settings const& settings);
+		settings_interface const& settings);
 
 } // namespace dht
 } // namespace libtorrent

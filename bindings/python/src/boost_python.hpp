@@ -7,6 +7,8 @@
 
 #include <cstdio>
 #include <libtorrent/aux_/disable_warnings_push.hpp>
+// https://github.com/boostorg/system/issues/32#issuecomment-462912013
+#define HAVE_SNPRINTF
 #include <boost/python.hpp>
 
 #include <boost/bind/placeholders.hpp>
@@ -32,6 +34,12 @@ using namespace boost::placeholders;
 #ifdef vsnprintf
 #undef vsnprintf
 #endif
+
+inline void python_deprecated(char const* msg)
+{
+    if (PyErr_WarnEx(PyExc_DeprecationWarning, msg, 1) == -1)
+        boost::python::throw_error_already_set();
+}
 
 #endif
 

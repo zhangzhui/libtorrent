@@ -2,33 +2,29 @@ version: "{build}"
 branches:
   only:
     - master
-    - RC_1_2
-    - RC_1_1
-image: Visual Studio 2017
+image: Visual Studio 2019
 clone_depth: 1
 environment:
   matrix:
-    - cmake: 1
-    - variant: test_debug
-      compiler: msvc-14.1
-      model: 64
-      sim: 1
-    - variant: test_debug
-      compiler: msvc-14.1
-      model: 32
-      bjam: 1
-    - variant: test_release
-      compiler: msvc-14.1
-      model: 64
-      python: 1
-      python_dist: 1
-      crypto: openssl
-      bjam: 1
-    - variant: test_debug
+    - variant: debug
       compiler: gcc
       model: 32
       crypto: openssl
-      bjam: 1
+      ssl_lib: /usr/local/include
+      ssl_include: /usr/local/lib
+      lib: 1
+    - cmake: 1
+      crypto: openssl
+      ssl_root_dir: c:\OpenSSL-v111-Win64
+      webtorrent: on
+    - variant: release
+      compiler: msvc
+      model: 64
+      crypto: openssl
+      ssl_lib: c:\OpenSSL-v111-Win64\lib
+      ssl_include: c:\OpenSSL-v111-Win64\include
+      webtorrent: on
+      tests: 1
 
 artifacts:
   - path: bindings/python/dist/*
@@ -38,44 +34,44 @@ install:
   - git submodule update --init --recursive
   - set ROOT_DIRECTORY=%CD%
   - cd %ROOT_DIRECTORY%
+  - if not defined api ( set api="desktop" )
   - if not defined compiler ( set compiler="" )
+  - if not defined linking ( set linking="shared" )
   - if not defined crypto ( set crypto=built-in )
-  - if not defined linkflags ( set linkflags="" )
-  - if not defined include ( set include="" )
+  - if not defined webtorrent ( set webtorrent=off )
+  - if not defined ssl_lib ( set ssl_lib=c:\ )
+  - if not defined ssl_include ( set ssl_include=c:\ )
+  - if not defined ssl_root_dir ( set ssl_root_dir=c:\ )
   - cd %ROOT_DIRECTORY%
-  - set BOOST_ROOT=c:\Libraries\boost_1_69_0
+  - set BOOST_ROOT=c:\Libraries\boost_1_77_0
   - set BOOST_BUILD_PATH=%BOOST_ROOT%\tools\build
   - echo %BOOST_ROOT%
   - echo %BOOST_BUILD_PATH%
-  - set PATH=%PATH%;%BOOST_BUILD_PATH%\src\engine\bin.ntx86
-  - ps: '"using msvc : 14.1 ;`nusing gcc ;`nusing python : 3.5 : c:\\Python35-x64 : c:\\Python35-x64\\include : c:\\Python35-x64\\libs ;`n" | Set-Content $env:HOMEDRIVE\$env:HOMEPATH\user-config.jam'
+  - set PATH=%PATH%;%BOOST_BUILD_PATH%
+  - ps: '"using msvc ;`nusing python : 3.7 : c:\\Python37-x64 : c:\\Python37-x64\\include : c:\\Python37-x64\\libs ;`n" | Set-Content $env:HOMEDRIVE\$env:HOMEPATH\user-config.jam'
   - type %HOMEDRIVE%%HOMEPATH%\user-config.jam
   - cd %ROOT_DIRECTORY%
-  - set PATH=c:\msys64\mingw32\bin;%PATH%
-  - g++ --version
+  - set PATH=c:\Python37-x64;%PATH%
+  - set PYTHON_INTERPRETER=c:\Python37-x64\python.exe
   - python --version
+  - python -m pip install websockets
   - echo %ROOT_DIRECTORY%
-  - cd %BOOST_BUILD_PATH%\src\engine
-  - build.bat >nul
+  - cd %BOOST_BUILD_PATH%
+  - bootstrap.bat >nul
   - cd %ROOT_DIRECTORY%
 
 build_script:
-  # examples
-  - cd %ROOT_DIRECTORY%\examples
-  - if defined bjam (
-    b2.exe --hash openssl-version=pre1.1 warnings=all warnings-as-errors=on -j2 %compiler% address-model=%model% picker-debugging=on invariant-checks=full variant=%variant% %linkflags% %include% link=shared crypto=%crypto%
-    )
 
-  # tools
-  - cd %ROOT_DIRECTORY%\tools
-  - if defined bjam (
-    b2.exe --hash openssl-version=pre1.1 warnings=all warnings-as-errors=on -j2 %compiler% address-model=%model% picker-debugging=on invariant-checks=full variant=%variant% %linkflags% %include% link=shared crypto=%crypto%
+  # just the library
+  - cd %ROOT_DIRECTORY%
+  - if defined lib (
+    b2.exe --hash openssl-lib=%ssl_lib% openssl-include=%ssl_include% warnings=all warnings-as-errors=on %compiler% address-model=%model% picker-debugging=on invariant-checks=full variant=%variant% link=shared crypto=%crypto% webtorrent=%webtorrent% asserts=on export-extra=on windows-api=%api% windows-version=win10 cxxstd=17
     )
 
   # test
   - cd %ROOT_DIRECTORY%\test
-  - if defined bjam (
-    b2.exe --hash openssl-version=pre1.1 warnings=all warnings-as-errors=on -j2 %compiler% address-model=%model% picker-debugging=on invariant-checks=full variant=%variant% %linkflags% %include% link=shared crypto=%crypto% win-tests test_upnp test_natpmp testing.execute=off
+  - if defined tests (
+    b2.exe --hash openssl-lib=%ssl_lib% openssl-include=%ssl_include% warnings=all warnings-as-errors=on %compiler% address-model=%model% picker-debugging=on invariant-checks=full variant=%variant% link=shared crypto=%crypto% webtorrent=%webtorrent% asserts=on export-extra=on windows-api=%api% windows-version=win10 testing.execute=off deterministic-tests
     )
 
   # python binding
@@ -84,57 +80,30 @@ build_script:
   # boost.python itself doesn't build warning free, so we can't build
   # with warnings-as-errors
   - if defined python (
-    b2.exe --hash openssl-version=pre1.1 warnings=all -j2 %compiler% address-model=%model% picker-debugging=on invariant-checks=full variant=%variant% %linkflags% %include% link=shared crypto=%crypto% libtorrent-link=shared stage_module stage_dependencies
+    b2.exe --hash openssl-lib=%ssl_lib% openssl-include=%ssl_include% warnings=all %compiler% address-model=%model% picker-debugging=on invariant-checks=full variant=%variant% link=shared crypto=%crypto% webtorrent=%webtorrent% asserts=on export-extra=on windows-api=%api% windows-version=win10 libtorrent-link=shared stage_module stage_dependencies
     )
   - if defined python_dist (
-    c:\Python35-x64\python.exe setup.py bdist --format=msi
-    )
-
-  # simulations
-  - cd %ROOT_DIRECTORY%\simulation
-  - if defined sim (
-    b2.exe --hash openssl-version=pre1.1 warnings=all warnings-as-errors=on -j2 %compiler% address-model=%model% debug-iterators=off picker-debugging=on invariant-checks=full test_debug %linkflags% %include% boost-link=default link=static crypto=built-in define=BOOST_ASIO_DISABLE_IOCP testing.execute=off
+    c:\Python37-x64\python.exe setup.py bdist --format=msi
     )
 
   # minimal support for cmake build
-  # we need to build the boost libraries we use with C++14
+  # we need to build the boost libraries we use with C++17
   # and stage it for cmake to pick up
   - if defined cmake (
+    call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat" &&
     cd %BOOST_ROOT% &&
-    bjam cxxstd=14 release --with-python --with-system --layout=system address-model=64 link=shared stage &&
+    b2.exe cxxstd=17 release --with-python --with-system --layout=system address-model=64 link=shared stage &&
     cd %ROOT_DIRECTORY% &&
-    mkdir build &&
-    cd build &&
-    set "PATH=c:\Python27-x64;%PATH%" &&
-    cmake -DBOOST_LIBRARYDIR=%BOOST_ROOT%\stage\lib -DCMAKE_CXX_STANDARD=14 -Dbuild_tests=ON -Dbuild_examples=ON -Dbuild_tools=ON -Dpython-bindings=%python% -Dboost-python-module-name="python" -Dskip-python-runtime-test=true -DPython_ADDITIONAL_VERSIONS="2.7" -G "Visual Studio 14 2015 Win64" .. &&
-    cmake --build . --config Release -- -verbosity:minimal
+    cmake -B build -DBOOST_LIBRARYDIR=%BOOST_ROOT%\stage\lib -DCMAKE_CXX_STANDARD=17 -Dbuild_tests=ON -Dbuild_examples=ON -Dbuild_tools=ON -Dwebtorrent=%webtorrent% -DOPENSSL_ROOT_DIR=%ssl_root_dir% -Dpython-bindings=%python% -Dboost-python-module-name="python" -Dskip-python-runtime-test=true -DPython_ADDITIONAL_VERSIONS="2.7" -G "Ninja Multi-Config" &&
+    cmake --build build --config Release
     )
 
 test_script:
   - cd %ROOT_DIRECTORY%\test
-  - if defined bjam (
-    appveyor-retry b2.exe -l400 --hash openssl-version=pre1.1 warnings=all warnings-as-errors=on -j2 %compiler% address-model=%model% picker-debugging=on invariant-checks=full variant=%variant% %linkflags% %include% link=shared crypto=%crypto% win-tests
-    )
-
-  - cd %ROOT_DIRECTORY%\bindings\python
-  # we use 64 bit python build
-  - if defined python (
-    copy dependencies\*.* .
-    & c:\Python35-x64\python.exe test.py -b
+  - if defined tests (
+    appveyor-retry b2.exe -l500 --hash openssl-lib=%ssl_lib% openssl-include=%ssl_include% warnings=all warnings-as-errors=on %compiler% address-model=%model% picker-debugging=on invariant-checks=full variant=%variant% link=shared crypto=%crypto% webtorrent=%webtorrent% asserts=on export-extra=on windows-api=%api% windows-version=win10 deterministic-tests
     )
 
   - if defined cmake (
     appveyor-retry ctest
-    )
-
-  # simulation tests
-  # debug iterators are turned off here because msvc has issues with noexcept
-  # specifiers when debug iterators are enabled. Specifically, constructors that
-  # allocate memory are still marked as noexcept. That results in program
-  # termination
-  # the IOCP backend in asio appears to have an issue where it hangs under
-  # certain unexpected terminations (through exceptions)
-  - cd %ROOT_DIRECTORY%\simulation
-  - if defined sim (
-    b2.exe --hash openssl-version=pre1.1 warnings-as-errors=on -j2 %compiler% address-model=%model% debug-iterators=off picker-debugging=on invariant-checks=full test_debug %linkflags% %include% boost-link=default link=static crypto=built-in define=BOOST_ASIO_DISABLE_IOCP
     )

@@ -1,40 +1,22 @@
 /*
 
-Copyright (c) 2015, Arvid Norberg
+Copyright (c) 2015-2018, 2020-2022, Arvid Norberg
+Copyright (c) 2017, Falcosc
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
 #include "setup_swarm.hpp"
+#include "utils.hpp"
 #include "simulator/simulator.hpp"
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/settings_pack.hpp"
+#include "libtorrent/session.hpp"
+
+#include <iostream>
 
 using namespace lt;
 using namespace sim;
@@ -47,7 +29,7 @@ time_point32 time_now()
 template <typename Tp1, typename Tp2>
 bool eq(Tp1 const lhs, Tp2 const rhs)
 {
-	return std::abs(lt::duration_cast<seconds>(lhs - rhs).count()) <= 1;
+	return std::abs(lt::duration_cast<seconds>(lhs - rhs).count()) <= 2;
 }
 
 // this is a test for torrent_status time counters are correct
@@ -124,7 +106,7 @@ TORRENT_TEST(status_timers_last_upload)
 				TEST_CHECK(!handle.is_valid());
 				handle = ta->handle;
 				torrent_status st = handle.status();
-				// test last upload and download state before wo go throgh
+				// test last upload and download state before we go through
 				// torrent states
 				TEST_CHECK(st.last_upload == time_point(seconds(0)));
 				TEST_CHECK(st.last_download == time_point(seconds(0)));
@@ -140,7 +122,7 @@ TORRENT_TEST(status_timers_last_upload)
 			}
 
 			torrent_status st = handle.status();
-			// uploadtime is 0 seconds behind now
+			// upload time is 0 seconds behind now
 			TEST_CHECK(eq(st.last_upload, time_now()));
 			// does not download in seeding mode
 			TEST_CHECK(st.last_download == time_point(seconds(0)));
@@ -170,7 +152,7 @@ TORRENT_TEST(status_timers_time_shift_with_active_torrent)
 				TEST_CHECK(!handle.is_valid());
 				handle = ta->handle;
 				torrent_status st = handle.status();
-				// test last upload and download state before wo go throgh
+				// test last upload and download state before we go through
 				// torrent states
 				TEST_CHECK(st.last_download == time_point(seconds(0)));
 				TEST_CHECK(st.last_upload == time_point(seconds(0)));
@@ -197,9 +179,9 @@ TORRENT_TEST(status_timers_time_shift_with_active_torrent)
 					break;
 				case 64000:
 					// resume just before we hit the time shift handling
-					// this is needed to test what happend if we want to
+					// this is needed to test what happens if we want to
 					// shift more time then we have active time because
-					// we shift 4 hours and have less then 1 hours active time
+					// we shift 4 hours and have less then 1 hour active time
 					handle.resume();
 					tick_is_in_active_range = true;
 					// don't check every tick
@@ -249,7 +231,7 @@ TORRENT_TEST(finish_time_shift_active)
 				TEST_CHECK(!handle.is_valid());
 				handle = ta->handle;
 				torrent_status st = handle.status();
-				// test last upload and download state before wo go throgh
+				// test last upload and download state before we go through
 				// torrent states
 				TEST_CHECK(st.last_download == time_point(seconds(0)));
 				TEST_CHECK(st.last_upload == time_point(seconds(0)));
@@ -321,7 +303,7 @@ TORRENT_TEST(finish_time_shift_paused)
 				TEST_CHECK(!handle.is_valid());
 				handle = ta->handle;
 				torrent_status st = handle.status();
-				// test last upload and download state before wo go throgh
+				// test last upload and download state before we go through
 				// torrent states
 				TEST_CHECK(st.last_upload == time_point(seconds(0)));
 				TEST_CHECK(st.last_download == time_point(seconds(0)));
@@ -380,6 +362,9 @@ TORRENT_TEST(finish_time_shift_paused)
 // first
 TORRENT_TEST(alert_order)
 {
+#if TORRENT_ABI_VERSION == 1
+	bool received_torrent_add_alert = false;
+#endif
 	bool received_add_torrent_alert = false;
 	int num_torrent_alerts = 0;
 
@@ -388,20 +373,36 @@ TORRENT_TEST(alert_order)
 	setup_swarm(1, swarm_test::upload
 		// add session
 		, [](lt::settings_pack& sett) {
-			sett.set_int(settings_pack::alert_mask, alert::all_categories);
+			sett.set_int(settings_pack::alert_mask, alert_category::all);
 		}
 		// add torrent
 		, [](lt::add_torrent_params ) {}
 		// on alert
 		, [&](lt::alert const* a, lt::session&) {
+#if TORRENT_ABI_VERSION == 1
+			if (alert_cast<torrent_added_alert>(a))
+			{
+				TEST_EQUAL(received_torrent_add_alert, false);
+				received_torrent_add_alert = true;
+			}
+			else
+#endif
 			if (auto ta = alert_cast<add_torrent_alert>(a))
 			{
+#if TORRENT_ABI_VERSION == 1
+				TEST_EQUAL(received_torrent_add_alert, true);
+#endif
 				TEST_EQUAL(received_add_torrent_alert, false);
 				received_add_torrent_alert = true;
 				handle = ta->handle;
 			}
-
-			if (auto ta = dynamic_cast<torrent_alert const*>(a))
+			else if (dynamic_cast<torrent_log_alert const*>(a))
+			{
+				// it's acceptable to receive torrent_log_alert before
+				// add_torrent_alert, since they are for debugging
+				return;
+			}
+			else if (auto ta = dynamic_cast<torrent_alert const*>(a))
 			{
 				TEST_EQUAL(received_add_torrent_alert, true);
 				TEST_CHECK(handle == ta->handle);
@@ -417,3 +418,150 @@ TORRENT_TEST(alert_order)
 	TEST_CHECK(num_torrent_alerts > 1);
 }
 
+// this tests a torrent completing the download when `active_seeds` is set to 0.
+// the torrent should be paused when it completes the download
+TORRENT_TEST(active_timer_no_seed)
+{
+	lt::time_point32 start_time;
+	lt::torrent_handle handle;
+	bool ran_to_completion = false;
+
+	int active_time = 0;
+
+	setup_swarm(4, swarm_test::download
+		// add session
+		, [](lt::settings_pack& p ) {
+			p.set_int(settings_pack::active_seeds, 0);
+			p.set_bool(settings_pack::dont_count_slow_torrents, false);
+		}
+		// add torrent
+		, [](lt::add_torrent_params& p) {
+			p.flags |= torrent_flags::auto_managed;
+		}
+		// on alert
+		, [&](lt::alert const* a, lt::session&) {
+			if (auto ta = alert_cast<add_torrent_alert>(a))
+			{
+				TEST_CHECK(!handle.is_valid());
+				start_time = time_now();
+				handle = ta->handle;
+			}
+		}
+		// terminate
+		, [&](int const ticks, lt::session& ses) -> bool
+		{
+			if (!is_seed(ses))
+			{
+				++active_time;
+			}
+			else
+			{
+				// some part of the simulation is not deterministic, and causes this to vary
+				// between platforms/compilers
+				TEST_CHECK(active_time >= 6);
+				TEST_CHECK(active_time <= 9);
+			}
+
+			torrent_status st = handle.status();
+			TEST_EQUAL(st.active_duration.count(), active_time);
+			TEST_EQUAL(st.seeding_duration.count(), 0);
+			TEST_EQUAL(st.finished_duration.count(), 0);
+
+			// does not upload without peers
+			TEST_CHECK(st.last_upload == time_point(seconds(0)));
+
+			if (ticks > 2 * 60)
+			{
+				ran_to_completion = true;
+				return true;
+			}
+
+			return false;
+		});
+	TEST_CHECK(ran_to_completion);
+}
+
+template <typename PauseFun>
+void test_pause(PauseFun f)
+{
+	lt::time_point32 start_time;
+	lt::torrent_handle handle;
+	bool ran_to_completion = false;
+
+	int const pause_time = 5;
+
+	int active_time = 0;
+
+	int paused_alert_count = 0;
+
+	setup_swarm(5, swarm_test::download
+		// add session
+		, [](lt::settings_pack& p ) {}
+		// add torrent
+		, [](lt::add_torrent_params& p) {}
+		// on alert
+		, [&](lt::alert const* a, lt::session&) {
+			if (auto ta = alert_cast<add_torrent_alert>(a))
+			{
+				TEST_CHECK(!handle.is_valid());
+				start_time = time_now();
+				handle = ta->handle;
+			}
+			if (alert_cast<torrent_paused_alert>(a))
+			{
+				++paused_alert_count;
+			}
+		}
+		// terminate
+		, [&](int const ticks, lt::session& ses) -> bool
+		{
+			if (ticks == pause_time)
+			{
+				f(handle, ses);
+			}
+			if (ticks <= pause_time)
+				++active_time;
+
+			torrent_status st = handle.status();
+			TEST_EQUAL(st.active_duration.count(), active_time);
+			TEST_EQUAL(st.seeding_duration.count(), 0);
+			TEST_EQUAL(st.finished_duration.count(), 0);
+
+			// does not upload without peers
+			TEST_CHECK(st.last_upload == time_point(seconds(0)));
+
+			if (ticks > 2 * 60)
+			{
+				ran_to_completion = true;
+				return true;
+			}
+
+			return false;
+		});
+	TEST_EQUAL(paused_alert_count, 1);
+	TEST_CHECK(ran_to_completion);
+}
+
+TORRENT_TEST(active_timer_graceful_pause)
+{
+	test_pause([](lt::torrent_handle h, lt::session&)
+	{
+		h.pause(torrent_handle::graceful_pause);
+	});
+}
+
+TORRENT_TEST(active_timer_pause)
+{
+	test_pause([](lt::torrent_handle h, lt::session&)
+	{
+		h.pause();
+	});
+}
+
+TORRENT_TEST(active_timer_session_pause)
+{
+	test_pause([](lt::torrent_handle, lt::session& s)
+	{
+		s.pause();
+	});
+}

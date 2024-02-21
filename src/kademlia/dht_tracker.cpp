@@ -1,33 +1,16 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg
+Copyright (c) 2006-2012, 2014-2021, Arvid Norberg
+Copyright (c) 2014-2015, 2017, Steven Siloti
+Copyright (c) 2015-2018, 2020-2021, Alden Torres
+Copyright (c) 2015, Thomas Yuan
+Copyright (c) 2016, 2019, Andrei Kurushin
+Copyright (c) 2017, Pavel Pimenov
+Copyright (c) 2020, Fonic
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/kademlia/dht_tracker.hpp"
@@ -44,7 +27,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <libtorrent/performance_counters.hpp> // for counters
 #include <libtorrent/aux_/time.hpp>
 #include <libtorrent/session_status.hpp>
-#include <libtorrent/broadcast_socket.hpp> // for is_local
+#include <libtorrent/aux_/ip_helpers.hpp> // for is_v6
 
 #ifndef TORRENT_DISABLE_LOGGING
 #include <libtorrent/hex.hpp> // to_hex
@@ -52,7 +35,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 using namespace std::placeholders;
 
-namespace libtorrent { namespace dht {
+namespace libtorrent::dht {
 
 	namespace {
 
@@ -62,8 +45,7 @@ namespace libtorrent { namespace dht {
 
 	void add_dht_counters(node const& dht, counters& c)
 	{
-		int nodes, replacements, allocated_observers;
-		std::tie(nodes, replacements, allocated_observers) = dht.get_stats_counters();
+		auto const [nodes, replacements, allocated_observers] = dht.get_stats_counters();
 
 		c.inc_stats_counter(counters::dht_nodes, nodes);
 		c.inc_stats_counter(counters::dht_node_cache, replacements);
@@ -84,26 +66,27 @@ namespace libtorrent { namespace dht {
 	// unit and connecting them together.
 	dht_tracker::dht_tracker(dht_observer* observer
 		, io_context& ios
-		, send_fun_t const& send_fun
-		, dht_settings const& settings
+		, send_fun_t send_fun
+		, aux::session_settings const& settings
 		, counters& cnt
 		, dht_storage_interface& storage
 		, dht_state&& state)
 		: m_counters(cnt)
 		, m_storage(storage)
 		, m_state(std::move(state))
-		, m_send_fun(send_fun)
+		, m_send_fun(std::move(send_fun))
 		, m_log(observer)
 		, m_key_refresh_timer(ios)
 		, m_refresh_timer(ios)
 		, m_settings(settings)
 		, m_running(false)
 		, m_host_resolver(ios)
-		, m_send_quota(settings.upload_rate_limit)
+		, m_send_quota(settings.get_int(settings_pack::dht_upload_rate_limit))
 		, m_last_tick(aux::time_now())
+		, m_ioc(ios)
 	{
-		m_blocker.set_block_timer(m_settings.block_timeout);
-		m_blocker.set_rate_limit(m_settings.block_ratelimit);
+		m_blocker.set_block_timer(m_settings.get_int(settings_pack::dht_block_timeout));
+		m_blocker.set_rate_limit(m_settings.get_int(settings_pack::dht_block_ratelimit));
 	}
 
 	void dht_tracker::update_node_id(aux::listen_socket_handle const& s)
@@ -116,30 +99,25 @@ namespace libtorrent { namespace dht {
 
 	void dht_tracker::new_socket(aux::listen_socket_handle const& s)
 	{
-		if (s.is_ssl()) return;
-
 		address const local_address = s.get_local_endpoint().address();
-		// don't try to start dht nodes on non-global IPv6 addresses
-		// with IPv4 the interface might be behind NAT so we can't skip them based on the scope of the local address
-		// and we might not have the external address yet
-		if (local_address.is_v6() && is_local(local_address))
-			return;
 		auto stored_nid = std::find_if(m_state.nids.begin(), m_state.nids.end()
 			, [&](node_ids_t::value_type const& nid) { return nid.first == local_address; });
 		node_id const nid = stored_nid != m_state.nids.end() ? stored_nid->second : node_id();
 		// must use piecewise construction because tracker_node::connection_timer
 		// is neither copyable nor movable
 		auto n = m_nodes.emplace(std::piecewise_construct_t(), std::forward_as_tuple(s)
-			, std::forward_as_tuple(m_key_refresh_timer.get_executor().context()
+			, std::forward_as_tuple(m_ioc
 			, s, this, m_settings, nid, m_log, m_counters
 			, std::bind(&dht_tracker::get_node, this, _1, _2)
 			, m_storage));
+
+		update_storage_node_ids();
 
 #ifndef TORRENT_DISABLE_LOGGING
 		if (m_log->should_log(dht_logger::tracker))
 		{
 			m_log->log(dht_logger::tracker, "starting %s DHT tracker with node id: %s"
-				, local_address.is_v4() ? "IPv4" : "IPv6"
+				, local_address.to_string().c_str()
 				, aux::to_hex(n.first->second.dht.nid()).c_str());
 		}
 #endif
@@ -156,14 +134,17 @@ namespace libtorrent { namespace dht {
 
 	void dht_tracker::delete_socket(aux::listen_socket_handle const& s)
 	{
-		if (s.is_ssl()) return;
-
-		address local_address = s.get_local_endpoint().address();
-		// since we don't start nodes on local IPv6 interfaces we don't need to remove them either
-		if (local_address.is_v6() && is_local(local_address))
-			return;
-		TORRENT_ASSERT(m_nodes.count(s) == 1);
+#ifndef TORRENT_DISABLE_LOGGING
+		if (m_log->should_log(dht_logger::tracker))
+		{
+			address const local_address = s.get_local_endpoint().address();
+			m_log->log(dht_logger::tracker, "removing DHT node on %s"
+				, local_address.to_string().c_str());
+		}
+#endif
 		m_nodes.erase(s);
+
+		update_storage_node_ids();
 	}
 
 	void dht_tracker::start(find_data::nodes_callback const& f)
@@ -179,7 +160,7 @@ namespace libtorrent { namespace dht {
 			n.second.connection_timer.expires_after(seconds(1));
 			n.second.connection_timer.async_wait(
 				std::bind(&dht_tracker::connection_timeout, self(), n.first, _1));
-			if (is_v6(n.first.get_local_endpoint()))
+			if (aux::is_v6(n.first.get_local_endpoint()))
 				n.second.dht.bootstrap(concat(m_state.nodes6, m_state.nodes), f);
 			else
 				n.second.dht.bootstrap(concat(m_state.nodes, m_state.nodes6), f);
@@ -210,7 +191,6 @@ namespace libtorrent { namespace dht {
 		s.dht_nodes = 0;
 		s.dht_node_cache = 0;
 		s.dht_global_nodes = 0;
-		s.dht_torrents = 0;
 		s.active_requests.clear();
 		s.dht_total_allocations = 0;
 
@@ -219,11 +199,12 @@ namespace libtorrent { namespace dht {
 	}
 #endif
 
-	void dht_tracker::dht_status(std::vector<dht_routing_bucket>& table
-		, std::vector<dht_lookup>& requests)
+	std::vector<lt::dht::dht_status> dht_tracker::dht_status() const
 	{
-		for (auto& n : m_nodes)
-			n.second.dht.status(table, requests);
+		std::vector<lt::dht::dht_status> ret;
+		for (auto const& n : m_nodes)
+			ret.emplace_back(n.second.dht.status());
+		return ret;
 	}
 
 	void dht_tracker::update_stats_counters(counters& c) const
@@ -238,7 +219,7 @@ namespace libtorrent { namespace dht {
 		c.set_value(counters::dht_node_cache, 0);
 		c.set_value(counters::dht_allocated_observers, 0);
 
-		for (auto& n : m_nodes)
+		for (auto const& n : m_nodes)
 			add_dht_counters(n.second.dht, c);
 	}
 
@@ -254,7 +235,7 @@ namespace libtorrent { namespace dht {
 
 		tracker_node& n = it->second;
 		time_duration const d = n.dht.connection_timeout();
-		deadline_timer& timer = n.connection_timer;
+		aux::deadline_timer& timer = n.connection_timer;
 		timer.expires_after(d);
 		ADD_OUTSTANDING_ASYNC("dht_tracker::connection_timeout");
 		timer.async_wait(std::bind(&dht_tracker::connection_timeout, self(), s, _1));
@@ -269,8 +250,8 @@ namespace libtorrent { namespace dht {
 			n.second.dht.tick();
 
 		// periodically update the DOS blocker's settings from the dht_settings
-		m_blocker.set_block_timer(m_settings.block_timeout);
-		m_blocker.set_rate_limit(m_settings.block_ratelimit);
+		m_blocker.set_block_timer(m_settings.get_int(settings_pack::dht_block_timeout));
+		m_blocker.set_rate_limit(m_settings.get_int(settings_pack::dht_block_ratelimit));
 
 		m_refresh_timer.expires_after(seconds(5));
 		ADD_OUTSTANDING_ASYNC("dht_tracker::refresh_timeout");
@@ -291,7 +272,8 @@ namespace libtorrent { namespace dht {
 			n.second.dht.new_write_key();
 
 #ifndef TORRENT_DISABLE_LOGGING
-		m_log->log(dht_logger::tracker, "*** new write key***");
+		m_log->log(dht_logger::tracker, "*** new write key*** %d nodes"
+			, int(m_nodes.size()));
 #endif
 	}
 
@@ -303,7 +285,7 @@ namespace libtorrent { namespace dht {
 		m_storage.update_node_ids(ids);
 	}
 
-	node* dht_tracker::get_node(node_id const& id, std::string const& family_name)
+	node* dht_tracker::get_node(node_id const& id, string_view  family_name)
 	{
 		TORRENT_UNUSED(id);
 		for (auto& n : m_nodes)
@@ -332,7 +314,8 @@ namespace libtorrent { namespace dht {
 	}
 
 	void dht_tracker::sample_infohashes(udp::endpoint const& ep, sha1_hash const& target
-		, std::function<void(time_duration
+		, std::function<void(node_id
+			, time_duration
 			, int, std::vector<sha1_hash>
 			, std::vector<std::pair<sha1_hash, udp::endpoint>>)> f)
 	{
@@ -509,17 +492,17 @@ namespace libtorrent { namespace dht {
 		m_counters.inc_stats_counter(counters::dht_bytes_in, buf_size);
 		// account for IP and UDP overhead
 		m_counters.inc_stats_counter(counters::recv_ip_overhead_bytes
-			, is_v6(ep) ? 48 : 28);
+			, aux::is_v6(ep) ? 48 : 28);
 		m_counters.inc_stats_counter(counters::dht_messages_in);
 
-		if (m_settings.ignore_dark_internet && is_v4(ep))
+		if (m_settings.get_bool(settings_pack::dht_ignore_dark_internet) && aux::is_v4(ep))
 		{
 			address_v4::bytes_type b = ep.address().to_v4().to_bytes();
 
 			// these are class A networks not available to the public
 			// if we receive messages from here, that seems suspicious
 			static std::uint8_t const class_a[] = { 3, 6, 7, 9, 11, 19, 21, 22, 25
-				, 26, 28, 29, 30, 33, 34, 48, 51, 56 };
+				, 26, 28, 29, 30, 33, 34, 48, 56 };
 
 			if (std::find(std::begin(class_a), std::end(class_a), b[0]) != std::end(class_a))
 			{
@@ -570,7 +553,7 @@ namespace libtorrent { namespace dht {
 
 	dht_tracker::tracker_node::tracker_node(io_context& ios
 		, aux::listen_socket_handle const& s, socket_manager* sock
-		, dht_settings const& settings
+		, aux::session_settings const& settings
 		, node_id const& nid
 		, dht_observer* observer, counters& cnt
 		, get_foreign_node_t get_foreign_node
@@ -595,7 +578,7 @@ namespace libtorrent { namespace dht {
 		return ret;
 	}
 
-	namespace {
+namespace {
 
 	std::vector<udp::endpoint> save_nodes(node const& dht)
 	{
@@ -607,12 +590,12 @@ namespace libtorrent { namespace dht {
 		return ret;
 	}
 
-	} // anonymous namespace
+} // anonymous namespace
 
 	dht_state dht_tracker::state() const
 	{
 		dht_state ret;
-		for (auto& n : m_nodes)
+		for (auto const& n : m_nodes)
 		{
 			// use the local rather than external address because if the user is behind NAT
 			// we won't know the external IP on startup
@@ -641,14 +624,31 @@ namespace libtorrent { namespace dht {
 		time_duration const delta = now - m_last_tick;
 		m_last_tick = now;
 
-		// add any new quota we've accrued since last time
-		m_send_quota += int(std::int64_t(m_settings.upload_rate_limit)
-			* total_microseconds(delta) / 1000000);
+		std::int64_t const limit = m_settings.get_int(settings_pack::dht_upload_rate_limit);
 
 		// allow 3 seconds worth of burst
-		if (m_send_quota > 3 * m_settings.upload_rate_limit)
-			m_send_quota = 3 * m_settings.upload_rate_limit;
+		std::int64_t const max_accrue = std::min(3 * limit, std::int64_t(std::numeric_limits<int>::max()));
 
+		if (delta >= seconds(3)
+			|| delta >= microseconds(std::numeric_limits<int>::max() / limit))
+		{
+			m_send_quota = aux::numeric_cast<int>(max_accrue);
+			return true;
+		}
+
+		int const add = aux::numeric_cast<int>(limit * total_microseconds(delta) / 1000000);
+
+		if (max_accrue - m_send_quota < add)
+		{
+			m_send_quota = aux::numeric_cast<int>(max_accrue);
+			return true;
+		}
+		else
+		{
+			// add any new quota we've accrued since last time
+			m_send_quota += add;
+		}
+		TORRENT_ASSERT(m_send_quota <= max_accrue);
 		return m_send_quota > 0;
 	}
 
@@ -656,9 +656,11 @@ namespace libtorrent { namespace dht {
 	{
 		TORRENT_ASSERT(m_nodes.find(s) != m_nodes.end());
 
-		static char const version_str[] = {'L', 'T'
-			, LIBTORRENT_VERSION_MAJOR, LIBTORRENT_VERSION_MINOR};
-		e["v"] = std::string(version_str, version_str + 4);
+		static_assert(lt::version_minor < 16, "version number not supported by DHT");
+		static_assert(lt::version_tiny < 16, "version number not supported by DHT");
+		static char const ver[] = {'L', 'T'
+			, lt::version_major, (lt::version_minor << 4) | lt::version_tiny};
+		e["v"] = std::string(ver, ver+ 4);
 
 		m_send_buf.clear();
 		bencode(std::back_inserter(m_send_buf), e);
@@ -700,7 +702,7 @@ namespace libtorrent { namespace dht {
 		m_counters.inc_stats_counter(counters::dht_bytes_out, int(m_send_buf.size()));
 		// account for IP and UDP overhead
 		m_counters.inc_stats_counter(counters::sent_ip_overhead_bytes
-			, is_v6(addr) ? 48 : 28);
+			, aux::is_v6(addr) ? 48 : 28);
 		m_counters.inc_stats_counter(counters::dht_messages_out);
 #ifndef TORRENT_DISABLE_LOGGING
 		m_log->log_packet(dht_logger::outgoing_message, m_send_buf, addr);
@@ -708,4 +710,4 @@ namespace libtorrent { namespace dht {
 		return true;
 	}
 
-}}
+}

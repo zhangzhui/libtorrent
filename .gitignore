@@ -28,6 +28,11 @@
 *.app
 libtool
 
+# windows
+*.ilk
+*.pdb
+*.exp
+
 *.m4
 *.in
 *.pc
@@ -48,7 +53,6 @@ test_tmp_*
 libtool
 docs/reference*
 docs/*.html
-docs/*.png
 docs/*-ref.rst
 
 .DS_Store

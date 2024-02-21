@@ -12,6 +12,8 @@
 void bind_utility();
 void bind_fingerprint();
 void bind_sha1_hash();
+void bind_sha256_hash();
+void bind_info_hash();
 void bind_session();
 void bind_entry();
 void bind_torrent_info();
@@ -27,7 +29,9 @@ void bind_ip_filter();
 void bind_magnet_uri();
 void bind_converters();
 void bind_create_torrent();
+void bind_file_storage();
 void bind_error_code();
+void bind_load_torrent();
 
 BOOST_PYTHON_MODULE(libtorrent)
 {
@@ -35,15 +39,17 @@ BOOST_PYTHON_MODULE(libtorrent)
     PyEval_InitThreads();
 
     bind_converters();
+    bind_unicode_string_conversion();
     bind_error_code();
     bind_utility();
     bind_fingerprint();
     bind_sha1_hash();
+    bind_sha256_hash();
+    bind_info_hash();
     bind_entry();
     bind_torrent_handle();
     bind_session();
     bind_torrent_info();
-    bind_unicode_string_conversion();
     bind_torrent_status();
     bind_session_settings();
     bind_version();
@@ -53,4 +59,6 @@ BOOST_PYTHON_MODULE(libtorrent)
     bind_ip_filter();
     bind_magnet_uri();
     bind_create_torrent();
+    bind_file_storage();
+    bind_load_torrent();
 }

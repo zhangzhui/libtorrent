@@ -7,6 +7,7 @@
 #include <libtorrent/bencode.hpp>
 #include <libtorrent/bdecode.hpp>
 #include "bytes.hpp"
+#include "gil.hpp"
 
 using namespace boost::python;
 using namespace lt;
@@ -30,6 +31,20 @@ struct bytes_to_python
     }
 };
 
+template <size_t N>
+struct array_to_python
+{
+    static PyObject* convert(std::array<char, N> const& p)
+    {
+#if PY_MAJOR_VERSION >= 3
+        PyObject *ret = PyBytes_FromStringAndSize(p.data(), p.size());
+#else
+        PyObject *ret = PyString_FromStringAndSize(p.data(), p.size());
+#endif
+        return ret;
+    }
+};
+
 struct bytes_from_python
 {
     bytes_from_python()
@@ -41,7 +56,7 @@ struct bytes_from_python
     static void* convertible(PyObject* x)
     {
 #if PY_MAJOR_VERSION >= 3
-        return PyBytes_Check(x) ? x : NULL;
+        return (PyBytes_Check(x) || PyByteArray_Check(x)) ? x : nullptr;
 #else
         return PyString_Check(x) ? x : nullptr;
 #endif
@@ -52,8 +67,16 @@ struct bytes_from_python
 #if PY_MAJOR_VERSION >= 3
         void* storage = ((converter::rvalue_from_python_storage<bytes>*)data)->storage.bytes;
         bytes* ret = new (storage) bytes();
-        ret->arr.resize(PyBytes_Size(x));
-        memcpy(&ret->arr[0], PyBytes_AsString(x), ret->arr.size());
+        if (PyByteArray_Check(x))
+        {
+            ret->arr.resize(PyByteArray_Size(x));
+            memcpy(&ret->arr[0], PyByteArray_AsString(x), ret->arr.size());
+        }
+        else
+        {
+            ret->arr.resize(PyBytes_Size(x));
+            memcpy(&ret->arr[0], PyBytes_AsString(x), ret->arr.size());
+        }
         data->convertible = storage;
 #else
         void* storage = ((converter::rvalue_from_python_storage<bytes>*)data)->storage.bytes;
@@ -66,9 +89,16 @@ struct bytes_from_python
 };
 
 #if TORRENT_ABI_VERSION == 1
+std::string identify_client_(const peer_id& p)
+{
+    python_deprecated("identify_client is deprecated");
+    return lt::identify_client(p);
+}
+
 object client_fingerprint_(peer_id const& id)
 {
-    boost::optional<fingerprint> result = client_fingerprint(id);
+    python_deprecated("client_fingerprint is deprecated");
+    std::optional<fingerprint> result = client_fingerprint(id);
     return result ? object(*result) : object();
 }
 #endif
@@ -89,10 +119,12 @@ void bind_utility()
 {
     // TODO: it would be nice to install converters for sha1_hash as well
     to_python_converter<bytes, bytes_to_python>();
+    to_python_converter<std::array<char, 32>, array_to_python<32>>();
+    to_python_converter<std::array<char, 64>, array_to_python<64>>();
     bytes_from_python();
 
 #if TORRENT_ABI_VERSION == 1
-    def("identify_client", &lt::identify_client);
+    def("identify_client", &identify_client_);
     def("client_fingerprint", &client_fingerprint_);
 #endif
     def("bdecode", &bdecode_);

@@ -1,39 +1,19 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2003-2004, 2006-2010, 2012, 2014-2022, Arvid Norberg
+Copyright (c) 2017, Alden Torres
+Copyright (c) 2018, Alexandre Janniaux
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_SOCKET_HPP_INCLUDED
 #define TORRENT_SOCKET_HPP_INCLUDED
 
 #include "libtorrent/config.hpp"
+#include "libtorrent/aux_/noexcept_movable.hpp"
 
 #include "libtorrent/aux_/disable_warnings_push.hpp"
 
@@ -80,23 +60,37 @@ POSSIBILITY OF SUCH DAMAGE.
 namespace libtorrent {
 
 #if defined TORRENT_BUILD_SIMULATOR
-	using udp = sim::asio::ip::udp;
-	using tcp = sim::asio::ip::tcp;
+struct tcp : sim::asio::ip::tcp {
+	tcp(sim::asio::ip::tcp const& p) : sim::asio::ip::tcp(p) {} // NOLINT
+	using socket = aux::noexcept_move_only<sim::asio::ip::tcp::socket>;
+};
+struct udp : sim::asio::ip::udp {
+	udp(sim::asio::ip::udp const& p) : sim::asio::ip::udp(p) {} // NOLINT
+	using socket = aux::noexcept_move_only<sim::asio::ip::udp::socket>;
+};
 	using sim::asio::async_write;
 	using sim::asio::async_read;
+	using true_tcp_socket = sim::asio::ip::tcp::socket;
 #else
-	using tcp = boost::asio::ip::tcp;
-	using udp = boost::asio::ip::udp;
+struct tcp : boost::asio::ip::tcp {
+	tcp(boost::asio::ip::tcp const& p) : boost::asio::ip::tcp(p) {} // NOLINT
+	using socket = aux::noexcept_move_only<boost::asio::ip::tcp::socket>;
+};
+struct udp : boost::asio::ip::udp {
+	udp(boost::asio::ip::udp const& p) : boost::asio::ip::udp(p) {} // NOLINT
+	using socket = aux::noexcept_move_only<boost::asio::ip::udp::socket>;
+};
 	using boost::asio::async_write;
 	using boost::asio::async_read;
+	using true_tcp_socket = boost::asio::ip::tcp::socket;
 #endif
 
 	// internal
-	inline udp::endpoint make_udp(tcp::endpoint const ep)
+	inline udp::endpoint make_udp(tcp::endpoint const& ep)
 	{ return {ep.address(), ep.port()}; }
 
 	// internal
-	inline tcp::endpoint make_tcp(udp::endpoint const ep)
+	inline tcp::endpoint make_tcp(udp::endpoint const& ep)
 	{ return {ep.address(), ep.port()}; }
 
 #ifdef TORRENT_WINDOWS
@@ -141,7 +135,7 @@ namespace libtorrent {
 #ifdef IPV6_TCLASS
 	struct traffic_class
 	{
-		explicit traffic_class(char val): m_value(val) {}
+		explicit traffic_class(int val): m_value(val) {}
 		template<class Protocol>
 		int level(Protocol const&) const { return IPPROTO_IPV6; }
 		template<class Protocol>
@@ -161,7 +155,7 @@ namespace libtorrent {
 #else
 		using tos_t = int;
 #endif
-		explicit type_of_service(char val) : m_value(tos_t(val)) {}
+		explicit type_of_service(tos_t const val) : m_value(tos_t(val)) {}
 		template<class Protocol>
 		int level(Protocol const&) const { return IPPROTO_IP; }
 		template<class Protocol>
@@ -172,6 +166,22 @@ namespace libtorrent {
 		size_t size(Protocol const&) const { return sizeof(m_value); }
 		tos_t m_value;
 	};
+
+#ifdef IP_DSCP_TRAFFIC_TYPE
+	struct dscp_traffic_type
+	{
+		explicit dscp_traffic_type(DWORD val) : m_value(val) {}
+		template<class Protocol>
+		int level(Protocol const&) const { return IP_DSCP_TRAFFIC_TYPE; }
+		template<class Protocol>
+		int name(Protocol const&) const { return DSCP_TRAFFIC_TYPE; }
+		template<class Protocol>
+		DWORD const* data(Protocol const&) const { return &m_value; }
+		template<class Protocol>
+		size_t size(Protocol const&) const { return sizeof(m_value); }
+		DWORD m_value;
+	};
+#endif
 
 #if defined IP_DONTFRAG || defined IP_MTU_DISCOVER || defined IP_DONTFRAGMENT
 #define TORRENT_HAS_DONT_FRAGMENT
@@ -213,7 +223,7 @@ namespace libtorrent {
 	struct dont_fragment
 	{
 		explicit dont_fragment(bool val)
-			: m_value(val ? IP_PMTUDISC_DO : IP_PMTUDISC_DONT) {}
+			: m_value(val ? IP_PMTUDISC_PROBE : IP_PMTUDISC_DONT) {}
 		template<class Protocol>
 		int level(Protocol const&) const { return IPPROTO_IP; }
 		template<class Protocol>
@@ -244,6 +254,22 @@ namespace libtorrent {
 		int m_value;
 	};
 #endif // TORRENT_USE_NETLINK
+
+#ifdef TCP_NOTSENT_LOWAT
+	struct tcp_notsent_lowat
+	{
+		explicit tcp_notsent_lowat(int val) : m_value(val) {}
+		template<class Protocol>
+		int level(Protocol const&) const { return IPPROTO_TCP; }
+		template<class Protocol>
+		int name(Protocol const&) const { return TCP_NOTSENT_LOWAT; }
+		template<class Protocol>
+		int const* data(Protocol const&) const { return &m_value; }
+		template<class Protocol>
+		std::size_t size(Protocol const&) const { return sizeof(m_value); }
+		int m_value;
+	};
+#endif
 }
 
 #endif // TORRENT_SOCKET_HPP_INCLUDED

@@ -1,37 +1,18 @@
 /*
 
-Copyright (c) 2013, Arvid Norberg
+Copyright (c) 2013, 2015-2021, Arvid Norberg
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2018, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session.hpp"
+#include "libtorrent/session_params.hpp"
 #include "test.hpp"
+#include "test_utils.hpp"
 #include "setup_transfer.hpp"
 #include "settings.hpp"
 #include "libtorrent/create_torrent.hpp"
@@ -68,31 +49,28 @@ void test_read_piece(int flags)
 	if (ec) std::printf("ERROR: creating directory test_torrent: (%d) %s\n"
 		, ec.value(), ec.message().c_str());
 
-	file_storage fs;
-	std::srand(10);
 	int piece_size = 0x4000;
 
 	static std::array<const int, 2> const file_sizes{{ 100000, 10000 }};
 
 	create_random_files(combine_path("tmp1_read_piece", "test_torrent"), file_sizes);
 
-	add_files(fs, combine_path("tmp1_read_piece", "test_torrent"));
-	lt::create_torrent t(fs, piece_size, 0x4000);
+	auto fs = list_files(combine_path("tmp1_read_piece", "test_torrent"));
+	lt::create_torrent t(std::move(fs), piece_size);
 
 	// calculate the hash for all pieces
 	set_piece_hashes(t, "tmp1_read_piece", ec);
 	if (ec) std::printf("ERROR: set_piece_hashes: (%d) %s\n"
 		, ec.value(), ec.message().c_str());
 
-	std::vector<char> buf;
-	bencode(std::back_inserter(buf), t.generate());
+	std::vector<char> const buf = bencode(t.generate());
 	auto ti = std::make_shared<torrent_info>(buf, ec, from_span);
 
 	std::printf("generated torrent: %s tmp1_read_piece/test_torrent\n"
-		, aux::to_hex(ti->info_hash()).c_str());
+		, aux::to_hex(ti->info_hashes().v1).c_str());
 
 	settings_pack sett = settings();
-	sett.set_str(settings_pack::listen_interfaces, "0.0.0.0:48000");
+	sett.set_str(settings_pack::listen_interfaces, test_listen_interface());
 	lt::session ses(sett);
 
 	add_torrent_params p;
@@ -115,11 +93,11 @@ void test_read_piece(int flags)
 
 	if (flags & time_critical)
 	{
-		tor1.set_piece_deadline(piece_index_t(1), 0, torrent_handle::alert_when_available);
+		tor1.set_piece_deadline(1_piece, 0, torrent_handle::alert_when_available);
 	}
 	else
 	{
-		tor1.read_piece(piece_index_t(1));
+		tor1.read_piece(1_piece);
 	}
 
 	a = wait_for_alert(ses, read_piece_alert::alert_type, "ses");
@@ -131,7 +109,7 @@ void test_read_piece(int flags)
 		TEST_CHECK(rp);
 		if (rp)
 		{
-			TEST_EQUAL(rp->piece, piece_index_t(1));
+			TEST_EQUAL(rp->piece, 1_piece);
 		}
 	}
 

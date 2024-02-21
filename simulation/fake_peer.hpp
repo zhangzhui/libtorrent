@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2015, Arvid Norberg
+Copyright (c) 2016-2019, 2021, Arvid Norberg
+Copyright (c) 2020-2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef SIMULATION_FAKE_PEER_HPP
@@ -40,12 +18,13 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "test.hpp"
 #include "simulator/simulator.hpp"
 #include "libtorrent/session.hpp"
-#include "libtorrent/socket_io.hpp"
+#include "libtorrent/aux_/socket_io.hpp"
 #include "libtorrent/torrent_handle.hpp"
 #include "libtorrent/sha1_hash.hpp"
 #include "libtorrent/torrent_info.hpp"
-#include "libtorrent/io.hpp"
+#include "libtorrent/aux_/io_bytes.hpp"
 #include "libtorrent/bdecode.hpp"
+#include "libtorrent/aux_/random.hpp"
 
 using namespace sim;
 
@@ -87,7 +66,7 @@ struct fake_peer
 
 		m_info_hash = ih;
 
-		std::printf("fake_peer::connect_to(%s)\n", lt::print_endpoint(ep).c_str());
+		std::printf("fake_peer::connect_to(%s)\n", lt::aux::print_endpoint(ep).c_str());
 		m_socket.async_connect(ep, std::bind(&fake_peer::write_handshake
 			, this, _1, ih));
 	}
@@ -96,13 +75,26 @@ struct fake_peer
 	bool connected() const { return m_connected; }
 	bool disconnected() const { return m_disconnected; }
 
-	void send_interested()
+	void send_request(lt::piece_index_t p, int block)
 	{
-		m_send_buffer.resize(m_send_buffer.size() + 5);
-		char* ptr = m_send_buffer.data() + m_send_buffer.size() - 5;
+		int const len = 4 + 1 + 4 * 3;
+		m_send_buffer.resize(m_send_buffer.size() + len);
+		char* ptr = m_send_buffer.data() + m_send_buffer.size() - len;
 
-		lt::detail::write_uint32(1, ptr);
-		lt::detail::write_uint8(2, ptr);
+		lt::aux::write_uint32(len - 4, ptr);
+		lt::aux::write_uint8(6, ptr);
+		lt::aux::write_uint32(static_cast<int>(p), ptr);
+		lt::aux::write_uint32(block * 0x4000, ptr);
+		lt::aux::write_uint32(0x4000, ptr);
+	}
+
+	void send_keepalive()
+	{
+		int const len = 4;
+		m_send_buffer.resize(m_send_buffer.size() + len);
+		char* ptr = m_send_buffer.data() + m_send_buffer.size() - len;
+
+		lt::aux::write_uint32(0, ptr);
 	}
 
 	void send_bitfield(std::vector<bool> const& pieces)
@@ -111,27 +103,63 @@ struct fake_peer
 		m_send_buffer.resize(m_send_buffer.size() + 5 + bytes);
 		char* ptr = m_send_buffer.data() + m_send_buffer.size() - 5 - bytes;
 
-		lt::detail::write_uint32(1 + bytes, ptr);
-		lt::detail::write_uint8(5, ptr);
+		lt::aux::write_uint32(1 + bytes, ptr);
+		lt::aux::write_uint8(5, ptr);
 
 		std::uint8_t b = 0;
 		int cnt = 7;
-		for (std::vector<bool>::const_iterator i = pieces.begin()
-			, end(pieces.end()); i != end; ++i)
+		for (auto i = pieces.begin(), end(pieces.end()); i != end; ++i)
 		{
 			if (*i) b |= 1 << cnt;
 			--cnt;
 			if (cnt < 0)
 			{
-				lt::detail::write_uint8(b, ptr);
+				lt::aux::write_uint8(b, ptr);
 				b = 0;
 				cnt = 7;
 			}
 		}
-		lt::detail::write_uint8(b, ptr);
+		if (cnt < 7)
+			lt::aux::write_uint8(b, ptr);
+	}
+
+	void send_interested() { send_simple_msg(2); }
+	void send_not_interested() { send_simple_msg(3); }
+	void send_have_all() { send_simple_msg(0xe); }
+	void send_have_none() { send_simple_msg(0xf); }
+	void send_invalid_message() { send_simple_msg(0xff); }
+	void send_large_message()
+	{
+		m_send_buffer.resize(m_send_buffer.size() + 5);
+		char* ptr = m_send_buffer.data() + m_send_buffer.size() - 5;
+
+		lt::aux::write_uint32(2000000, ptr);
+		lt::aux::write_uint8(0, ptr);
+	}
+
+	void flush_send_buffer()
+	{
+		TORRENT_ASSERT(!m_writing);
+		m_writing = true;
+		asio::async_write(m_socket,asio::buffer(m_send_buffer)
+			, [this](boost::system::error_code const& ec , size_t len)
+			{
+				TORRENT_ASSERT(m_writing);
+				m_writing = false;
+				m_send_buffer.clear();
+			});
 	}
 
 private:
+
+	void send_simple_msg(std::uint8_t const msg_code)
+	{
+		m_send_buffer.resize(m_send_buffer.size() + 5);
+		char* ptr = m_send_buffer.data() + m_send_buffer.size() - 5;
+
+		lt::aux::write_uint32(1, ptr);
+		lt::aux::write_uint8(msg_code, ptr);
+	}
 
 	void write_handshake(boost::system::error_code const& ec
 		, lt::sha1_hash ih)
@@ -140,7 +168,7 @@ private:
 
 		asio::ip::tcp::endpoint const ep = m_socket.remote_endpoint();
 		std::printf("fake_peer::connect(%s) -> (%d) %s\n"
-			, lt::print_endpoint(ep).c_str()
+			, lt::aux::print_endpoint(ep).c_str()
 			, ec.value(), ec.message().c_str());
 		if (ec) return;
 
@@ -151,16 +179,23 @@ private:
 		int const len = sizeof(handshake) - 1;
 		memcpy(m_out_buffer.data(), handshake, len);
 		memcpy(&m_out_buffer[28], ih.data(), 20);
+		lt::aux::random_bytes({&m_out_buffer[48], 20});
 
+		TORRENT_ASSERT(!m_writing);
+		m_writing = true;
 		asio::async_write(m_socket, asio::buffer(m_out_buffer.data(), len)
 			, [this, ep](boost::system::error_code const& ec
 			, size_t /* bytes_transferred */)
 		{
+			TORRENT_ASSERT(m_writing);
+			m_writing = false;
 			std::printf("fake_peer::write_handshake(%s) -> (%d) %s\n"
-				, lt::print_endpoint(ep).c_str(), ec.value()
+				, lt::aux::print_endpoint(ep).c_str(), ec.value()
 				, ec.message().c_str());
 			if (!m_send_buffer.empty())
 			{
+				TORRENT_ASSERT(!m_writing);
+				m_writing = true;
 				asio::async_write(m_socket, asio::buffer(m_send_buffer)
 					, std::bind(&fake_peer::write_send_buffer, this, _1, _2));
 			}
@@ -208,12 +243,12 @@ private:
 			, std::bind(&fake_peer::on_read, this, _1, _2));
 	}
 
-	void on_read(lt::error_code const& ec, size_t /* bytes_transferred */)
+	void on_read(lt::error_code const& ec, size_t bytes_transferred)
 	{
 		using namespace std::placeholders;
 
-		std::printf("fake_peer::on_read -> (%d) %s\n"
-			, ec.value(), ec.message().c_str());
+		std::printf("fake_peer::on_read(%d bytes) -> (%d) %s\n"
+			, int(bytes_transferred), ec.value(), ec.message().c_str());
 		if (ec)
 		{
 			std::printf("  closing\n");
@@ -222,8 +257,7 @@ private:
 			return;
 		}
 
-		m_socket.async_read_some(asio::buffer(m_out_buffer.data()
-			, m_out_buffer.size())
+		m_socket.async_read_some(asio::buffer(m_out_buffer)
 			, std::bind(&fake_peer::on_read, this, _1, _2));
 	}
 
@@ -235,6 +269,10 @@ private:
 		printf("fake_peer::write_send_buffer() -> (%d) %s\n"
 			, ec.value(), ec.message().c_str());
 
+		TORRENT_ASSERT(m_writing);
+		m_writing = false;
+
+		m_send_buffer.clear();
 		asio::async_read(m_socket, asio::buffer(m_out_buffer.data(), 68)
 			, std::bind(&fake_peer::read_handshake, this, _1, _2));
 	}
@@ -255,6 +293,10 @@ private:
 
 	// set to true if this peer has been disconnected by the other end
 	bool m_disconnected = false;
+
+	// set to true while there's an outstanding asyn write operation on the
+	// socket
+	bool m_writing = false;
 
 	std::vector<char> m_send_buffer;
 };
@@ -294,7 +336,7 @@ struct udp_server
 
 		std::printf("udp_server::async_read_some\n");
 		using namespace std::placeholders;
-		m_socket.async_receive_from(boost::asio::buffer(m_in_buffer.data(), m_in_buffer.size())
+		m_socket.async_receive_from(boost::asio::buffer(m_in_buffer)
 			, m_from, 0, std::bind(&udp_server::on_read, this, _1, _2));
 	}
 
@@ -313,7 +355,7 @@ private:
 		if (!send_buffer.empty())
 		{
 			lt::error_code err;
-			m_socket.send_to(boost::asio::buffer(send_buffer, send_buffer.size()), m_from, 0, err);
+			m_socket.send_to(boost::asio::buffer(send_buffer), m_from, 0, err);
 			if (err)
 			{
 				std::printf("send_to FAILED: %s\n", err.message().c_str());

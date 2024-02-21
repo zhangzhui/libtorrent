@@ -1,57 +1,36 @@
 /*
 
-Copyright (c) 2008, Arvid Norberg
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2007-2010, 2013-2022, Arvid Norberg
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2017-2018, 2020-2021, Alden Torres
+Copyright (c) 2020, Paul-Louis Ageneau
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
 #include "setup_transfer.hpp"
 #include "test_utils.hpp"
 
-#include "libtorrent/file.hpp"
 #include "libtorrent/socket.hpp"
-#include "libtorrent/socket_io.hpp" // print_endpoint
-#include "libtorrent/http_connection.hpp"
-#include "libtorrent/resolver.hpp"
-#include "libtorrent/file.hpp"
+#include "libtorrent/aux_/socket_io.hpp" // print_endpoint
+#include "libtorrent/aux_/http_connection.hpp"
+#include "libtorrent/aux_/resolver.hpp"
 #include "libtorrent/aux_/storage_utils.hpp"
+#include "libtorrent/aux_/random.hpp"
 
-#include <fstream>
 #include <iostream>
-#include <boost/optional.hpp>
+#include <optional>
 
 using namespace lt;
 
 namespace {
 
 io_context ios;
-resolver res(ios);
+aux::resolver res(ios);
 
 int connect_handler_called = 0;
 int handler_called = 0;
@@ -60,7 +39,7 @@ int http_status = 0;
 error_code g_error_code;
 char data_buffer[4000];
 
-void print_http_header(http_parser const& p)
+void print_http_header(aux::http_parser const& p)
 {
 	std::cout << time_now_string() << " < " << p.status_code() << " " << p.message() << std::endl;
 
@@ -70,19 +49,19 @@ void print_http_header(http_parser const& p)
 	}
 }
 
-void http_connect_handler_test(http_connection& c)
+void http_connect_handler_test(aux::http_connection& c)
 {
 	++connect_handler_called;
 	TEST_CHECK(c.socket().is_open());
 	error_code ec;
 	std::cout << time_now_string() << " connected to: "
-		<< print_endpoint(c.socket().remote_endpoint(ec)) << std::endl;
+		<< aux::print_endpoint(c.socket().remote_endpoint(ec)) << std::endl;
 // this is not necessarily true when using a proxy and proxying hostnames
 //	TEST_CHECK(c.socket().remote_endpoint(ec).address() == make_address("127.0.0.1", ec));
 }
 
-void http_handler_test(error_code const& ec, http_parser const& parser
-	, span<char const> data, http_connection&)
+void http_handler_test(error_code const& ec, aux::http_parser const& parser
+	, span<char const> data, aux::http_connection&)
 {
 	++handler_called;
 	data_size = int(data.size());
@@ -110,7 +89,7 @@ void reset_globals()
 }
 
 void run_test(std::string const& url, int size, int status, int connected
-	, boost::optional<error_code> ec, aux::proxy_settings const& ps
+	, std::optional<error_code> ec, aux::proxy_settings const& ps
 	, std::string const& auth = std::string())
 {
 	reset_globals();
@@ -123,9 +102,20 @@ void run_test(std::string const& url, int size, int status, int connected
 		<< " connected: " << connected
 		<< " error: " << (ec?ec->message():"no error") << std::endl;
 
-	std::shared_ptr<http_connection> h = std::make_shared<http_connection>(ios
-		, res, &::http_handler_test, true, 1024*1024, &::http_connect_handler_test);
-	h->get(url, seconds(5), 0, &ps, 5, "test/user-agent", boost::none, resolver_flags{}, auth);
+#if TORRENT_USE_SSL
+	aux::ssl::context ssl_ctx(aux::ssl::context::sslv23_client);
+	ssl_ctx.set_verify_mode(aux::ssl::context::verify_none);
+#endif
+
+	std::shared_ptr<aux::http_connection> h = std::make_shared<aux::http_connection>(ios
+		, res, &::http_handler_test, true, 1024*1024, &::http_connect_handler_test
+		, aux::http_filter_handler()
+		, aux::hostname_filter_handler()
+#if TORRENT_USE_SSL
+		, &ssl_ctx
+#endif
+		);
+	h->get(url, seconds(5), &ps, 5, "test/user-agent", std::nullopt, aux::resolver_flags{}, auth);
 	ios.restart();
 	ios.run();
 
@@ -143,21 +133,6 @@ void run_test(std::string const& url, int size, int status, int connected
 	TEST_CHECK(http_status == status || status == -1);
 }
 
-void write_test_file()
-{
-	std::srand(unsigned(std::time(nullptr)));
-	std::generate(data_buffer, data_buffer + sizeof(data_buffer), &std::rand);
-	error_code ec;
-	file test_file("test_file", aux::open_mode::write, ec);
-	TEST_CHECK(!ec);
-	if (ec) std::printf("file error: %s\n", ec.message().c_str());
-	iovec_t const b = { data_buffer, 3216};
-	test_file.writev(0, b, ec);
-	TEST_CHECK(!ec);
-	if (ec) std::printf("file error: %s\n", ec.message().c_str());
-	test_file.close();
-}
-
 enum suite_flags_t
 {
 	flag_chunked_encoding = 1,
@@ -168,7 +143,8 @@ void run_suite(std::string const& protocol
 	, settings_pack::proxy_type_t proxy_type
 	, int flags = flag_keepalive)
 {
-	write_test_file();
+	aux::random_bytes(data_buffer);
+	ofstream("test_file").write(data_buffer, 3216);
 
 	// starting the web server will also generate test_file.gz (from test_file)
 	// so it has to happen after we write test_file
@@ -185,7 +161,7 @@ void run_suite(std::string const& protocol
 	if (ps.type != settings_pack::none)
 		ps.port = aux::numeric_cast<std::uint16_t>(start_proxy(ps.type));
 
-	using err = boost::optional<error_code>;
+	using err = std::optional<error_code>;
 
 	char url[256];
 	std::snprintf(url, sizeof(url), "%s://127.0.0.1:%d/", protocol.c_str(), port);
@@ -218,7 +194,12 @@ void run_suite(std::string const& protocol
 		, static_cast<void*>(h), h_errno);
 	if (h == nullptr && h_errno == HOST_NOT_FOUND)
 	{
-		run_test(protocol + "://non-existent-domain.se/non-existing-file", -1, -1, 0, err(), ps);
+		// if we have a proxy, we'll be able to connect to it, we will just get an
+		// error from the proxy saying it failed to connect to the final target
+		if (protocol == "http" && (ps.type == settings_pack::http || ps.type == settings_pack::http_pw))
+			run_test(protocol + "://non-existent-domain.se/non-existing-file", -1, -1, 1, err(), ps);
+		else
+			run_test(protocol + "://non-existent-domain.se/non-existing-file", -1, -1, 0, err(), ps);
 	}
 	if (ps.type != settings_pack::none)
 		stop_proxy(ps.port);
@@ -227,11 +208,18 @@ void run_suite(std::string const& protocol
 
 } // anonymous namespace
 
-#ifdef TORRENT_USE_OPENSSL
+#if TORRENT_USE_SSL
 TORRENT_TEST(no_proxy_ssl) { run_suite("https", settings_pack::none); }
 TORRENT_TEST(http_ssl) { run_suite("https", settings_pack::http); }
 TORRENT_TEST(http_pw_ssl) { run_suite("https", settings_pack::http_pw); }
-#endif // USE_OPENSSL
+TORRENT_TEST(socks5_proxy_ssl) { run_suite("https", settings_pack::socks5); }
+TORRENT_TEST(socks5_pw_proxy_ssl) { run_suite("https", settings_pack::socks5_pw); }
+#endif // USE_SSL
+
+TORRENT_TEST(http_proxy) { run_suite("http", settings_pack::http); }
+TORRENT_TEST(http_pwproxy) { run_suite("http", settings_pack::http_pw); }
+TORRENT_TEST(socks5_proxy) { run_suite("http", settings_pack::socks5); }
+TORRENT_TEST(socks5_pw_proxy) { run_suite("http", settings_pack::socks5_pw); }
 
 TORRENT_TEST(no_keepalive)
 {

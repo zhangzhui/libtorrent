@@ -5,6 +5,7 @@
 #include <cstdio> // for snprintf
 #include <cinttypes> // for PRId64 et.al.
 #include "libtorrent/bitfield.hpp"
+#include "libtorrent/span.hpp"
 
 enum color_code
 {

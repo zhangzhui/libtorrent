@@ -1,37 +1,17 @@
 /*
 
-Copyright (c) 2011, Arvid Norberg
+Copyright (c) 2008-2009, 2012-2022, Arvid Norberg
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2018, 2020, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session.hpp"
 #include "libtorrent/session_settings.hpp"
+#include "libtorrent/session_params.hpp"
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/ip_filter.hpp"
 #include "libtorrent/aux_/path.hpp"
@@ -39,6 +19,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <iostream>
 
 #include "test.hpp"
+#include "test_utils.hpp"
 #include "setup_transfer.hpp"
 #include "settings.hpp"
 
@@ -70,7 +51,7 @@ void test_swarm()
 	pack.set_int(settings_pack::upload_rate_limit, int(rate_limit));
 	pack.set_int(settings_pack::unchoke_slots_limit, 1);
 	pack.set_int(settings_pack::max_retry_port_bind, 900);
-	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:48010");
+	pack.set_str(settings_pack::listen_interfaces, test_listen_interface());
 	pack.set_bool(settings_pack::enable_natpmp, false);
 	pack.set_bool(settings_pack::enable_upnp, false);
 	pack.set_bool(settings_pack::enable_dht, false);
@@ -87,24 +68,21 @@ void test_swarm()
 	pack.set_int(settings_pack::download_rate_limit, int(rate_limit / 5));
 	pack.set_int(settings_pack::unchoke_slots_limit, 0);
 	pack.set_int(settings_pack::choking_algorithm, settings_pack::fixed_slots_choker);
-	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:49010");
+	pack.set_str(settings_pack::listen_interfaces, test_listen_interface());
 
 	lt::session ses2(pack);
 
-	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:49010");
+	pack.set_str(settings_pack::listen_interfaces, test_listen_interface());
 
 	lt::session ses3(pack);
 
-	torrent_handle tor1;
-	torrent_handle tor2;
-	torrent_handle tor3;
-
-	std::tie(tor1, tor2, tor3) = setup_transfer(&ses1, &ses2, &ses3, true, false, true, "_unchoke");
+	auto const [tor1, tor2, tor3] = setup_transfer(&ses1, &ses2, &ses3, true, false, true, "_unchoke");
 
 	std::map<std::string, std::int64_t> cnt = get_counters(ses1);
 
 	std::printf("allowed_upload_slots: %d\n", int(cnt["ses.num_unchoke_slots"]));
 	TEST_EQUAL(cnt["ses.num_unchoke_slots"], 1);
+	auto const start_time = lt::clock_type::now();
 	for (int i = 0; i < 200; ++i)
 	{
 		print_alerts(ses1, "ses1");
@@ -119,7 +97,7 @@ void test_swarm()
 		torrent_status st2 = tor2.status();
 		torrent_status st3 = tor3.status();
 
-		print_ses_rate(i / 10.f, &st1, &st2, &st3);
+		print_ses_rate(start_time, &st1, &st2, &st3);
 
 		std::this_thread::sleep_for(lt::milliseconds(100));
 	}

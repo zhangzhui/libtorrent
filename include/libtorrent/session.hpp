@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg
+Copyright (c) 2003-2004, 2006-2007, 2009-2010, 2013-2020, Arvid Norberg
+Copyright (c) 2015, Steven Siloti
+Copyright (c) 2016, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_SESSION_HPP_INCLUDED
@@ -39,9 +18,9 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/io_context.hpp"
 #include "libtorrent/settings_pack.hpp"
 #include "libtorrent/session_handle.hpp"
-#include "libtorrent/kademlia/dht_settings.hpp"
-#include "libtorrent/kademlia/dht_state.hpp"
 #include "libtorrent/kademlia/dht_storage.hpp"
+#include "libtorrent/session_params.hpp"
+#include "libtorrent/session_types.hpp" // for session_flags_t
 
 #if TORRENT_ABI_VERSION == 1
 #include "libtorrent/fingerprint.hpp"
@@ -50,7 +29,10 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
+TORRENT_VERSION_NAMESPACE_3
 	struct plugin;
+	struct session_params;
+TORRENT_VERSION_NAMESPACE_3_END
 
 	// The default values of the session settings are set for a regular
 	// bittorrent client running on a desktop system. There are functions that
@@ -93,12 +75,13 @@ namespace aux {
 
 	struct disk_interface;
 	struct counters;
+	struct settings_interface;
 
 	// the constructor function for the default storage. On systems that support
 	// memory mapped files (and a 64 bit address space) the memory mapped storage
 	// will be constructed, otherwise the portable posix storage.
 	TORRENT_EXPORT std::unique_ptr<disk_interface> default_disk_io_constructor(
-		io_context& ios, counters& cnt);
+		io_context& ios, settings_interface const&, counters& cnt);
 
 	// this is a holder for the internal session implementation object. Once the
 	// session destruction is explicitly initiated, this holder is used to
@@ -106,18 +89,17 @@ namespace aux {
 	// may outlive session, causing the session destructor to not block. The
 	// session_proxy destructor will block however, until the underlying session
 	// is done shutting down.
-	class TORRENT_EXPORT session_proxy
+	struct TORRENT_EXPORT session_proxy
 	{
-		friend class session;
-	public:
+		friend struct session;
 		// default constructor, does not refer to any session
 		// implementation object.
 		session_proxy();
 		~session_proxy();
 		session_proxy(session_proxy const&);
-		session_proxy& operator=(session_proxy const&);
+		session_proxy& operator=(session_proxy const&) &;
 		session_proxy(session_proxy&&) noexcept;
-		session_proxy& operator=(session_proxy&&) noexcept;
+		session_proxy& operator=(session_proxy&&) & noexcept;
 	private:
 		session_proxy(
 			std::shared_ptr<io_context> ios
@@ -128,51 +110,6 @@ namespace aux {
 		std::shared_ptr<std::thread> m_thread;
 		std::shared_ptr<aux::session_impl> m_impl;
 	};
-
-	using disk_io_constructor_type = std::function<std::unique_ptr<disk_interface>(
-		io_context&, counters&)>;
-
-	// The session_params is a parameters pack for configuring the session
-	// before it's started.
-	struct TORRENT_EXPORT session_params
-	{
-		// This constructor can be used to start with the default plugins
-		// (ut_metadata, ut_pex and smart_ban). The default values in the
-		// settings is to start the default features like upnp, NAT-PMP,
-		// and dht for example.
-		explicit session_params(settings_pack&& sp);
-		explicit session_params(settings_pack const& sp);
-		session_params();
-
-		// This constructor helps to configure the set of initial plugins
-		// to be added to the session before it's started.
-		session_params(settings_pack&& sp
-			, std::vector<std::shared_ptr<plugin>> exts);
-		session_params(settings_pack const& sp
-			, std::vector<std::shared_ptr<plugin>> exts);
-
-		session_params(session_params const&) = default;
-		session_params(session_params&&) = default;
-		session_params& operator=(session_params const&) = default;
-		session_params& operator=(session_params&&) = default;
-
-		settings_pack settings;
-
-		std::vector<std::shared_ptr<plugin>> extensions;
-
-		dht::dht_settings dht_settings;
-
-		dht::dht_state dht_state;
-
-		dht::dht_storage_constructor_type dht_storage_constructor;
-
-		disk_io_constructor_type disk_io_constructor;
-	};
-
-	// This function helps to construct a ``session_params`` from a
-	// bencoded data generated by ``session_handle::save_state``
-	TORRENT_EXPORT session_params read_session_params(bdecode_node const& e
-		, save_state_flags_t flags = save_state_flags_t::all());
 
 	// The session holds all state that spans multiple torrents. Among other
 	// things it runs the network loop and manages all torrents. Once it's
@@ -186,23 +123,19 @@ namespace aux {
 	// the settings to be set and pass it in to ``session::apply_settings()``.
 	//
 	// see apply_settings().
-	class TORRENT_EXPORT session : public session_handle
+	struct TORRENT_EXPORT session : session_handle
 	{
-	public:
-
 		// Constructs the session objects which acts as the container of torrents.
 		// In order to avoid a race condition between starting the session and
 		// configuring it, you can pass in a session_params object. Its settings
 		// will take effect before the session starts up.
-		explicit session(session_params const& params)
-		{ start(session_params(params), nullptr); }
-		explicit session(session_params&& params)
-		{ start(std::move(params), nullptr); }
-		session()
-		{
-			session_params params;
-			start(std::move(params), nullptr);
-		}
+		explicit session(session_params const& params);
+		explicit session(session_params&& params);
+#if TORRENT_ABI_VERSION < 4
+		TORRENT_DEPRECATED session(session_params const& params, session_flags_t flags);
+		TORRENT_DEPRECATED session(session_params&& params, session_flags_t flags);
+#endif
+		session();
 
 		// Overload of the constructor that takes an external io_context to run
 		// the session object on. This is primarily useful for tests that may want
@@ -212,15 +145,28 @@ namespace aux {
 		//
 		// .. warning::
 		// 	The session object does not cleanly terminate with an external
-		// 	``io_context``. The ``io_context::run()`` call _must_ have returned
+		// 	``io_context``. The ``io_context::run()`` call *must* have returned
 		// 	before it's safe to destruct the session. Which means you *MUST*
 		// 	call session::abort() and save the session_proxy first, then
 		// 	destruct the session object, then sync with the io_context, then
 		// 	destruct the session_proxy object.
-		session(session_params&& params, io_context& ios)
-		{ start(std::move(params), &ios); }
-		session(session_params const& params, io_context& ios)
-		{ start(session_params(params), &ios); }
+		session(session_params&& params, io_context& ios);
+		session(session_params const& params, io_context& ios);
+#if TORRENT_ABI_VERSION < 4
+		TORRENT_DEPRECATED session(session_params&& params, io_context& ios, session_flags_t);
+		TORRENT_DEPRECATED session(session_params const& params, io_context& ios, session_flags_t);
+#endif
+
+		// hidden
+		session(session&&);
+		session& operator=(session&&) &;
+
+		// hidden
+		session(session const&) = delete;
+		session& operator=(session const&) = delete;
+
+#if TORRENT_ABI_VERSION <= 2
+#include "libtorrent/aux_/disable_deprecation_warnings_push.hpp"
 
 		// Constructs the session objects which acts as the container of torrents.
 		// It provides configuration options across torrents (such as rate limits,
@@ -233,20 +179,12 @@ namespace aux {
 		// NAT-PMP) and default plugins (ut_metadata, ut_pex and smart_ban). The
 		// default is to start those features. If you do not want them to start,
 		// pass 0 as the flags parameter.
-		session(settings_pack&& pack
-			, session_flags_t const flags = add_default_plugins)
-		{ start(flags, std::move(pack), nullptr); }
-		session(settings_pack const& pack
-			, session_flags_t const flags = add_default_plugins)
-		{ start(flags, settings_pack(pack), nullptr); }
-
-		// movable
-		session(session&&) = default;
-		session& operator=(session&&) = default;
-
-		// non-copyable
-		session(session const&) = delete;
-		session& operator=(session const&) = delete;
+		TORRENT_DEPRECATED
+		session(settings_pack&& pack, session_flags_t const flags);
+		TORRENT_DEPRECATED
+		session(settings_pack const& pack, session_flags_t const flags);
+		explicit session(settings_pack&& pack) : session(std::move(pack), add_default_plugins) {}
+		explicit session(settings_pack const& pack) : session(pack, add_default_plugins) {}
 
 		// overload of the constructor that takes an external io_context to run
 		// the session object on. This is primarily useful for tests that may want
@@ -261,85 +199,32 @@ namespace aux {
 		// 	call session::abort() and save the session_proxy first, then
 		// 	destruct the session object, then sync with the io_context, then
 		// 	destruct the session_proxy object.
-		session(settings_pack&& pack
-			, io_context& ios
-			, session_flags_t const flags = add_default_plugins)
-		{ start(flags, std::move(pack), &ios); }
-		session(settings_pack const& pack
-			, io_context& ios
-			, session_flags_t const flags = add_default_plugins)
-		{ start(flags, settings_pack(pack), &ios); }
+		TORRENT_DEPRECATED
+		session(settings_pack&&, io_context&, session_flags_t);
+		TORRENT_DEPRECATED
+		session(settings_pack const&, io_context&, session_flags_t);
+		session(settings_pack&& pack, io_context& ios) : session(std::move(pack), ios, add_default_plugins) {}
+		session(settings_pack const& pack, io_context& ios) : session(pack, ios, add_default_plugins) {}
+
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
+#endif // TORRENT_ABI_VERSION
 
 #if TORRENT_ABI_VERSION == 1
-#ifdef __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-#ifdef _MSC_VER
-#pragma warning(push, 1)
-#pragma warning(disable: 4996)
-#endif
+#include "libtorrent/aux_/disable_deprecation_warnings_push.hpp"
+
 		TORRENT_DEPRECATED
 		session(fingerprint const& print
 			, session_flags_t const flags = start_default_features | add_default_plugins
-			, alert_category_t const alert_mask = alert::error_notification)
-		{
-			settings_pack pack;
-			pack.set_int(settings_pack::alert_mask, int(alert_mask));
-			pack.set_str(settings_pack::peer_fingerprint, print.to_string());
-			if (!(flags & start_default_features))
-			{
-				pack.set_bool(settings_pack::enable_upnp, false);
-				pack.set_bool(settings_pack::enable_natpmp, false);
-				pack.set_bool(settings_pack::enable_lsd, false);
-				pack.set_bool(settings_pack::enable_dht, false);
-			}
-
-			start(flags, std::move(pack), nullptr);
-		}
+			, alert_category_t const alert_mask = alert_category::error);
 
 		TORRENT_DEPRECATED
 		session(fingerprint const& print
 			, std::pair<int, int> listen_port_range
 			, char const* listen_interface = "0.0.0.0"
 			, session_flags_t const flags = start_default_features | add_default_plugins
-			, alert_category_t const alert_mask = alert::error_notification)
-		{
-			TORRENT_ASSERT(listen_port_range.first > 0);
-			TORRENT_ASSERT(listen_port_range.first <= listen_port_range.second);
+			, alert_category_t const alert_mask = alert_category::error);
 
-			settings_pack pack;
-			pack.set_int(settings_pack::alert_mask, int(alert_mask));
-			pack.set_int(settings_pack::max_retry_port_bind, listen_port_range.second - listen_port_range.first);
-			pack.set_str(settings_pack::peer_fingerprint, print.to_string());
-			char if_string[100];
-
-			if (listen_interface == nullptr) listen_interface = "0.0.0.0";
-			std::snprintf(if_string, sizeof(if_string), "%s:%d", listen_interface, listen_port_range.first);
-			pack.set_str(settings_pack::listen_interfaces, if_string);
-
-			if (!(flags & start_default_features))
-			{
-				pack.set_bool(settings_pack::enable_upnp, false);
-				pack.set_bool(settings_pack::enable_natpmp, false);
-				pack.set_bool(settings_pack::enable_lsd, false);
-				pack.set_bool(settings_pack::enable_dht, false);
-			}
-			start(flags, std::move(pack), nullptr);
-		}
-#ifdef __GNUC__
-#pragma GCC diagnostic pop
-#endif
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
 #endif // TORRENT_ABI_VERSION
 
 		// The destructor of session will notify all trackers that our torrents
@@ -362,21 +247,21 @@ namespace aux {
 		// the session is being closed down, no operations are allowed on it).
 		// The only valid operation is calling the destructor::
 		//
-		// 	class session_proxy
-		// 	{
-		// 	public:
-		// 		session_proxy();
-		// 		~session_proxy()
-		// 	};
+		// 	struct session_proxy {};
 		session_proxy abort();
 
 	private:
 
-		void start(session_params&& params, io_context* ios);
+		void start(session_flags_t, session_params&& params, io_context* ios);
+
+#if TORRENT_ABI_VERSION <= 2
 		void start(session_flags_t flags, settings_pack&& sp, io_context* ios);
+#endif
 
 		void start(session_params const& params, io_context* ios) = delete;
+#if TORRENT_ABI_VERSION <= 2
 		void start(session_flags_t flags, settings_pack const& sp, io_context* ios) = delete;
+#endif
 
 		// data shared between the main thread
 		// and the working thread

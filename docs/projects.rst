@@ -7,13 +7,6 @@ project listed here, let me_ know.
 .. _me: mailto:arvid@libtorrent.org
 
 
-Wyzo
-----
-
-Wyzo_ is a media browser with built-in bittorrent support.
-
-.. _Wyzo: http://wyzo.findmysoft.com/#
-
 deluge
 ------
 
@@ -21,7 +14,7 @@ deluge
 client. It has the ability to automatically resume partial downloads and
 background to the system tray.
 
-.. _`deluge Torrent`: http://deluge-torrent.org/
+.. _`deluge Torrent`: https://deluge-torrent.org/
 
 qBittorrent
 -----------
@@ -35,7 +28,18 @@ automatic resuming, background downloading, and system tray icon with a password
 
 Originally written by Christophe Dumez, currently maintained by sledgehammer999.
 
-.. _qBittorrent: http://www.qbittorrent.org/
+.. _qBittorrent: https://www.qbittorrent.org/
+
+DownZemAll
+----------
+
+`DownZemAll!`_ is a mass download manager for Windows, Mac OS X and Linux. It helps
+you to select, organize, prioritize and run your downloads in parallel. Based on
+the Qt5 framework, DownZemAll! is written in C/C++. It's a free (as in "free
+speech" and also as in "free beer") software. Its use is governed by LGPL
+License.
+
+.. _`DownZemAll!`: https://setvisible.github.io/DownZemAll/
 
 Tonidoplug
 ----------
@@ -50,13 +54,13 @@ Folx
 ----
 
 Folx_ is a torrent client and download manager for macOS.
-The Free version of Folx has all the basic functionality of the torrent 
+The Free version of Folx has all the basic functionality of the torrent
 client, which allows users to download and create torrent files.
-Folx PRO (available for a small fee) features the possibility to search 
-for torrent files just from Folx interface. So there is no need to 
+Folx PRO (available for a small fee) features the possibility to search
+for torrent files just from Folx interface. So there is no need to
 browse through multiple torrent trackers searching for particular file.
 
-.. _folx: http://www.mac-downloader.com/
+.. _folx: https://www.mac-downloader.com/
 
 Miro
 ----
@@ -65,14 +69,14 @@ Miro_ is a free application for channels of internet video (also known as
 video podcasts and video RSS). Miro is designed to be easy to use and to give
 you an elegant fullscreen viewing experience.
 
-.. _Miro: http://getmiro.com
+.. _Miro: https://getmiro.com
 
 MooPolice
 ---------
 
 MooPolice_ is a windows bittorrent client with a unique look.
 
-.. _MooPolice: http://www.moopolice.de
+.. _MooPolice: https://www.moopolice.de
 
 
 LeechCraft
@@ -82,7 +86,7 @@ LeechCraft_ LeechCraft is a free open source cross-platform extensible
 software, which primary goal is support of file sharing networks and protocols
 like HTTP and FTP.
 
-.. _LeechCraft: http://leechcraft.org/
+.. _LeechCraft: https://leechcraft.org/
 
 Free download manager
 ---------------------
@@ -91,7 +95,17 @@ FDM_ is a powerful, easy-to-use and absolutely free download accelerator and
 manager. Moreover, FDM is 100% safe, open-source software distributed under
 GPL License.
 
-.. _FDM: http://www.freedownloadmanager.org/
+.. _FDM: https://www.freedownloadmanager.org/
+
+File Centipede
+--------------
+
+File centipede is an All-In-One internet file upload/download manager,
+BitTorrent Client, WebDAV client, FTP client, and SSH client.
+
+It is designed to be fast, customizable, and user-friendly.
+
+.. _`File Centipede`: https://filecxx.com/en_US/index.html
 
 btg
 ---
@@ -109,7 +123,7 @@ electric sheep
 `electric sheep`_ is a screensaver which collectively generates animations and
 lets the users vote which one to live on.
 
-.. _`electric sheep`: http://electricsheep.org
+.. _`electric sheep`: https://electricsheep.org
 
 Tvitty
 ------
@@ -124,24 +138,7 @@ hrktorrent
 
 hrktorrent_ hrktorrent is a light console torrent client written in C++.
 
-.. _hrktorrent: http://50hz.ws/hrktorrent/
-
-FatRat
-------
-
-FatRat_ is an open source download manager for Linux/Unix systems written in
-C++ with the help of the Trolltech Qt 4 library. It's simple to use and
-install.
-
-.. _FatRat: http://fatrat.dolezel.info
-
-halite BitTorrent
------------------
-
-Halite_ is a windows bittorrent client controllable via an XML-RPC
-interface.
-
-.. _Halite: http://www.binarynotions.com/halite-bittorrent-client
+.. _hrktorrent: https://50hz.ws/hrktorrent/
 
 Arctic Torrent
 --------------
@@ -161,18 +158,6 @@ Web, E-mail, printer and FTP server etc.
 
 .. _Bubba: https://excitostore.com/
 
-TVblob
-------
-
-The BLOBbox_ represents the ability to harness all of the content available
-on the web, without any filtering or pre-selection by a third party just
-like surfing the web.
-
-This means that anyone will have the ability to reach viewers via the Internet
-directly on TV, without them having to connect a PC.
-
-.. _BLOBbox: https://www.reviewed.com/cameras/news/blobbox-by-tvblob-20479
-
 Flush
 -----
 
@@ -187,14 +172,14 @@ Lince_ is a bittorrent client using libtorrent to handle bittorrent protocol
 and gtkmm for the interface, it has been designed to be a light and full
 featured client.
 
-.. _Lince: http://lincetorrent.sourceforge.net/
+.. _Lince: https://lincetorrent.sourceforge.net/
 
 BitSlug
 -------
 
 BitSlug_ is a macOS cocoa client.
 
-.. _BitSlug: http://bitslug.sourceforge.net/
+.. _BitSlug: https://bitslug.sourceforge.net/
 
 DelCo
 -----

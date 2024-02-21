@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2014-2018, Steven Siloti
+Copyright (c) 2015-2017, 2020-2021, Alden Torres
+Copyright (c) 2015-2022, Arvid Norberg
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session_handle.hpp"
@@ -35,47 +14,20 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/aux_/session_call.hpp"
 #include "libtorrent/aux_/throw.hpp"
 #include "libtorrent/aux_/path.hpp"
-#include "libtorrent/torrent.hpp"
+#include "libtorrent/aux_/torrent.hpp"
 #include "libtorrent/hasher.hpp"
 #include "libtorrent/peer_class.hpp"
 #include "libtorrent/peer_class_type_filter.hpp"
+#include "libtorrent/aux_/scope_end.hpp"
 
 #if TORRENT_ABI_VERSION == 1
 #include "libtorrent/read_resume_data.hpp"
-#include "libtorrent/lazy_entry.hpp"
+#include "libtorrent/magnet_uri.hpp"
 #endif
 
 using libtorrent::aux::session_impl;
 
 namespace libtorrent {
-
-	constexpr peer_class_t session_handle::global_peer_class_id;
-	constexpr peer_class_t session_handle::tcp_peer_class_id;
-	constexpr peer_class_t session_handle::local_peer_class_id;
-
-	constexpr save_state_flags_t session_handle::save_settings;
-	constexpr save_state_flags_t session_handle::save_dht_settings;
-	constexpr save_state_flags_t session_handle::save_dht_state;
-#if TORRENT_ABI_VERSION == 1
-	constexpr save_state_flags_t session_handle::save_encryption_settings;
-	constexpr save_state_flags_t session_handle::save_as_map TORRENT_DEPRECATED_ENUM;
-	constexpr save_state_flags_t session_handle::save_proxy TORRENT_DEPRECATED_ENUM;
-	constexpr save_state_flags_t session_handle::save_i2p_proxy TORRENT_DEPRECATED_ENUM;
-	constexpr save_state_flags_t session_handle::save_dht_proxy TORRENT_DEPRECATED_ENUM;
-	constexpr save_state_flags_t session_handle::save_peer_proxy TORRENT_DEPRECATED_ENUM;
-	constexpr save_state_flags_t session_handle::save_web_proxy TORRENT_DEPRECATED_ENUM;
-	constexpr save_state_flags_t session_handle::save_tracker_proxy TORRENT_DEPRECATED_ENUM;
-#endif
-
-	constexpr session_flags_t session_handle::add_default_plugins;
-#if TORRENT_ABI_VERSION == 1
-	constexpr session_flags_t session_handle::start_default_features;
-#endif
-
-	constexpr remove_flags_t session_handle::delete_files;
-	constexpr remove_flags_t session_handle::delete_partfile;
-
-	constexpr reopen_network_flags_t session_handle::reopen_map_ports;
 
 	template <typename Fun, typename... Args>
 	void session_handle::async_call(Fun f, Args&&... a) const
@@ -165,6 +117,7 @@ namespace libtorrent {
 		return r;
 	}
 
+#if TORRENT_ABI_VERSION <= 2
 	void session_handle::save_state(entry& e, save_state_flags_t const flags) const
 	{
 		entry* ep = &e;
@@ -177,6 +130,12 @@ namespace libtorrent {
 		// this needs to be synchronized since the lifespan
 		// of e is tied to the caller
 		sync_call(&session_impl::load_state, &e, flags);
+	}
+#endif
+
+	session_params session_handle::session_state(save_state_flags_t const flags) const
+	{
+		return sync_call_ret<session_params>(&session_impl::session_state, flags);
 	}
 
 	std::vector<torrent_status> session_handle::get_torrent_status(
@@ -223,6 +182,24 @@ namespace libtorrent {
 		std::shared_ptr<session_impl> s = m_impl.lock();
 		if (!s) aux::throw_ex<system_error>(errors::invalid_session_handle);
 		return s->get_context();
+	}
+
+	void session_handle::set_dht_state(dht::dht_state const& st)
+	{
+#ifndef TORRENT_DISABLE_DHT
+		async_call(&session_impl::set_dht_state, dht::dht_state(st));
+#else
+		TORRENT_UNUSED(st);
+#endif
+	}
+
+	void session_handle::set_dht_state(dht::dht_state&& st)
+	{
+#ifndef TORRENT_DISABLE_DHT
+		async_call(&session_impl::set_dht_state, std::move(st));
+#else
+		TORRENT_UNUSED(st);
+#endif
 	}
 
 	torrent_handle session_handle::find_torrent(sha1_hash const& info_hash) const
@@ -314,7 +291,6 @@ namespace {
 		atp.last_upload = resume_data.last_upload;
 		atp.last_download = resume_data.last_download;
 		atp.url = resume_data.url;
-		atp.uuid = resume_data.uuid;
 
 		atp.added_time = resume_data.added_time;
 		atp.completed_time = resume_data.completed_time;
@@ -326,8 +302,6 @@ namespace {
 		atp.have_pieces.swap(resume_data.have_pieces);
 		atp.verified_pieces.swap(resume_data.verified_pieces);
 		atp.piece_priorities.swap(resume_data.piece_priorities);
-
-		atp.merkle_tree = std::move(resume_data.merkle_tree);
 
 		atp.renamed_files = std::move(resume_data.renamed_files);
 
@@ -356,6 +330,14 @@ namespace {
 			if (atp.file_priorities.empty())
 				atp.file_priorities = resume_data.file_priorities;
 		}
+
+		if (atp.info_hash.is_all_zeros()
+			&& aux::string_begins_no_case("magnet:", atp.url.c_str()))
+		{
+			error_code err;
+			parse_magnet_uri(atp.url, atp, err);
+			if (!err) atp.url.clear();
+		}
 	}
 
 } // anonymous namespace
@@ -367,12 +349,22 @@ namespace {
 	{
 		TORRENT_ASSERT_PRECOND(!params.save_path.empty());
 
+#if TORRENT_ABI_VERSION < 3
+		if (!params.info_hashes.has_v1() && !params.info_hashes.has_v2() && !params.ti)
+			params.info_hashes.v1 = params.info_hash;
+#endif
+
+		// the internal torrent object keeps and mutates state in the
+		// torrent_info object. We can't let that leak back to the client
+		if (params.ti)
+			params.ti = std::make_shared<torrent_info>(*params.ti);
+
 #if TORRENT_ABI_VERSION == 1
 		handle_backwards_compatible_resume_data(params);
 #endif
 		error_code ec;
 		auto ecr = std::ref(ec);
-		torrent_handle r = sync_call_ret<torrent_handle>(&session_impl::add_torrent, std::move(params), ecr);
+		auto r = sync_call_ret<torrent_handle>(&session_impl::add_torrent, std::move(params), ecr);
 		if (ec) aux::throw_ex<system_error>(ec);
 		return r;
 	}
@@ -386,6 +378,16 @@ namespace {
 	torrent_handle session_handle::add_torrent(add_torrent_params&& params, error_code& ec)
 	{
 		TORRENT_ASSERT_PRECOND(!params.save_path.empty());
+
+#if TORRENT_ABI_VERSION < 3
+		if (!params.info_hashes.has_v1() && !params.info_hashes.has_v2() && !params.ti)
+			params.info_hashes.v1 = params.info_hash;
+#endif
+
+		// the internal torrent object keeps and mutates state in the
+		// torrent_info object. We can't let that leak back to the client
+		if (params.ti)
+			params.ti = std::make_shared<torrent_info>(*params.ti);
 
 		ec.clear();
 #if TORRENT_ABI_VERSION == 1
@@ -409,10 +411,22 @@ namespace {
 	{
 		TORRENT_ASSERT_PRECOND(!params.save_path.empty());
 
+#if TORRENT_ABI_VERSION < 3
+		if (!params.info_hashes.has_v1() && !params.info_hashes.has_v2() && !params.ti)
+			params.info_hashes.v1 = params.info_hash;
+#endif
+
+		// the internal torrent object keeps and mutates state in the
+		// torrent_info object. We can't let that leak back to the client
+		if (params.ti)
+			params.ti = std::make_shared<torrent_info>(*params.ti);
+
 		// we cannot capture a unique_ptr into a lambda in c++11, so we use a raw
 		// pointer for now. async_call uses a lambda expression to post the call
 		// to the main thread
+		// TODO: in C++14, use unique_ptr and move it into the lambda
 		auto* p = new add_torrent_params(std::move(params));
+		auto guard = aux::scope_end([p]{ delete p; });
 		p->save_path = complete(p->save_path);
 
 #if TORRENT_ABI_VERSION == 1
@@ -420,6 +434,7 @@ namespace {
 #endif
 
 		async_call(&session_impl::async_add_torrent, p);
+		guard.disarm();
 	}
 
 #ifndef BOOST_NO_EXCEPTIONS
@@ -430,7 +445,7 @@ namespace {
 		, std::string const& save_path
 		, entry const& resume_data
 		, storage_mode_t storage_mode
-		, bool paused)
+		, bool const add_paused)
 	{
 		add_torrent_params p;
 		p.ti = std::make_shared<torrent_info>(ti);
@@ -440,7 +455,7 @@ namespace {
 			bencode(std::back_inserter(p.resume_data), resume_data);
 		}
 		p.storage_mode = storage_mode;
-		if (paused) p.flags |= add_torrent_params::flag_paused;
+		if (add_paused) p.flags |= add_torrent_params::flag_paused;
 		else p.flags &= ~add_torrent_params::flag_paused;
 		return add_torrent(p);
 	}
@@ -452,18 +467,18 @@ namespace {
 		, std::string const& save_path
 		, entry const& resume_data
 		, storage_mode_t storage_mode
-		, bool paused
-		, void* userdata)
+		, bool const add_paused
+		, client_data_t userdata)
 	{
 		TORRENT_ASSERT_PRECOND(!save_path.empty());
 
 		add_torrent_params p;
 		p.trackers.push_back(tracker_url);
-		p.info_hash = info_hash;
+		p.info_hashes.v1 = info_hash;
 		p.save_path = save_path;
 		p.storage_mode = storage_mode;
 
-		if (paused) p.flags |= add_torrent_params::flag_paused;
+		if (add_paused) p.flags |= add_torrent_params::flag_paused;
 		else p.flags &= ~add_torrent_params::flag_paused;
 
 		p.userdata = userdata;
@@ -518,6 +533,7 @@ namespace {
 	}
 #endif // TORRENT_ABI_VERSION
 
+#if TORRENT_ABI_VERSION <= 2
 	void session_handle::set_dht_settings(dht::dht_settings const& settings)
 	{
 #ifndef TORRENT_DISABLE_DHT
@@ -535,6 +551,7 @@ namespace {
 		return dht::dht_settings();
 #endif
 	}
+#endif
 
 	bool session_handle::is_dht_running() const
 	{
@@ -662,7 +679,8 @@ namespace {
 #endif
 	}
 
-	void session_handle::dht_direct_request(udp::endpoint const& ep, entry const& e, void* userdata)
+	void session_handle::dht_direct_request(udp::endpoint const& ep, entry const& e
+		, client_data_t userdata)
 	{
 #ifndef TORRENT_DISABLE_DHT
 		entry copy = e;
@@ -694,7 +712,7 @@ namespace {
 	}
 #endif // TORRENT_ABI_VERSION
 
-	void session_handle::add_extension(std::function<std::shared_ptr<torrent_plugin>(torrent_handle const&, void*)> ext)
+	void session_handle::add_extension(std::function<std::shared_ptr<torrent_plugin>(torrent_handle const&, client_data_t)> ext)
 	{
 #ifndef TORRENT_DISABLE_EXTENSIONS
 		async_call(&session_impl::add_extension, ext);
@@ -713,15 +731,6 @@ namespace {
 	}
 
 #if TORRENT_ABI_VERSION == 1
-	void session_handle::load_asnum_db(char const*) {}
-	void session_handle::load_country_db(char const*) {}
-
-	int session_handle::as_for_ip(address const&)
-	{ return 0; }
-
-	void session_handle::load_asnum_db(wchar_t const*) {}
-	void session_handle::load_country_db(wchar_t const*) {}
-
 	void session_handle::load_state(entry const& ses_state
 		, save_state_flags_t const flags)
 	{
@@ -745,35 +754,16 @@ namespace {
 	entry session_handle::state() const
 	{
 		entry ret;
-		auto retp = &ret;
+		auto* const retp = &ret;
 		sync_call(&session_impl::save_state, retp, save_state_flags_t::all());
 		return ret;
 	}
-
-	void session_handle::load_state(lazy_entry const& ses_state
-		, save_state_flags_t const flags)
-	{
-		if (ses_state.type() == lazy_entry::none_t) return;
-		std::pair<char const*, int> buf = ses_state.data_section();
-		bdecode_node e;
-		error_code ec;
-#if TORRENT_USE_ASSERTS || !defined BOOST_NO_EXCEPTIONS
-		int ret =
-#endif
-		bdecode(buf.first, buf.first + buf.second, e, ec);
-
-		TORRENT_ASSERT(ret == 0);
-#ifndef BOOST_NO_EXCEPTIONS
-		if (ret != 0) aux::throw_ex<system_error>(ec);
-#endif
-		sync_call(&session_impl::load_state, &e, flags);
-	}
 #endif // TORRENT_ABI_VERSION
 
-	void session_handle::set_ip_filter(ip_filter const& f)
+	void session_handle::set_ip_filter(ip_filter f)
 	{
-		std::shared_ptr<ip_filter> copy = std::make_shared<ip_filter>(f);
-		async_call(&session_impl::set_ip_filter, copy);
+		std::shared_ptr<ip_filter> copy = std::make_shared<ip_filter>(std::move(f));
+		async_call(&session_impl::set_ip_filter, std::move(copy));
 	}
 
 	ip_filter session_handle::get_ip_filter() const
@@ -881,7 +871,7 @@ namespace {
 		if (net_interface == nullptr || strlen(net_interface) == 0)
 			net_interface = "0.0.0.0";
 
-		interfaces_str = print_endpoint(tcp::endpoint(make_address(net_interface, ec), std::uint16_t(port_range.first)));
+		interfaces_str = aux::print_endpoint(tcp::endpoint(make_address(net_interface, ec), std::uint16_t(port_range.first)));
 		if (ec) return;
 
 		p.set_str(settings_pack::listen_interfaces, interfaces_str);
@@ -1149,27 +1139,6 @@ namespace {
 	}
 
 #if TORRENT_ABI_VERSION == 1
-	void session_handle::set_severity_level(alert::severity_t s)
-	{
-		alert_category_t m = {};
-		switch (s)
-		{
-			case alert::debug: m = alert::all_categories; break;
-			case alert::info: m = alert::all_categories & ~(alert::debug_notification
-				| alert::progress_notification | alert::dht_notification); break;
-			case alert::warning: m = alert::all_categories & ~(alert::debug_notification
-				| alert::status_notification | alert::progress_notification
-				| alert::dht_notification); break;
-			case alert::critical: m = alert::error_notification | alert::storage_notification; break;
-			case alert::fatal: m = alert::error_notification; break;
-			case alert::none: m = {}; break;
-		}
-
-		settings_pack p;
-		p.set_int(settings_pack::alert_mask, m);
-		apply_settings(std::move(p));
-	}
-
 	size_t session_handle::set_alert_queue_size_limit(size_t queue_size_limit_)
 	{
 		return sync_call_ret<size_t>(&session_impl::set_alert_queue_size_limit, queue_size_limit_);

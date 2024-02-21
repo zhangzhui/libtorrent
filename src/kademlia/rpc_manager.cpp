@@ -1,39 +1,21 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg
+Copyright (c) 2006-2017, 2019-2022, Arvid Norberg
+Copyright (c) 2015, 2017, Steven Siloti
+Copyright (c) 2015, Thomas Yuan
+Copyright (c) 2016-2018, 2020-2021, Alden Torres
+Copyright (c) 2016-2017, Andrei Kurushin
+Copyright (c) 2017, Pavel Pimenov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include <libtorrent/config.hpp>
-#include <libtorrent/io.hpp>
-#include <libtorrent/random.hpp>
-#include <libtorrent/invariant_check.hpp>
+#include <libtorrent/aux_/io_bytes.hpp>
+#include <libtorrent/aux_/random.hpp>
+#include <libtorrent/aux_/invariant_check.hpp>
 #include <libtorrent/kademlia/rpc_manager.hpp>
 #include <libtorrent/kademlia/routing_table.hpp>
 #include <libtorrent/kademlia/find_data.hpp>
@@ -44,12 +26,11 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <libtorrent/kademlia/direct_request.hpp>
 #include <libtorrent/kademlia/get_item.hpp>
 #include <libtorrent/kademlia/sample_infohashes.hpp>
-#include <libtorrent/kademlia/dht_settings.hpp>
+#include <libtorrent/aux_/session_settings.hpp>
 
-#include <libtorrent/socket_io.hpp> // for print_endpoint
+#include <libtorrent/aux_/socket_io.hpp> // for print_endpoint
 #include <libtorrent/aux_/time.hpp> // for aux::time_now
-#include <libtorrent/aux_/aligned_union.hpp>
-#include <libtorrent/broadcast_socket.hpp> // for is_v6
+#include <libtorrent/aux_/ip_helpers.hpp> // for is_v6
 
 #include <type_traits>
 #include <functional>
@@ -60,18 +41,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 using namespace std::placeholders;
 
-namespace libtorrent { namespace dht {
-
-// TODO: 3 move this into it's own .cpp file
-
-constexpr observer_flags_t observer::flag_queried;
-constexpr observer_flags_t observer::flag_initial;
-constexpr observer_flags_t observer::flag_no_id;
-constexpr observer_flags_t observer::flag_short_timeout;
-constexpr observer_flags_t observer::flag_failed;
-constexpr observer_flags_t observer::flag_ipv6_address;
-constexpr observer_flags_t observer::flag_alive;
-constexpr observer_flags_t observer::flag_done;
+namespace libtorrent::dht {
 
 dht_observer* observer::get_observer() const
 {
@@ -83,7 +53,7 @@ void observer::set_target(udp::endpoint const& ep)
 	m_sent = clock_type::now();
 
 	m_port = ep.port();
-	if (is_v6(ep))
+	if (aux::is_v6(ep))
 	{
 		flags |= flag_ipv6_address;
 		m_addr.v6 = ep.address().to_v6().to_bytes();
@@ -105,20 +75,21 @@ address observer::target_addr() const
 
 udp::endpoint observer::target_ep() const
 {
-	return udp::endpoint(target_addr(), m_port);
+	return {target_addr(), m_port};
 }
 
 void observer::abort()
 {
 	if (flags & flag_done) return;
 	flags |= flag_done;
-	m_algorithm->failed(self(), traversal_algorithm::prevent_request);
+	m_algorithm->abort();
+	m_algorithm->failed(self());
 }
 
 void observer::done()
 {
 	if (flags & flag_done) return;
-	flags |= flag_done;
+	flags |= observer::flag_done;
 	m_algorithm->finished(self());
 }
 
@@ -142,26 +113,29 @@ void observer::set_id(node_id const& id)
 	if (m_algorithm) m_algorithm->resort_result(this);
 }
 
-using observer_storage = aux::aligned_union<1
-	, find_data_observer
-	, announce_observer
-	, put_data_observer
-	, direct_observer
-	, get_item_observer
-	, get_peers_observer
-	, obfuscated_get_peers_observer
-	, sample_infohashes_observer
-	, null_observer
-	, traversal_observer>::type;
+namespace {
+
+	std::size_t const observer_storage_size = std::max(
+	{sizeof(find_data_observer)
+	, sizeof(announce_observer)
+	, sizeof(put_data_observer)
+	, sizeof(direct_observer)
+	, sizeof(get_item_observer)
+	, sizeof(get_peers_observer)
+	, sizeof(obfuscated_get_peers_observer)
+	, sizeof(sample_infohashes_observer)
+	, sizeof(null_observer)
+	, sizeof(traversal_observer)});
+}
 
 rpc_manager::rpc_manager(node_id const& our_id
-	, dht_settings const& settings
+	, aux::session_settings const& settings
 	, routing_table& table
-	, aux::listen_socket_handle const& sock
+	, aux::listen_socket_handle sock
 	, socket_manager* sock_man
 	, dht_logger* log)
-	: m_pool_allocator(sizeof(observer_storage), 10)
-	, m_sock(sock)
+	: m_pool_allocator(observer_storage_size, 10)
+	, m_sock(std::move(sock))
 	, m_sock_man(sock_man)
 #ifndef TORRENT_DISABLE_LOGGING
 	, m_log(log)
@@ -183,9 +157,7 @@ rpc_manager::~rpc_manager()
 	m_destructing = true;
 
 	for (auto const& t : m_transactions)
-	{
 		t.second->abort();
-	}
 }
 
 void* rpc_manager::allocate_observer()
@@ -200,14 +172,13 @@ void rpc_manager::free_observer(void* ptr)
 {
 	if (ptr == nullptr) return;
 	--m_allocated_observers;
-	TORRENT_ASSERT(reinterpret_cast<observer*>(ptr)->m_in_use == false);
 	m_pool_allocator.free(ptr);
 }
 
 #if TORRENT_USE_ASSERTS
 size_t rpc_manager::allocation_size() const
 {
-	return sizeof(observer_storage);
+	return observer_storage_size;
 }
 #endif
 #if TORRENT_USE_INVARIANT_CHECKS
@@ -215,6 +186,10 @@ void rpc_manager::check_invariant() const
 {
 	for (auto const& t : m_transactions)
 	{
+		TORRENT_ASSERT(t.second->flags & observer::flag_queried);
+		if (!m_destructing)
+			TORRENT_ASSERT(!(t.second->flags & observer::flag_failed));
+		TORRENT_ASSERT(!(t.second->flags & observer::flag_alive));
 		TORRENT_ASSERT(t.second);
 	}
 }
@@ -226,7 +201,7 @@ void rpc_manager::unreachable(udp::endpoint const& ep)
 	if (m_log->should_log(dht_logger::rpc_manager))
 	{
 		m_log->log(dht_logger::rpc_manager, "PORT_UNREACHABLE [ ip: %s ]"
-			, print_endpoint(ep).c_str());
+			, aux::print_endpoint(ep).c_str());
 	}
 #endif
 
@@ -258,11 +233,11 @@ bool rpc_manager::incoming(msg const& m, node_id* id)
 	// if we don't have the transaction id in our
 	// request list, ignore the packet
 
-	auto transaction_id = m.message.dict_find_string_value("t");
+	auto const transaction_id = m.message.dict_find_string_value("t");
 	if (transaction_id.empty()) return false;
 
-	auto ptr = transaction_id.begin();
-	int tid = transaction_id.size() != 2 ? -1 : detail::read_uint16(ptr);
+	auto const* ptr = transaction_id.data();
+	std::uint16_t const tid = transaction_id.size() != 2 ? std::uint64_t(0xffff) : aux::read_uint16(ptr);
 
 	observer_ptr o;
 	auto range = m_transactions.equal_range(tid);
@@ -280,7 +255,7 @@ bool rpc_manager::incoming(msg const& m, node_id* id)
 		if (m_table.native_endpoint(m.addr) && m_log->should_log(dht_logger::rpc_manager))
 		{
 			m_log->log(dht_logger::rpc_manager, "reply with unknown transaction id size: %d from %s"
-				, int(transaction_id.size()), print_endpoint(m.addr).c_str());
+				, int(transaction_id.size()), aux::print_endpoint(m.addr).c_str());
 		}
 #endif
 		// this isn't necessarily because the other end is doing
@@ -301,7 +276,7 @@ bool rpc_manager::incoming(msg const& m, node_id* id)
 	{
 		m_log->log(dht_logger::rpc_manager, "[%u] round trip time(ms): %" PRId64 " from %s"
 			, o->algorithm()->id(), total_milliseconds(now - o->sent())
-			, print_endpoint(m.addr).c_str());
+			, aux::print_endpoint(m.addr).c_str());
 	}
 #endif
 
@@ -318,14 +293,14 @@ bool rpc_manager::incoming(msg const& m, node_id* id)
 			{
 				m_log->log(dht_logger::rpc_manager, "[%u] reply with error from %s: (%" PRId64 ") %s"
 					, o->algorithm()->id()
-					, print_endpoint(m.addr).c_str()
+					, aux::print_endpoint(m.addr).c_str()
 					, err.list_int_value_at(0)
-					, err.list_string_value_at(1).to_string().c_str());
+					, std::string(err.list_string_value_at(1)).c_str());
 			}
 			else
 			{
 				m_log->log(dht_logger::rpc_manager, "[%u] reply with (malformed) error from %s"
-					, o->algorithm()->id(), print_endpoint(m.addr).c_str());
+					, o->algorithm()->id(), aux::print_endpoint(m.addr).c_str());
 			}
 		}
 #endif
@@ -357,7 +332,7 @@ bool rpc_manager::incoming(msg const& m, node_id* id)
 	}
 
 	node_id const nid = node_id(node_id_ent.string_ptr());
-	if (m_settings.enforce_node_id && !verify_id(nid, m.addr.address()))
+	if (m_settings.get_bool(settings_pack::dht_enforce_node_id) && !verify_id(nid, m.addr.address()))
 	{
 		o->timeout();
 		return false;
@@ -368,7 +343,7 @@ bool rpc_manager::incoming(msg const& m, node_id* id)
 	{
 		m_log->log(dht_logger::rpc_manager, "[%u] reply with transaction id: %d from %s"
 			, o->algorithm()->id(), int(transaction_id.size())
-			, print_endpoint(m.addr).c_str());
+			, aux::print_endpoint(m.addr).c_str());
 	}
 #endif
 	o->reply(m);
@@ -385,32 +360,39 @@ time_duration rpc_manager::tick()
 {
 	INVARIANT_CHECK;
 
-	constexpr int short_timeout = 1;
-	constexpr int timeout = 15;
+	constexpr auto short_timeout = seconds(1);
+	constexpr auto timeout = seconds(15);
 
 	// look for observers that have timed out
 
-	if (m_transactions.empty()) return seconds(short_timeout);
+	if (m_transactions.empty()) return short_timeout;
 
 	std::vector<observer_ptr> timeouts;
 	std::vector<observer_ptr> short_timeouts;
 
-	time_duration ret = seconds(short_timeout);
+	time_duration ret = short_timeout;
 	time_point now = aux::time_now();
 
 	for (auto i = m_transactions.begin(); i != m_transactions.end();)
 	{
 		observer_ptr o = i->second;
 
+		if (o->flags & observer::flag_done)
+		{
+			// remove cancelled requests
+			i = m_transactions.erase(i);
+			continue;
+		}
+
 		time_duration diff = now - o->sent();
-		if (diff >= seconds(timeout))
+		if (diff >= timeout)
 		{
 #ifndef TORRENT_DISABLE_LOGGING
 			if (m_log->should_log(dht_logger::rpc_manager))
 			{
 				m_log->log(dht_logger::rpc_manager, "[%u] timing out transaction id: %d from: %s"
 					, o->algorithm()->id(), i->first
-					, print_endpoint(o->target_ep()).c_str());
+					, aux::print_endpoint(o->target_ep()).c_str());
 			}
 #endif
 			i = m_transactions.erase(i);
@@ -420,14 +402,14 @@ time_duration rpc_manager::tick()
 
 		// don't call short_timeout() again if we've
 		// already called it once
-		if (diff >= seconds(short_timeout) && !o->has_short_timeout())
+		if (diff >= short_timeout && !o->has_short_timeout())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
 			if (m_log->should_log(dht_logger::rpc_manager))
 			{
 				m_log->log(dht_logger::rpc_manager, "[%u] short-timing out transaction id: %d from: %s"
 					, o->algorithm()->id(), i->first
-					, print_endpoint(o->target_ep()).c_str());
+					, aux::print_endpoint(o->target_ep()).c_str());
 			}
 #endif
 			++i;
@@ -436,7 +418,7 @@ time_duration rpc_manager::tick()
 			continue;
 		}
 
-		ret = std::min(seconds(timeout) - diff, ret);
+		ret = std::min(duration_cast<time_duration>(timeout - diff), ret);
 		++i;
 	}
 
@@ -465,13 +447,13 @@ bool rpc_manager::invoke(entry& e, udp::endpoint const& target_addr
 	std::string transaction_id;
 	transaction_id.resize(2);
 	char* out = &transaction_id[0];
-	std::uint16_t const tid = std::uint16_t(random(0x7fff));
-	detail::write_uint16(tid, out);
+	auto const tid = std::uint16_t(aux::random(0xffff));
+	aux::write_uint16(tid, out);
 	e["t"] = transaction_id;
 
 	// When a DHT node enters the read-only state, in each outgoing query message,
 	// places a 'ro' key in the top-level message dictionary and sets its value to 1.
-	if (m_settings.read_only) e["ro"] = 1;
+	if (m_settings.get_bool(settings_pack::dht_read_only)) e["ro"] = 1;
 
 	node& n = o->algorithm()->get_node();
 	if (!n.native_address(o->target_addr()))
@@ -486,14 +468,15 @@ bool rpc_manager::invoke(entry& e, udp::endpoint const& target_addr
 	{
 		m_log->log(dht_logger::rpc_manager, "[%u] invoking %s -> %s"
 			, o->algorithm()->id(), e["q"].string().c_str()
-			, print_endpoint(target_addr).c_str());
+			, aux::print_endpoint(target_addr).c_str());
 	}
 #endif
 
 	if (m_sock_man->send_packet(m_sock, e, target_addr))
 	{
-		m_transactions.insert(std::make_pair(tid, o));
+		m_transactions.emplace(tid, o);
 #if TORRENT_USE_ASSERTS
+		TORRENT_ASSERT(o->flags & observer::flag_queried);
 		o->m_was_sent = true;
 #endif
 		return true;
@@ -515,4 +498,4 @@ observer::~observer()
 #endif
 }
 
-} } // namespace libtorrent::dht
+} // namespace libtorrent::dht

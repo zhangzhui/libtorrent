@@ -4,9 +4,34 @@
 
 #include "boost_python.hpp"
 #include <libtorrent/session.hpp>
+#include <libtorrent/kademlia/dht_settings.hpp>
 
 using namespace boost::python;
 using namespace lt;
+
+namespace
+{
+#if TORRENT_ABI_VERSION == 1
+    std::shared_ptr<proxy_settings> proxy_settings_constructor()
+    {
+        python_deprecated("proxy_settings is deprecated");
+        return std::make_shared<proxy_settings>();
+    }
+
+    std::shared_ptr<pe_settings> pe_settings_constructor()
+    {
+        python_deprecated("pe_settings is deprecated");
+        return std::make_shared<pe_settings>();
+    }
+#endif
+#if TORRENT_ABI_VERSION <= 2
+    std::shared_ptr<dht::dht_settings> dht_settings_constructor()
+    {
+        python_deprecated("dht_settings is deprecated");
+        return std::make_shared<dht::dht_settings>();
+    }
+#endif
+};
 
 void bind_session_settings()
 {
@@ -16,13 +41,21 @@ void bind_session_settings()
         .value("auto_expand_choker", settings_pack::rate_based_choker)
 #endif
         .value("rate_based_choker", settings_pack::rate_based_choker)
+#if TORRENT_ABI_VERSION == 1
         .value("bittyrant_choker", settings_pack::bittyrant_choker)
+#endif
     ;
 
     enum_<settings_pack::seed_choking_algorithm_t>("seed_choking_algorithm_t")
         .value("round_robin", settings_pack::round_robin)
         .value("fastest_upload", settings_pack::fastest_upload)
         .value("anti_leech", settings_pack::anti_leech)
+    ;
+
+    enum_<settings_pack::mmap_write_mode_t>("mmap_write_mode_t")
+        .value("always_pwrite", settings_pack::always_pwrite)
+        .value("always_mmap_write", settings_pack::always_mmap_write)
+        .value("auto_mmap_write", settings_pack::auto_mmap_write)
     ;
 
     enum_<settings_pack::suggest_mode_t>("suggest_mode_t")
@@ -36,6 +69,7 @@ void bind_session_settings()
         .value("disable_os_cache_for_aligned_files", settings_pack::disable_os_cache_for_aligned_files)
 #endif
         .value("disable_os_cache", settings_pack::disable_os_cache)
+        .value("write_through", settings_pack::write_through)
     ;
 
     enum_<settings_pack::bandwidth_mixed_algo_t>("bandwidth_mixed_algo_t")
@@ -65,6 +99,7 @@ void bind_session_settings()
 #endif
     ;
 
+    {
     scope s = enum_<settings_pack::proxy_type_t>("proxy_type_t")
         .value("none", settings_pack::none)
         .value("socks4", settings_pack::socks4)
@@ -78,7 +113,8 @@ void bind_session_settings()
 #if TORRENT_ABI_VERSION == 1
     scope().attr("proxy_type") = s;
 
-    class_<proxy_settings>("proxy_settings")
+    class_<proxy_settings>("proxy_settings", no_init)
+        .def("__init__", make_constructor(&proxy_settings_constructor))
         .def_readwrite("hostname", &proxy_settings::hostname)
         .def_readwrite("port", &proxy_settings::port)
         .def_readwrite("password", &proxy_settings::password)
@@ -88,14 +124,14 @@ void bind_session_settings()
         .def_readwrite("proxy_hostnames", &proxy_settings::proxy_hostnames)
     ;
 #endif
+   }
 
 #ifndef TORRENT_DISABLE_DHT
-    class_<dht::dht_settings>("dht_settings")
+#if TORRENT_ABI_VERSION <= 2
+    class_<dht::dht_settings>("dht_settings", no_init)
+        .def("__init__", make_constructor(&dht_settings_constructor))
         .def_readwrite("max_peers_reply", &dht::dht_settings::max_peers_reply)
         .def_readwrite("search_branching", &dht::dht_settings::search_branching)
-#if TORRENT_ABI_VERSION == 1
-        .def_readwrite("service_port", &dht::dht_settings::service_port)
-#endif
         .def_readwrite("max_fail_count", &dht::dht_settings::max_fail_count)
         .def_readwrite("max_torrents", &dht::dht_settings::max_torrents)
         .def_readwrite("max_dht_items", &dht::dht_settings::max_dht_items)
@@ -113,9 +149,11 @@ void bind_session_settings()
         .def_readwrite("item_lifetime", &dht::dht_settings::item_lifetime)
     ;
 #endif
+#endif
 
 #if TORRENT_ABI_VERSION == 1
-    class_<pe_settings>("pe_settings")
+    class_<pe_settings>("pe_settings", no_init)
+        .def("__init__", make_constructor(&pe_settings_constructor))
         .def_readwrite("out_enc_policy", &pe_settings::out_enc_policy)
         .def_readwrite("in_enc_policy", &pe_settings::in_enc_policy)
         .def_readwrite("allowed_enc_level", &pe_settings::allowed_enc_level)

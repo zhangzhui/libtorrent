@@ -1,39 +1,17 @@
 /*
 
-Copyright (c) 2008, Arvid Norberg
+Copyright (c) 2015-2018, 2020-2021, Arvid Norberg
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
 #include "test_utils.hpp"
 #include "settings.hpp"
 #include "setup_swarm.hpp"
+#include "utils.hpp"
 
 #include "libtorrent/session.hpp"
 #include "libtorrent/alert_types.hpp"
@@ -67,12 +45,16 @@ enum flags_t
 	upload_only = 16,
 
 	// re-add the torrent after removing
-	readd = 32
+	readd = 32,
+
+	// token limit is too low
+	token_limit = 64,
 };
 
 void run_metadata_test(int flags)
 {
 	int metadata_alerts = 0;
+	int metadata_failed_alerts = 0;
 
 	sim::default_config cfg;
 	sim::simulation sim{cfg};
@@ -80,14 +62,14 @@ void run_metadata_test(int flags)
 	lt::settings_pack default_settings = settings();
 
 	if (flags & full_encryption)
-	{
 		enable_enc(default_settings);
-	}
 
 	if (flags & utp)
-	{
 		utp_only(default_settings);
-	}
+
+	if (flags & token_limit)
+		default_settings.set_int(settings_pack::metadata_token_limit, 10);
+
 
 	lt::add_torrent_params default_add_torrent;
 	if (flags & upload_only)
@@ -95,37 +77,48 @@ void run_metadata_test(int flags)
 		default_add_torrent.flags |= torrent_flags::upload_mode;
 	}
 
-	setup_swarm(2, (flags & reverse) ? swarm_test::upload : swarm_test::download
+	std::shared_ptr<lt::torrent_info> ti;
+
+	// TODO: we use real_disk here because the test disk io doesn't support
+	// multiple torrents, and readd will add back the same torrent before the
+	// first one is done being removed
+	setup_swarm(2, ((flags & reverse) ? swarm_test::upload : swarm_test::download)
+		| ((flags & readd) ? swarm_test::real_disk : swarm_test_t{})
+		, sim
+		, default_settings
+		, default_add_torrent
 		// add session
 		, [](lt::settings_pack&) {}
 		// add torrent
-		, [](lt::add_torrent_params& params) {
+		, [&ti](lt::add_torrent_params& params) {
 			// we want to add the torrent via magnet link
 			error_code ec;
+			ti = params.ti;
+			params.ti.reset();
 			add_torrent_params const p = parse_magnet_uri(
-				lt::make_magnet_uri(*params.ti), ec);
+				lt::make_magnet_uri(*ti), ec);
 			TEST_CHECK(!ec);
 			params.name = p.name;
 			params.trackers = p.trackers;
 			params.tracker_tiers = p.tracker_tiers;
 			params.url_seeds = p.url_seeds;
-			params.info_hash = p.info_hash;
+			params.info_hashes = p.info_hashes;
 			params.peers = p.peers;
 #ifndef TORRENT_DISABLE_DHT
 			params.dht_nodes = p.dht_nodes;
 #endif
-			params.ti.reset();
 			params.flags &= ~torrent_flags::upload_mode;
 		}
 		// on alert
 		, [&](lt::alert const* a, lt::session& ses) {
 
-			if (alert_cast<metadata_received_alert>(a))
+			if (alert_cast<metadata_failed_alert>(a))
+			{
+				metadata_failed_alerts += 1;
+			}
+			else if (alert_cast<metadata_received_alert>(a))
 			{
 				metadata_alerts += 1;
-
-				auto ti = std::make_shared<torrent_info>(
-					*ses.get_torrents()[0].torrent_file());
 
 				if (flags & disconnect)
 				{
@@ -154,6 +147,10 @@ void run_metadata_test(int flags)
 				TEST_ERROR("timeout");
 				return true;
 			}
+			if ((flags & token_limit) && metadata_failed_alerts > 0)
+			{
+				return true;
+			}
 			if ((flags & disconnect) && metadata_alerts > 0)
 			{
 				return true;
@@ -175,7 +172,14 @@ void run_metadata_test(int flags)
 			return false;
 		});
 
-	TEST_EQUAL(metadata_alerts, 1);
+	if (flags & token_limit)
+	{
+		TEST_EQUAL(metadata_failed_alerts, 1);
+	}
+	else
+	{
+		TEST_EQUAL(metadata_alerts, 1);
+	}
 }
 
 TORRENT_TEST(ut_metadata_encryption_reverse)
@@ -212,6 +216,12 @@ TORRENT_TEST(ut_metadata_upload_only_disconnect_readd)
 {
 	run_metadata_test(upload_only | disconnect | readd);
 }
+
+TORRENT_TEST(ut_metadata_token_limit)
+{
+	run_metadata_test(token_limit);
+}
+
 #else
 TORRENT_TEST(disabled) {}
 #endif // TORRENT_DISABLE_EXTENSIONS

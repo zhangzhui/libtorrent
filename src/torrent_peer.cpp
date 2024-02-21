@@ -1,44 +1,25 @@
 /*
 
-Copyright (c) 2012-2018, Arvid Norberg
+Copyright (c) 2014-2017, 2019-2021, Arvid Norberg
+Copyright (c) 2016-2017, 2020-2021, Alden Torres
+Copyright (c) 2018, Steven Siloti
+Copyright (c) 2020, Paul-Louis Ageneau
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
-#include "libtorrent/torrent_peer.hpp"
+#include "libtorrent/aux_/torrent_peer.hpp"
 #include "libtorrent/assert.hpp"
-#include "libtorrent/string_util.hpp"
-#include "libtorrent/peer_connection.hpp"
-#include "libtorrent/crc32c.hpp"
-#include "libtorrent/ip_voter.hpp"
-#include "libtorrent/io.hpp" // for write_uint16
+#include "libtorrent/aux_/string_util.hpp"
+#include "libtorrent/aux_/peer_connection.hpp"
+#include "libtorrent/aux_/crc32c.hpp"
+#include "libtorrent/aux_/ip_voter.hpp"
+#include "libtorrent/aux_/io_bytes.hpp" // for write_uint16
+#include "libtorrent/aux_/ip_helpers.hpp"
 
-namespace libtorrent {
+namespace libtorrent::aux {
 
 	namespace {
 
@@ -73,7 +54,7 @@ namespace libtorrent {
 	// * all IP addresses are in network byte order when hashed
 	std::uint32_t peer_priority(tcp::endpoint e1, tcp::endpoint e2)
 	{
-		TORRENT_ASSERT(is_v4(e1) == is_v4(e2));
+		TORRENT_ASSERT(aux::is_v4(e1) == aux::is_v4(e2));
 
 		using std::swap;
 
@@ -82,13 +63,15 @@ namespace libtorrent {
 		{
 			if (e1.port() > e2.port())
 				swap(e1, e2);
+			std::array<char, 4> buf;
+			auto ptr = buf.data();
+			aux::write_uint16(e1.port(), ptr);
+			aux::write_uint16(e2.port(), ptr);
 			std::uint32_t p;
-			auto ptr = reinterpret_cast<char*>(&p);
-			detail::write_uint16(e1.port(), ptr);
-			detail::write_uint16(e2.port(), ptr);
+			std::memcpy(&p, buf.data(), 4);
 			ret = crc32c_32(p);
 		}
-		else if (is_v6(e1))
+		else if (aux::is_v6(e1))
 		{
 			static const std::uint8_t v6mask[][8] = {
 				{ 0xff, 0xff, 0xff, 0xff, 0x55, 0x55, 0x55, 0x55 },
@@ -104,9 +87,9 @@ namespace libtorrent {
 			apply_mask(b1.data(), v6mask[mask], 8);
 			apply_mask(b2.data(), v6mask[mask], 8);
 			std::uint64_t addrbuf[4];
-			memcpy(&addrbuf[0], b1.data(), 16);
-			memcpy(&addrbuf[2], b2.data(), 16);
-			ret = crc32c(addrbuf, 4);
+			std::memcpy(&addrbuf[0], b1.data(), 16);
+			std::memcpy(&addrbuf[2], b2.data(), 16);
+			ret = aux::crc32c(addrbuf, 4);
 		}
 		else
 		{
@@ -119,14 +102,14 @@ namespace libtorrent {
 			if (e1 > e2) swap(e1, e2);
 			address_v4::bytes_type b1 = e1.address().to_v4().to_bytes();
 			address_v4::bytes_type b2 = e2.address().to_v4().to_bytes();
-			int mask = memcmp(&b1[0], &b2[0], 2) ? 0
-				: memcmp(&b1[0], &b2[0], 3) ? 1 : 2;
+			int mask = std::memcmp(&b1[0], &b2[0], 2) ? 0
+				: std::memcmp(&b1[0], &b2[0], 3) ? 1 : 2;
 			apply_mask(&b1[0], v4mask[mask], 4);
 			apply_mask(&b2[0], v4mask[mask], 4);
 			std::uint64_t addrbuf;
-			memcpy(&addrbuf, &b1[0], 4);
-			memcpy(reinterpret_cast<char*>(&addrbuf) + 4, &b2[0], 4);
-			ret = crc32c(&addrbuf, 1);
+			std::memcpy(&addrbuf, &b1[0], 4);
+			std::memcpy(reinterpret_cast<char*>(&addrbuf) + 4, &b2[0], 4);
+			ret = aux::crc32c(&addrbuf, 1);
 		}
 
 		return ret;
@@ -134,18 +117,13 @@ namespace libtorrent {
 
 	torrent_peer::torrent_peer(std::uint16_t port_, bool conn
 		, peer_source_flags_t const src)
-		: prev_amount_upload(0)
-		, prev_amount_download(0)
-		, connection(nullptr)
-		, peer_rank(0)
-		, last_optimistically_unchoked(0)
-		, last_connected(0)
+		: connection(nullptr)
 		, port(port_)
-		, hashfails(0)
 		, failcount(0)
 		, connectable(conn)
 		, optimistically_unchoked(false)
 		, seed(false)
+		, maybe_upload_only(false)
 		, fast_reconnects(0)
 		, trust_points(0)
 		, source(static_cast<std::uint8_t>(src))
@@ -160,18 +138,22 @@ namespace libtorrent {
 #if TORRENT_USE_I2P
 		, is_i2p_addr(false)
 #endif
+#if TORRENT_USE_RTC
+		, is_rtc_addr(false)
+#endif
 		, on_parole(false)
 		, banned(false)
 		, supports_utp(true) // assume peers support utp
 		, confirmed_supports_utp(false)
 		, supports_holepunch(false)
 		, web_seed(false)
+		, protocol_v2(false)
 	{}
 
-	std::uint32_t torrent_peer::rank(external_ip const& external, int external_port) const
+	std::uint32_t torrent_peer::rank(aux::external_ip const& external, int external_port) const
 	{
 		TORRENT_ASSERT(in_use);
-//TODO: how do we deal with our external address changing?
+		//TODO: how do we deal with our external address changing?
 		if (peer_rank == 0)
 			peer_rank = peer_priority(
 				tcp::endpoint(external.external_address(this->address()), std::uint16_t(external_port))
@@ -184,8 +166,8 @@ namespace libtorrent {
 	{
 		TORRENT_ASSERT(in_use);
 #if TORRENT_USE_I2P
-		if (is_i2p_addr) return dest().to_string();
-#endif // TORRENT_USE_I2P
+		if (is_i2p_addr) return std::string(dest());
+#endif
 		return address().to_string();
 	}
 #endif
@@ -200,7 +182,7 @@ namespace libtorrent {
 		}
 		else
 		{
-			return std::int64_t(prev_amount_download) << 10;
+			return std::int64_t(prev_amount_download) * 1024;
 		}
 	}
 
@@ -214,7 +196,7 @@ namespace libtorrent {
 		}
 		else
 		{
-			return std::int64_t(prev_amount_upload) << 10;
+			return std::int64_t(prev_amount_upload) * 1024;
 		}
 	}
 
@@ -227,21 +209,40 @@ namespace libtorrent {
 #if TORRENT_USE_I2P
 		is_i2p_addr = false;
 #endif
+#if TORRENT_USE_RTC
+		is_rtc_addr = false;
+#endif
 	}
 
 	ipv4_peer::ipv4_peer(ipv4_peer const&) = default;
-	ipv4_peer& ipv4_peer::operator=(ipv4_peer const& p) = default;
+	ipv4_peer& ipv4_peer::operator=(ipv4_peer const& p) & = default;
 
 #if TORRENT_USE_I2P
-	i2p_peer::i2p_peer(string_view dest, bool connectable
+	i2p_peer::i2p_peer(string_view dest, bool connectable_
 		, peer_source_flags_t const src)
-		: torrent_peer(0, connectable, src)
+		: torrent_peer(0, connectable_, src)
 		, destination(dest)
 	{
 		is_v6_addr = false;
 		is_i2p_addr = true;
+#if TORRENT_USE_RTC
+        is_rtc_addr = false;
+#endif
 	}
 #endif // TORRENT_USE_I2P
+
+#if TORRENT_USE_RTC
+	rtc_peer::rtc_peer(tcp::endpoint const& ep, peer_source_flags_t src)
+		: torrent_peer(0, false, src)
+		, endpoint(ep)
+	{
+		is_v6_addr = false;
+#if TORRENT_USE_I2P
+		is_i2p_addr = false;
+#endif
+		is_rtc_addr = true;
+	}
+#endif // TORRENT_USE_RTC
 
 	ipv6_peer::ipv6_peer(tcp::endpoint const& ep, bool c
 		, peer_source_flags_t const src)
@@ -252,6 +253,9 @@ namespace libtorrent {
 #if TORRENT_USE_I2P
 		is_i2p_addr = false;
 #endif
+#if TORRENT_USE_RTC
+		is_rtc_addr = false;
+#endif
 	}
 
 	ipv6_peer::ipv6_peer(ipv6_peer const&) = default;
@@ -261,7 +265,8 @@ namespace libtorrent {
 	{
 		if (is_i2p_addr)
 			return *static_cast<i2p_peer const*>(this)->destination;
-		return "";
+		else
+			return "";
 	}
 #endif
 
@@ -272,7 +277,11 @@ namespace libtorrent {
 				static_cast<ipv6_peer const*>(this)->addr);
 		else
 #if TORRENT_USE_I2P
-		if (is_i2p_addr) return libtorrent::address();
+		if (is_i2p_addr) return {};
+		else
+#endif
+#if TORRENT_USE_RTC
+		if (is_rtc_addr) return static_cast<rtc_peer const*>(this)->endpoint.address();
 		else
 #endif
 		return static_cast<ipv4_peer const*>(this)->addr;

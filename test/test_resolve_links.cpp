@@ -1,44 +1,30 @@
 /*
 
-Copyright (c) 2014, Arvid Norberg
+Copyright (c) 2018, Steven Siloti
+Copyright (c) 2015-2017, 2019-2022, Arvid Norberg
+Copyright (c) 2016, 2018, 2021, Alden Torres
+Copyright (c) 2016, Andrei Kurushin
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
+#include "test_utils.hpp"
 
 #ifndef TORRENT_DISABLE_MUTABLE_TORRENTS
 
 #include "libtorrent/torrent_info.hpp"
-#include "libtorrent/resolve_links.hpp"
+#include "libtorrent/aux_/resolve_links.hpp"
 #include "libtorrent/aux_/path.hpp" // for combine_path
 #include "libtorrent/hex.hpp" // to_hex
 #include "libtorrent/create_torrent.hpp"
+#include "libtorrent/session.hpp"
+
+#include "make_torrent.hpp"
+#include "setup_transfer.hpp" // for wait_for_seeding
+#include "settings.hpp"
 
 #include <functional>
 
@@ -107,13 +93,13 @@ TORRENT_TEST(resolve_links)
 		std::shared_ptr<torrent_info> ti2 = std::make_shared<torrent_info>(p);
 
 		std::printf("resolving\n");
-		resolve_links l(ti1);
+		aux::resolve_links l(ti1);
 		l.match(ti2, ".");
 
-		aux::vector<resolve_links::link_t, file_index_t> const& links = l.get_links();
+		aux::vector<aux::resolve_links::link_t, file_index_t> const& links = l.get_links();
 
 		auto const num_matches = std::size_t(std::count_if(links.begin(), links.end()
-			, std::bind(&resolve_links::link_t::ti, _1)));
+			, std::bind(&aux::resolve_links::link_t::ti, _1)));
 
 		// some debug output in case the test fails
 		if (num_matches > e.expected_matches)
@@ -140,36 +126,76 @@ TORRENT_TEST(resolve_links)
 // since the zero-hash piece is in the second place
 TORRENT_TEST(range_lookup_duplicated_files)
 {
-	file_storage fs1;
-	file_storage fs2;
+	std::vector<lt::create_file_entry> fs1;
+	std::vector<lt::create_file_entry> fs2;
 
-	fs1.add_file("test_resolve_links_dir/tmp1", 1024);
-	fs1.add_file("test_resolve_links_dir/tmp2", 1024);
-	fs2.add_file("test_resolve_links_dir/tmp1", 1024);
-	fs2.add_file("test_resolve_links_dir/tmp2", 1024);
+	fs1.emplace_back("test_resolve_links_dir/tmp1", 1024);
+	fs1.emplace_back("test_resolve_links_dir/tmp2", 1024);
+	fs2.emplace_back("test_resolve_links_dir/tmp1", 1024);
+	fs2.emplace_back("test_resolve_links_dir/tmp2", 1024);
 
-	lt::create_torrent t1(fs1, 1024);
-	lt::create_torrent t2(fs2, 1024);
+	lt::create_torrent t1(std::move(fs1), 1024, lt::create_torrent::v1_only);
+	lt::create_torrent t2(std::move(fs2), 1024, lt::create_torrent::v1_only);
 
-	t1.set_hash(piece_index_t{0}, sha1_hash::max());
+	t1.set_hash(0_piece, sha1_hash::max());
+	t1.set_hash(1_piece, sha1_hash::max());
+	t2.set_hash(0_piece, sha1_hash::max());
+	t2.set_hash(1_piece, sha1_hash("01234567890123456789"));
 
-	std::vector<char> tmp1;
-	std::vector<char> tmp2;
-	bencode(std::back_inserter(tmp1), t1.generate());
-	bencode(std::back_inserter(tmp2), t2.generate());
+	std::vector<char> const tmp1 = bencode(t1.generate());
+	std::vector<char> const tmp2 = bencode(t2.generate());
 	auto ti1 = std::make_shared<torrent_info>(tmp1, from_span);
 	auto ti2 = std::make_shared<torrent_info>(tmp2, from_span);
 
 	std::printf("resolving\n");
-	resolve_links l(ti1);
+	aux::resolve_links l(ti1);
 	l.match(ti2, ".");
 
-	aux::vector<resolve_links::link_t, file_index_t> const& links = l.get_links();
+	aux::vector<aux::resolve_links::link_t, file_index_t> const& links = l.get_links();
 
 	auto const num_matches = std::count_if(links.begin(), links.end()
-		, std::bind(&resolve_links::link_t::ti, _1));
+		, std::bind(&aux::resolve_links::link_t::ti, _1));
 
 	TEST_EQUAL(num_matches, 1);
+}
+
+TORRENT_TEST(pick_up_existing_file)
+{
+	lt::session ses(settings());
+
+	auto a = torrent_args()
+		.file("34092,name=cruft-1")
+		.file("31444,padfile")
+		.file("9000000,name=dupliicate-file")
+		.file("437184,padfile")
+		.file("1348,name=cruft-2")
+		.name("test-1")
+		.collection("test-collection");
+	auto atp = make_test_torrent(a);
+	generate_files(*atp.ti, ".");
+
+	atp.save_path = ".";
+	ses.add_torrent(atp);
+
+	wait_for_seeding(ses, "add-seed");
+
+	auto b = torrent_args()
+		.file("52346,name=cruft-3")
+		.file("13190,padfile")
+		.file("9000000,name=dupliicate-file-with-different-name")
+		.file("437184,padfile")
+		.file("40346,name=cruft-4")
+		.name("test-2")
+		.collection("test-collection");
+	atp = make_test_torrent(b);
+	atp.save_path = ".";
+	auto handle = ses.add_torrent(atp);
+
+	wait_for_downloading(ses, "add-downloader");
+
+	std::vector<std::int64_t> file_progress;
+	handle.file_progress(file_progress);
+	TEST_EQUAL(file_progress[2], 9000000);
 }
 
 #else

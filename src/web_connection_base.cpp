@@ -1,33 +1,14 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2010, 2013-2017, 2019-2021, Arvid Norberg
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2019-2021, Alden Torres
+Copyright (c) 2020, Paul-Louis Ageneau
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/config.hpp"
@@ -35,22 +16,22 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <limits>
 #include <cstdlib>
 
-#include "libtorrent/web_connection_base.hpp"
-#include "libtorrent/invariant_check.hpp"
-#include "libtorrent/parse_url.hpp"
+#include "libtorrent/aux_/web_connection_base.hpp"
+#include "libtorrent/aux_/invariant_check.hpp"
+#include "libtorrent/aux_/parse_url.hpp"
 #include "libtorrent/peer_info.hpp"
 
-namespace libtorrent {
+namespace libtorrent::aux {
 
 	web_connection_base::web_connection_base(
-		peer_connection_args const& pack
-		, web_seed_t const& web)
+		peer_connection_args& pack
+		, aux::web_seed_t const& web)
 		: peer_connection(pack)
 		, m_first_request(true)
 		, m_ssl(false)
 		, m_external_auth(web.auth)
 		, m_extra_headers(web.extra_headers)
-		, m_parser(http_parser::dont_parse_chunks)
+		, m_parser(aux::http_parser::dont_parse_chunks)
 		, m_body_start(0)
 	{
 		TORRENT_ASSERT(&web.peer_info == pack.peerinfo);
@@ -76,7 +57,7 @@ namespace libtorrent {
 		if (m_port == -1 && protocol == "http")
 			m_port = 80;
 
-#ifdef TORRENT_USE_OPENSSL
+#if TORRENT_USE_SSL
 		if (protocol == "https")
 		{
 			m_ssl = true;
@@ -87,8 +68,8 @@ namespace libtorrent {
 		if (!m_basic_auth.empty())
 			m_basic_auth = base64encode(m_basic_auth);
 
-		m_server_string = "URL seed @ ";
-		m_server_string += m_host;
+		m_server_string = m_host;
+		aux::verify_encoding(m_server_string);
 	}
 
 	int web_connection_base::timeout() const
@@ -114,7 +95,7 @@ namespace libtorrent {
 
 	void web_connection_base::on_connected()
 	{
-		std::shared_ptr<torrent> t = associated_torrent().lock();
+		auto t = associated_torrent().lock();
 		TORRENT_ASSERT(t);
 
 		// it is always possible to request pieces

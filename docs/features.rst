@@ -1,7 +1,3 @@
-=================
-libtorrent manual
-=================
-
 .. include:: header.rst
 
 .. contents:: Table of contents
@@ -17,11 +13,47 @@ desktops. It boasts a well documented library interface that is easy to
 use. It comes with a simple bittorrent client demonstrating the use of
 the library.
 
+BitTorrent v2 is supported as of libtorrent 2.0. This replaces the previous
+merkle hash tree extension.
+
 features
 ========
 
 libtorrent is an ongoing project under active development. Its
 current state supports and includes the following features:
+
+BitTorrent v2
+-------------
+
+Starting with version 2.0, libtorrent supports BitTorrent V2 (as specified in
+`BEP 52`_). BitTorrent V2 introduces a new format for .torrent files, which generally
+has a smaller info-dict than the original format. The .torrent files still contain
+piece hashes by default, but they can also be downloaded from peers.
+
+1. Files are organized in a directory structure, instead of listing full paths.
+   Torrents that have a lot of files in deep directory structures will use a lot
+   less space to represent that structure in a v2 torrent.
+
+2. Piece hashes are organized in a merkle hash trees per file, and only the
+   roots of the trees are included in the .torrent file. The actual hashes are
+   delivered by peers.
+
+The hash tree allows validating payload received from a peer immediately, down
+to 16 kiB blocks. In the original bittorrent protocol a whole piece would have
+to be downloaded before it could be validated against the hashes.
+
+The fact that each file has its own hash tree, and that its leaves are defined
+to be 16 kiB, means that files with identical content will always have the same
+merkle root. This enables finding matches of the same file across different
+torrents.
+
+The new format for torrent files is compatible with the original torrent file
+format, which enables *hybrid* torrents. Such torrents that can be used both as
+V1 and V2 and will have two swarms, one with V1 and V2 clients and one with only
+V2 clients.
+
+Another major feature of the BitTorrent V2 protocol is that the SHA-1 hash
+function has been replaced by SHA-256.
 
 extensions
 ----------
@@ -46,8 +78,6 @@ extensions
 * private torrents (`BEP 27`_).
 * upload-only extension (`BEP 21`_).
 * support for IPv6, including `BEP 7`_ and `BEP 24`_.
-* support for merkle hash tree torrents. This makes the size of torrent files
-  scale well with the size of the content.
 * share-mode. This is a special mode torrents can be put in to optimize share
   ratio rather than downloading the torrent.
 * supports the Magnet URI extension - Select specific file indices for
@@ -68,14 +98,10 @@ disk management
 * fast resume support, a way to avoid the costly piece check at the
   start of a resumed torrent. Saves the storage state, piece_picker state
   as well as all local peers in a fast-resume file.
-* has an adjustable read and write disk cache for improved disk throughput.
 * queues torrents for file check, instead of checking all of them in parallel.
-* does not have any requirements on the piece order in a torrent that it
   resumes. This means it can resume a torrent downloaded by any client.
 * seed mode, where the files on disk are assumed to be complete, and each
   piece's hash is verified the first time it is requested.
-* implements an ARC disk cache, tuned for performing well under bittorrent work
-  loads
 
 network
 -------
@@ -100,7 +126,7 @@ network
   want to download.
 * ip filter to disallow ip addresses and ip ranges from connecting and
   being connected.
-* NAT-PMP and UPnP support (automatic port mapping on routers that supports it)
+* NAT-PMP, PCP and UPnP support (automatic port mapping on routers that supports it)
 * implements automatic upload slots, to optimize download rate without spreading
   upload capacity too thin. The number of upload slots is adjusted based on the
   peers' download capacity to work even for connections that are orders of
@@ -108,54 +134,44 @@ network
 
 
 .. _`DHT extensions`: dht_extensions.html
-.. _`BEP 5`: https://bittorrent.org/beps/bep_0005.html
-.. _`BEP 7`: https://bittorrent.org/beps/bep_0007.html
-.. _`BEP 9`: https://bittorrent.org/beps/bep_0009.html
-.. _`BEP 10`: https://bittorrent.org/beps/bep_0010.html
-.. _`BEP 12`: https://bittorrent.org/beps/bep_0012.html
-.. _`BEP 15`: https://bittorrent.org/beps/bep_0015.html
-.. _`BEP 16`: https://bittorrent.org/beps/bep_0016.html
-.. _`BEP 17`: https://bittorrent.org/beps/bep_0017.html
-.. _`BEP 19`: https://bittorrent.org/beps/bep_0019.html
-.. _`BEP 21`: https://bittorrent.org/beps/bep_0021.html
-.. _`BEP 24`: https://bittorrent.org/beps/bep_0024.html
-.. _`BEP 27`: https://bittorrent.org/beps/bep_0027.html
-.. _`BEP 29`: https://bittorrent.org/beps/bep_0029.html
-.. _`BEP 53`: https://bittorrent.org/beps/bep_0053.html
+.. _`BEP 5`: https://www.bittorrent.org/beps/bep_0005.html
+.. _`BEP 7`: https://www.bittorrent.org/beps/bep_0007.html
+.. _`BEP 9`: https://www.bittorrent.org/beps/bep_0009.html
+.. _`BEP 10`: https://www.bittorrent.org/beps/bep_0010.html
+.. _`BEP 12`: https://www.bittorrent.org/beps/bep_0012.html
+.. _`BEP 15`: https://www.bittorrent.org/beps/bep_0015.html
+.. _`BEP 16`: https://www.bittorrent.org/beps/bep_0016.html
+.. _`BEP 17`: https://www.bittorrent.org/beps/bep_0017.html
+.. _`BEP 19`: https://www.bittorrent.org/beps/bep_0019.html
+.. _`BEP 21`: https://www.bittorrent.org/beps/bep_0021.html
+.. _`BEP 24`: https://www.bittorrent.org/beps/bep_0024.html
+.. _`BEP 27`: https://www.bittorrent.org/beps/bep_0027.html
+.. _`BEP 29`: https://www.bittorrent.org/beps/bep_0029.html
+.. _`BEP 52`: https://www.bittorrent.org/beps/bep_0052.html
+.. _`BEP 53`: https://www.bittorrent.org/beps/bep_0053.html
 .. _`extension protocol`: extension_protocol.html
 
 highlighted features
 ====================
 
-disk caching
-------------
+disk I/O
+--------
 
 All disk I/O in libtorrent is done asynchronously to the network thread, by the
-disk io threads. When a block is read, the disk io thread reads all subsequent
-blocks from that piece into the read cache, assuming that the peer requesting
-the block will also request more blocks from the same piece. This decreases the
-number of system calls for reading data. It also decreases delay from seeking.
+disk io threads. Files are mapped into memory and the kernel's page cache is
+relied on for caching disk blocks. This has the advantage that the disk cache
+size adapts to global system load and memory pressure, maximizing the cache
+without bogging down the whole system. Since memory mapped I/O is inherently
+synchronous, files can be accessed from multiple disk I/O threads.
 
-Similarly, for write requests, blocks are cached and flushed to disk once one full
-piece is complete or the piece is the least recently updated one when more cache
-space is needed. The cache dynamically allocates space between the write and read
-cache. The write cache is strictly prioritized over the read cache.
+Similarly, for write requests, blocks are queued in a store-buffer while waiting
+to be flushed to disk. Read requests that happen before a block has been
+flushed, will short circuit by picking the block from the store buffer.
 
-The cache blocks that are in used, are locked into physical memory to avoid it
-being paged out to disk. Allowing the disk cache to be paged out to disk means
-that it would become extremely inefficient to flush it, since it would have to be
-read back into physical memory only to be flushed back out to disk again.
-
-In order to conserve memory, and system calls, iovec file operations are
-used to flush multiple cache blocks in a single call.
-
-On low-memory systems, the disk cache can be disabled altogether or set to smaller
-limit, to save memory.
-
-The disk caching algorithm is configurable between *LRU* and *largest contiguous*.
-The largest contiguous algorithm is the default and flushes the largest contiguous
-block of buffers, instead of flushing all blocks belonging to the piece which was
-written to least recently.
+Memory mapped files are available on Windows and posix 64 bit systems. When
+building on other, simpler platforms, or 32 bits, a simple portable and
+single-threaded disk I/O back-end is available, using `fopen()` and `fclose()`
+family of functions.
 
 network buffers
 ---------------
@@ -171,8 +187,9 @@ cache needs to be flushed, all the blocks are passed directly to ``writev()`` to
 them in a single system call. This means a single copy into user space memory, and a single
 copy back into kernel memory, as illustrated by this figure:
 
-.. image:: write_disk_buffers.png
+.. image:: img/write_disk_buffers.png
 	:width: 100%
+	:class: bw
 
 When seeding and uploading in general, unnecessary copying is avoided by caching blocks
 in aligned buffers, that are copied once into the peer's send buffer. The peer's send buffer
@@ -181,8 +198,9 @@ then encrypted with the peer specific key and chained onto the ``iovec`` for sen
 This means there is one user space copy in order to allow unaligned peer requests and
 peer-specific encryption. This is illustrated by the following figure:
 
-.. image:: read_disk_buffers.png
+.. image:: img/read_disk_buffers.png
 	:width: 100%
+	:class: bw
 
 
 piece picker
@@ -218,73 +236,34 @@ demand. New pieces will only be downloaded once the share ratio has hit a certai
 This feature is especially useful when combined with RSS, so that a client can be set up
 to provide additional bandwidth to an entire feed.
 
-merkle hash tree torrents
--------------------------
+customizable file I/O
+---------------------
 
-.. image:: merkle_tree.png
+.. image:: img/storage.png
 	:align: right
+	:class: bw
 
-Merkle hash tree torrents is an extension that lets a torrent file only contain the
-root hash of the hash tree forming the piece hashes. The main benefit of this feature
-is that regardless of how many pieces there is in a torrent, the .torrent file will
-always be the same size. It will only grow with the number of files (since it still
-has to contain the file names).
-
-With regular torrents, clients have to request multiple blocks for pieces, typically
-from different peers, before the data can be verified against the piece hash. The
-larger the pieces are, the longer it will take to download a complete piece and verify
-it. Before the piece is verified, it cannot be shared with the swarm, which means the
-larger piece sizes, the slower turnaround data has when it is downloaded by peers.
-Since on average the data has to sit around, waiting, in client buffers before it has
-been verified and can be uploaded again.
-
-Another problem with large piece sizes is that it is harder for a client to pinpoint
-the malicious or buggy peer when a piece fails, and it will take longer to re-download
-it and take more tries before the piece succeeds the larger the pieces are.
-
-The piece size in regular torrents is a trade-off between the size of the .torrent file
-itself and the piece size. Often, for files that are 4 GB, the piece size is 2 or 4 MB,
-just to avoid making the .torrent file too big.
-
-Merkle torrents solves these problems by removing the trade-off between .torrent size and
-piece size. With merkle torrents, the piece size can be the minimum block size (16 kB),
-which lets peers verify every block of data received from peers, immediately. This
-gives a minimum turnaround time and completely removes the problem of identifying malicious
-peers.
-
-The root hash is built by hashing all the piece hashes pair-wise, until they all collapse
-down to the root.
-
-customizable file storage
--------------------------
-
-.. image:: storage.png
-	:align: right
-
-libtorrent's storage implementation is customizable. That means a special purpose bittorrent
-client can replace the default way to store files on disk.
+libtorrent's disk I/O implementation is customizable. That means a special
+purpose bittorrent client can replace the default way to store files on disk.
 
 When implementing a bittorrent cache, it doesn't matter how the data is stored on disk, as
-long as it can be retrieved and seeded. In that case a new storage class can be implemented
-(inheriting from the ``storage_interface`` class) that avoids the unnecessary step of mapping
-slots to files and offsets. The storage can ignore the file boundaries and just store the
+long as it can be retrieved and seeded. In that case a new disk I/O class can be implemented
+(inheriting from the disk_interface) that avoids the unnecessary step of mapping
+pieces to files and offsets. The storage can ignore the file boundaries and just store the
 entire torrent in a single file (which will end up being all the files concatenated). The main
 advantage of this, other than a slight CPU performance gain, is that all file operations would
 be page (and sector) aligned. This enables efficient unbuffered I/O, and can potentially
 lead to more efficient read caching (using the built in disk cache rather than relying on the
 operating system's disk cache).
 
-The storage interface supports operating systems where you can ask for sparse regions
-(such as Windows and Solaris). The advantage of this is that when checking files, the regions
-that are known to be sparse can be skipped, which can reduce the time to check a torrent
-significantly.
-
 easy to use API
 ---------------
 
 One of the design goals of the libtorrent API is to make common operations simple, but still
 have it possible to do complicated and advanced operations. This is best illustrated by example
-code to implement a simple bittorrent client::
+code to implement a simple bittorrent client:
+
+.. code:: c++
 
 	#include <iostream>
 	#include "libtorrent/session.hpp"
@@ -295,8 +274,8 @@ code to implement a simple bittorrent client::
 		lt::session s;
 		lt::add_torrent_params p;
 		p.save_path = "./";
-		p.ti = new torrent_info(argv[1]);
-		s.add_torrent(p);
+		p.ti = std::make_shared<torrent_info>(argv[1]);
+		lt::torrent_handle h = s.add_torrent(p);
 
 		// wait for the user to end
 		char a;
@@ -310,27 +289,35 @@ code to implement a simple bittorrent client::
 		return 1;
 	}
 
-This client doesn't give the user any status information or progress about the torrent, but
-it is fully functional.
+This client doesn't give the user any status information or progress about the
+torrent, but it is fully functional.
 
-libtorrent also comes with python bindings for easy access for python developers.
+libtorrent also comes with `python bindings`_.
+
+.. _`python bindings`: python_binding.html
 
 
 portability
 ===========
 
-libtorrent runs on most major operating systems, including Windows,
-macOS, Linux, BSD and Solaris.
+libtorrent runs on most major operating systems including:
+
+* Windows
+* macOS
+* Linux
+* BSD
+* Solaris
+
 It uses Boost.Asio, Boost.Optional, Boost.System, Boost.Multiprecision,
-Boost.Intrusive, Boost.Pool, Boost.Python (for bindings), Boost.CRC and various
-other boost libraries. At least version 1.49 of boost is required.
+Boost.Pool, Boost.Python (for bindings), Boost.CRC and various
+other boost libraries. At least version 1.70 of boost is required.
 
 Since libtorrent uses Boost.Asio it will take full advantage of high performance
 network APIs on the most popular platforms. I/O completion ports on windows,
 epoll on Linux and kqueue on macOS and BSD.
 
-libtorrent does not build with the following compilers:
+libtorrent requires a C++11 compiler and does not build with the following compilers:
 
-* GCC 2.95.4
-* Visual Studio 6, 7.0, 7.1
+* GCC older than 5.4
+* Visual Studio older than Visual Studio 15 2017 (aka msvc-14.1)
 

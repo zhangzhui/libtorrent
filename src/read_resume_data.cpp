@@ -1,41 +1,23 @@
 /*
 
-Copyright (c) 2015, Arvid Norberg
+Copyright (c) 2015-2021, Arvid Norberg
+Copyright (c) 2016-2018, 2020-2021, Alden Torres
+Copyright (c) 2017, Pavel Pimenov
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2020, 2022, Vladimir Golovnev (glassez)
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include <cstdint>
+#include <algorithm>
 
 #include "libtorrent/bdecode.hpp"
 #include "libtorrent/read_resume_data.hpp"
 #include "libtorrent/add_torrent_params.hpp"
-#include "libtorrent/socket_io.hpp" // for read_*_endpoint()
+#include "libtorrent/aux_/socket_io.hpp" // for read_*_endpoint()
 #include "libtorrent/hasher.hpp"
 #include "libtorrent/torrent_info.hpp"
 #include "libtorrent/aux_/numeric_cast.hpp"
@@ -50,7 +32,7 @@ namespace {
 		, char const* name
 		, torrent_flags_t const flag)
 	{
-		if (n.dict_find_int_value(name, 0) == 0)
+		if (n.dict_find_int_value(name, (flag & torrent_flags::default_flags) ? 1 : 0) == 0)
 		{
 			current_flags &= ~flag;
 		}
@@ -62,7 +44,8 @@ namespace {
 
 } // anonyous namespace
 
-	add_torrent_params read_resume_data(bdecode_node const& rd, error_code& ec)
+	add_torrent_params read_resume_data(bdecode_node const& rd, error_code& ec
+		, int const piece_limit)
 	{
 		add_torrent_params ret;
 		if (rd.type() != bdecode_node::dict_t)
@@ -85,35 +68,127 @@ namespace {
 			return ret;
 		}
 
+		std::int64_t const file_version = rd.dict_find_int_value("file-version", 1);
+
+		if (file_version != 1 && file_version != 2)
+		{
+			ec = errors::invalid_file_tag;
+			return ret;
+		}
+
 		auto info_hash = rd.dict_find_string_value("info-hash");
-		if (info_hash.size() != static_cast<std::size_t>(sha1_hash::size()))
+		auto info_hash2 = rd.dict_find_string_value("info-hash2");
+		if (info_hash.size() != std::size_t(sha1_hash::size())
+			&& info_hash2.size() != std::size_t(sha256_hash::size()))
 		{
 			ec = errors::missing_info_hash;
 			return ret;
 		}
 
-		ret.name = rd.dict_find_string_value("name").to_string();
+		ret.name = rd.dict_find_string_value("name");
 
-		ret.info_hash.assign(info_hash.data());
+		if (info_hash.size() == 20)
+			ret.info_hashes.v1.assign(info_hash.data());
+		if (info_hash2.size() == 32)
+			ret.info_hashes.v2.assign(info_hash2.data());
 
 		bdecode_node const info = rd.dict_find_dict("info");
 		if (info)
 		{
 			// verify the info-hash of the metadata stored in the resume file matches
 			// the torrent we're loading
-			sha1_hash const resume_ih = hasher(info.data_section()).final();
+			info_hash_t const resume_ih(hasher(info.data_section()).final()
+				, hasher256(info.data_section()).final());
 
 			// if url is set, the info_hash is not actually the info-hash of the
 			// torrent, but the hash of the URL, until we have the full torrent
 			// only require the info-hash to match if we actually passed in one
-			if (resume_ih == ret.info_hash)
+			if ((!ret.info_hashes.has_v1() || resume_ih.v1 == ret.info_hashes.v1)
+				&& (!ret.info_hashes.has_v2() || resume_ih.v2 == ret.info_hashes.v2))
 			{
-				ret.ti = std::make_shared<torrent_info>(resume_ih);
+				auto ti = std::make_shared<torrent_info>(resume_ih);
 
 				error_code err;
-				if (!ret.ti->parse_info_section(info, err))
+				if (!ti->parse_info_section(info, err, piece_limit))
 				{
 					ec = err;
+				}
+				else
+				{
+					// time_t might be 32 bit if we're unlucky, but there isn't
+					// much to do about it
+					ti->internal_set_creation_date(static_cast<std::time_t>(
+						rd.dict_find_int_value("creation date", 0)));
+					ti->internal_set_creator(rd.dict_find_string_value("created by", ""));
+					ti->internal_set_comment(rd.dict_find_string_value("comment", ""));
+				}
+				ret.ti = std::move(ti);
+			}
+			else
+			{
+				ec = errors::mismatching_info_hash;
+			}
+		}
+
+#if TORRENT_ABI_VERSION < 3
+		ret.info_hash = ret.info_hashes.get_best();
+#endif
+
+		bdecode_node const trees = rd.dict_find_list("trees");
+		if (trees)
+		{
+			ret.merkle_trees.reserve(trees.list_size());
+			ret.verified_leaf_hashes.reserve(trees.list_size());
+			for (int i = 0; i < trees.list_size(); ++i)
+			{
+				auto de = trees.list_at(i);
+				if (de.type() != bdecode_node::dict_t)
+					break;
+				auto dh = de.dict_find_string("hashes");
+				if (!dh || dh.string_length() % 32 != 0) break;
+
+				ret.merkle_trees.emplace_back();
+				ret.merkle_trees.back().reserve(dh.string_value().size() / 32);
+				for (auto hashes = dh.string_value();
+					!hashes.empty(); hashes = hashes.substr(32))
+				{
+					ret.merkle_trees.back().emplace_back(hashes);
+				}
+
+				if (bdecode_node const verified = de.dict_find_string("verified"))
+				{
+					string_view const str = verified.string_value();
+					if (file_version == 1)
+					{
+						ret.verified_leaf_hashes.emplace_back(int(str.size()));
+						for (std::size_t j = 0; j < str.size(); ++j)
+						{
+							if (str[j] == '1')
+								ret.verified_leaf_hashes.back().set_bit(int(j));
+						}
+					}
+					else
+					{
+						ret.verified_leaf_hashes.emplace_back(str.data(), int(str.size()) * 8);
+					}
+				}
+
+				if (bdecode_node const mask = de.dict_find_string("mask"))
+				{
+					string_view const str = mask.string_value();
+					if (file_version == 1)
+					{
+						ret.merkle_tree_mask.emplace_back(int(str.size()));
+						for (std::size_t j = 0; j < str.size(); ++j)
+						{
+							if (str[j] == '1')
+								ret.merkle_tree_mask.back().set_bit(int(j));
+						}
+					}
+					else
+					{
+						ret.merkle_tree_mask.emplace_back(str.data(), int(str.size()) * 8);
+					}
 				}
 			}
 		}
@@ -141,19 +216,32 @@ namespace {
 		ret.upload_limit = int(rd.dict_find_int_value("upload_rate_limit", -1));
 		ret.download_limit = int(rd.dict_find_int_value("download_rate_limit", -1));
 
-		// torrent state
+		// torrent flags
 		apply_flag(ret.flags, rd, "seed_mode", torrent_flags::seed_mode);
-		apply_flag(ret.flags, rd, "super_seeding", torrent_flags::super_seeding);
-		apply_flag(ret.flags, rd, "auto_managed", torrent_flags::auto_managed);
-		apply_flag(ret.flags, rd, "sequential_download", torrent_flags::sequential_download);
+		apply_flag(ret.flags, rd, "upload_mode", torrent_flags::upload_mode);
+#ifndef TORRENT_DISABLE_SHARE_MODE
+		apply_flag(ret.flags, rd, "share_mode", torrent_flags::share_mode);
+#endif
+		apply_flag(ret.flags, rd, "apply_ip_filter", torrent_flags::apply_ip_filter);
 		apply_flag(ret.flags, rd, "paused", torrent_flags::paused);
+		apply_flag(ret.flags, rd, "auto_managed", torrent_flags::auto_managed);
+#ifndef TORRENT_DISABLE_SUPERSEEDING
+		apply_flag(ret.flags, rd, "super_seeding", torrent_flags::super_seeding);
+#endif
+#if TORRENT_USE_I2P
+		apply_flag(ret.flags, rd, "i2p", torrent_flags::i2p_torrent);
+#endif
+		apply_flag(ret.flags, rd, "sequential_download", torrent_flags::sequential_download);
+		apply_flag(ret.flags, rd, "stop_when_ready", torrent_flags::stop_when_ready);
+		apply_flag(ret.flags, rd, "disable_dht", torrent_flags::disable_dht);
+		apply_flag(ret.flags, rd, "disable_lsd", torrent_flags::disable_lsd);
+		apply_flag(ret.flags, rd, "disable_pex", torrent_flags::disable_pex);
 
-		ret.save_path = rd.dict_find_string_value("save_path").to_string();
+		ret.save_path = rd.dict_find_string_value("save_path");
 
 #if TORRENT_ABI_VERSION == 1
 		// deprecated in 1.2
-		ret.url = rd.dict_find_string_value("url").to_string();
-		ret.uuid = rd.dict_find_string_value("uuid").to_string();
+		ret.url = rd.dict_find_string_value("url");
 #endif
 
 		bdecode_node const mapped_files = rd.dict_find_list("mapped_files");
@@ -163,7 +251,7 @@ namespace {
 			{
 				auto new_filename = mapped_files.list_string_value_at(i);
 				if (new_filename.empty()) continue;
-				ret.renamed_files[file_index_t(i)] = new_filename.to_string();
+				ret.renamed_files[file_index_t(i)] = new_filename;
 			}
 		}
 
@@ -180,8 +268,8 @@ namespace {
 				, default_priority);
 			for (int i = 0; i < num_files; ++i)
 			{
-				std::size_t const idx = std::size_t(i);
-				ret.file_priorities[idx] = aux::clamp(
+				auto const idx = static_cast<std::size_t>(i);
+				ret.file_priorities[idx] = std::clamp(
 					download_priority_t(static_cast<std::uint8_t>(
 						file_priority.list_int_value_at(i
 							, static_cast<std::uint8_t>(default_priority))))
@@ -201,7 +289,7 @@ namespace {
 			// resume data with an empty trackers list. Since we found a trackers
 			// list here, these should replace whatever we find in the .torrent
 			// file.
-			ret.flags |= torrent_flags::override_trackers;
+			ret.flags |= torrent_flags::deprecated_override_trackers;
 
 			int tier = 0;
 			for (int i = 0; i < trackers.list_size(); ++i)
@@ -212,8 +300,11 @@ namespace {
 
 				for (int j = 0; j < tier_list.list_size(); ++j)
 				{
-					ret.trackers.push_back(tier_list.list_string_value_at(j).to_string());
+					ret.trackers.emplace_back(tier_list.list_string_value_at(j));
 					ret.tracker_tiers.push_back(tier);
+#if TORRENT_USE_I2P
+					if (aux::is_i2p_url(ret.trackers.back())) ret.flags |= torrent_flags::i2p_torrent;
+#endif
 				}
 				++tier;
 			}
@@ -224,59 +315,59 @@ namespace {
 		// the resume file to take precedence. If there aren't even any fields in
 		// the resume data though, keep the ones from the torrent
 		bdecode_node const url_list = rd.dict_find_list("url-list");
-		bdecode_node const httpseeds = rd.dict_find_list("httpseeds");
-		if (url_list || httpseeds)
+		if (url_list)
 		{
 			// since we found http seeds in the resume data, they should replace
 			// whatever web seeds are specified in the .torrent, by default
-			ret.flags |= torrent_flags::override_web_seeds;
-		}
-
-		if (url_list)
-		{
+			ret.flags |= torrent_flags::deprecated_override_web_seeds;
 			for (int i = 0; i < url_list.list_size(); ++i)
 			{
 				auto url = url_list.list_string_value_at(i);
 				if (url.empty()) continue;
-				ret.url_seeds.push_back(url.to_string());
+				ret.url_seeds.emplace_back(url);
 			}
-		}
-
-		if (httpseeds)
-		{
-			for (int i = 0; i < httpseeds.list_size(); ++i)
-			{
-				auto url = httpseeds.list_string_value_at(i);
-				if (url.empty()) continue;
-				ret.http_seeds.push_back(url.to_string());
-			}
-		}
-
-		bdecode_node const mt = rd.dict_find_string("merkle tree");
-		if (mt && mt.string_length() >= int(sha1_hash::size()))
-		{
-			ret.merkle_tree.resize(aux::numeric_cast<std::size_t>(mt.string_length()) / sha1_hash::size());
-			std::memcpy(ret.merkle_tree.data(), mt.string_ptr()
-				, ret.merkle_tree.size() * sha1_hash::size());
 		}
 
 		// some sanity checking. Maybe we shouldn't be in seed mode anymore
 		if (bdecode_node const pieces = rd.dict_find_string("pieces"))
 		{
-			char const* pieces_str = pieces.string_ptr();
-			int const pieces_len = pieces.string_length();
-			ret.have_pieces.resize(pieces_len);
-			ret.verified_pieces.resize(pieces_len);
-			for (piece_index_t i(0); i < ret.verified_pieces.end_index(); ++i)
+			if (file_version == 1)
 			{
-				// being in seed mode and missing a piece is not compatible.
-				// Leave seed mode if that happens
-				if (pieces_str[static_cast<int>(i)] & 1) ret.have_pieces.set_bit(i);
-				else ret.have_pieces.clear_bit(i);
+				char const* pieces_str = pieces.string_ptr();
+				int const pieces_len = pieces.string_length();
+				ret.have_pieces.resize(pieces_len);
+				ret.verified_pieces.resize(pieces_len);
+				bool any_verified = false;
+				for (piece_index_t i(0); i < ret.verified_pieces.end_index(); ++i)
+				{
+					// being in seed mode and missing a piece is not compatible.
+					// Leave seed mode if that happens
+					if (pieces_str[static_cast<int>(i)] & 1) ret.have_pieces.set_bit(i);
+					else ret.have_pieces.clear_bit(i);
 
-				if (pieces_str[static_cast<int>(i)] & 2) ret.verified_pieces.set_bit(i);
-				else ret.verified_pieces.clear_bit(i);
+					if (pieces_str[static_cast<int>(i)] & 2)
+					{
+						ret.verified_pieces.set_bit(i);
+						any_verified = true;
+					}
+					else
+					{
+						ret.verified_pieces.clear_bit(i);
+					}
+				}
+				if (!any_verified) ret.verified_pieces.clear();
 			}
+			else if (file_version == 2)
+			{
+				string_view const str = pieces.string_value();
+				ret.have_pieces.assign(str.data(), int(str.size()) * 8);
+			}
+		}
+
+		if (bdecode_node const verified = rd.dict_find_string("verified"))
+		{
+			string_view const str = verified.string_value();
+			ret.verified_pieces.assign(str.data(), int(str.size()) * 8);
 		}
 
 		if (bdecode_node const piece_priority = rd.dict_find_string("piece_priority"))
@@ -285,7 +376,7 @@ namespace {
 			ret.piece_priorities.resize(aux::numeric_cast<std::size_t>(piece_priority.string_length()));
 			for (std::size_t i = 0; i < ret.piece_priorities.size(); ++i)
 			{
-				ret.piece_priorities[i] = download_priority_t(aux::clamp(
+				ret.piece_priorities[i] = download_priority_t(std::clamp(
 					static_cast<std::uint8_t>(prio_str[i])
 					, static_cast<std::uint8_t>(dont_download)
 					, static_cast<std::uint8_t>(top_priority)));
@@ -294,7 +385,7 @@ namespace {
 
 		int const v6_size = 18;
 		int const v4_size = 6;
-		using namespace libtorrent::detail; // for read_*_endpoint()
+		using namespace libtorrent::aux; // for read_*_endpoint()
 		if (bdecode_node const peers_entry = rd.dict_find_string("peers"))
 		{
 			char const* ptr = peers_entry.string_ptr();
@@ -347,29 +438,35 @@ namespace {
 		return ret;
 	}
 
-	add_torrent_params read_resume_data(span<char const> buffer, error_code& ec)
+	add_torrent_params read_resume_data(span<char const> buffer, error_code& ec
+		, load_torrent_limits const& cfg)
 	{
-		bdecode_node rd = bdecode(buffer, ec);
+		int pos;
+		bdecode_node rd = bdecode(buffer, ec, &pos, cfg.max_decode_depth
+			, cfg.max_decode_tokens);
 		if (ec) return add_torrent_params();
 
-		return read_resume_data(rd, ec);
+		return read_resume_data(rd, ec, cfg.max_pieces);
 	}
 
-	add_torrent_params read_resume_data(bdecode_node const& rd)
+	add_torrent_params read_resume_data(bdecode_node const& rd, int const piece_limit)
 	{
 		error_code ec;
-		auto ret = read_resume_data(rd, ec);
+		auto ret = read_resume_data(rd, ec, piece_limit);
 		if (ec) throw system_error(ec);
 		return ret;
 	}
 
-	add_torrent_params read_resume_data(span<char const> buffer)
+	add_torrent_params read_resume_data(span<char const> buffer
+		, load_torrent_limits const& cfg)
 	{
+		int pos;
 		error_code ec;
-		bdecode_node rd = bdecode(buffer, ec);
+		bdecode_node rd = bdecode(buffer, ec, &pos, cfg.max_decode_depth
+			, cfg.max_decode_tokens);
 		if (ec) throw system_error(ec);
 
-		auto ret = read_resume_data(rd, ec);
+		auto ret = read_resume_data(rd, ec, cfg.max_pieces);
 		if (ec) throw system_error(ec);
 		return ret;
 	}

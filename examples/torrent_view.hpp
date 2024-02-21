@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2003-2017, Arvid Norberg
+Copyright (c) 2014-2015, 2017-2020, Arvid Norberg
+Copyright (c) 2016, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_VIEW_HPP_
@@ -47,6 +25,7 @@ struct torrent_view
 
 	void set_size(int width, int height);
 
+	// torrent filter
 	enum {
 		torrents_all,
 		torrents_downloading,
@@ -59,9 +38,18 @@ struct torrent_view
 		torrents_max
 	};
 
-	int filter() const;
+	// sort order
+	enum order: std::uint8_t {
+		queue,
+		name,
+		size,
+	};
 
+	int filter() const;
 	void set_filter(int filter);
+
+	int sort_order() const;
+	void set_sort_order(int);
 
 	// returns the lt::torrent_status of the currently selected torrent.
 	lt::torrent_status const& get_active_torrent() const;
@@ -71,6 +59,7 @@ struct torrent_view
 	void update_torrents(std::vector<lt::torrent_status> st);
 	int num_visible_torrents() const { return int(m_filtered_handles.size()); }
 
+	void for_each_torrent(std::function<void(lt::torrent_status const&)> f);
 	int height() const;
 
 	void arrow_up();
@@ -94,17 +83,21 @@ private:
 	// visible or filtered
 	void update_filtered_torrents();
 
+	// re-sorts m_filtered_handles based on m_sort_order
+	void update_sort_order();
+
 	// all torrents
 	std::unordered_map<lt::torrent_handle, lt::torrent_status> m_all_handles;
 
 	// pointers into m_all_handles of the remaining torrents after filtering
 	std::vector<lt::torrent_status const*> m_filtered_handles;
 
-	mutable int m_active_torrent; // index into m_filtered_handles
-	int m_scroll_position;
-	int m_torrent_filter;
-	int m_width;
-	int m_height;
+	mutable int m_active_torrent = 0; // index into m_filtered_handles
+	int m_scroll_position = 0;
+	int m_torrent_filter = 0;
+	order m_sort_order = order::queue;
+	int m_width = 80;
+	int m_height = 30;
 };
 
 #endif // TORRENT_VIEW_HPP_

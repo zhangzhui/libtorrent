@@ -1,41 +1,25 @@
 /*
 
-Copyright (c) 2012, Arvid Norberg
+Copyright (c) 2012-2022, Arvid Norberg
+Copyright (c) 2016, 2018, 2020-2021, Alden Torres
+Copyright (c) 2017, Andrei Kurushin
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2018, d-komarov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
-#include "libtorrent/file.hpp"
+#include "libtorrent/aux_/file.hpp"
+#include "libtorrent/aux_/directory.hpp"
 #include "libtorrent/aux_/path.hpp"
 #include "libtorrent/aux_/numeric_cast.hpp"
-#include "libtorrent/string_util.hpp" // for split_string
 #include "libtorrent/string_view.hpp"
+#include "libtorrent/aux_/file_view_pool.hpp"
+#include "libtorrent/aux_/numeric_cast.hpp"
 #include "test.hpp"
+#include "test_utils.hpp"
 #include <vector>
 #include <set>
 #include <thread>
@@ -45,26 +29,14 @@ using namespace lt;
 
 namespace {
 
-int touch_file(std::string const& filename, int size)
+void touch_file(std::string const& filename, int size)
 {
-	using namespace lt;
-
 	std::vector<char> v;
 	v.resize(aux::numeric_cast<std::size_t>(size));
 	for (int i = 0; i < size; ++i)
 		v[std::size_t(i)] = char(i & 255);
 
-	file f;
-	error_code ec;
-	if (!f.open(filename, aux::open_mode::write, ec)) return -1;
-	TEST_EQUAL(ec, error_code());
-	if (ec) return -1;
-	iovec_t b = {v};
-	std::int64_t written = f.writev(0, b, ec);
-	if (written != int(v.size())) return -3;
-	if (ec) return -3;
-	TEST_EQUAL(ec, error_code());
-	return 0;
+	ofstream(filename.c_str()).write(v.data(), lt::aux::numeric_cast<std::streamsize>(v.size()));
 }
 
 } // anonymous namespace
@@ -134,7 +106,7 @@ TORRENT_TEST(directory)
 	touch_file(combine_path("file_test_dir", "ghi"), 1000);
 
 	std::set<std::string> files;
-	for (directory i("file_test_dir", ec); !i.done(); i.next(ec))
+	for (aux::directory i("file_test_dir", ec); !i.done(); i.next(ec))
 	{
 		std::string f = i.file();
 		TEST_CHECK(files.count(f) == 0);
@@ -149,19 +121,7 @@ TORRENT_TEST(directory)
 	TEST_CHECK(files.count(".") == 1);
 	files.clear();
 
-	recursive_copy("file_test_dir", "file_test_dir2", ec);
-
-	for (directory i("file_test_dir2", ec); !i.done(); i.next(ec))
-	{
-		std::string f = i.file();
-		TEST_CHECK(files.count(f) == 0);
-		files.insert(f);
-		std::printf(" %s\n", f.c_str());
-	}
-
 	remove_all("file_test_dir", ec);
-	if (ec) std::printf("remove_all: %s\n", ec.message().c_str());
-	remove_all("file_test_dir2", ec);
 	if (ec) std::printf("remove_all: %s\n", ec.message().c_str());
 }
 
@@ -189,11 +149,6 @@ TORRENT_TEST(paths)
 	TEST_EQUAL(remove_extension("blah.foo.bar"), "blah.foo");
 	TEST_EQUAL(remove_extension("blah.foo."), "blah.foo");
 
-	TEST_EQUAL(filename("blah"), "blah");
-	TEST_EQUAL(filename("/blah/foo/bar"), "bar");
-	TEST_EQUAL(filename("/blah/foo/bar/"), "bar");
-	TEST_EQUAL(filename("blah/"), "blah");
-
 #ifdef TORRENT_WINDOWS
 	TEST_EQUAL(is_root_path("c:\\blah"), false);
 	TEST_EQUAL(is_root_path("c:\\"), true);
@@ -209,27 +164,27 @@ TORRENT_TEST(paths)
 #endif
 
 #ifdef TORRENT_WINDOWS
-	TEST_CHECK(compare_path("c:\\blah\\", "c:\\blah"));
-	TEST_CHECK(compare_path("c:\\blah", "c:\\blah"));
-	TEST_CHECK(compare_path("c:\\blah/", "c:\\blah"));
-	TEST_CHECK(compare_path("c:\\blah", "c:\\blah\\"));
-	TEST_CHECK(compare_path("c:\\blah", "c:\\blah"));
-	TEST_CHECK(compare_path("c:\\blah", "c:\\blah/"));
+	TEST_CHECK(path_equal("c:\\blah\\", "c:\\blah"));
+	TEST_CHECK(path_equal("c:\\blah", "c:\\blah"));
+	TEST_CHECK(path_equal("c:\\blah/", "c:\\blah"));
+	TEST_CHECK(path_equal("c:\\blah", "c:\\blah\\"));
+	TEST_CHECK(path_equal("c:\\blah", "c:\\blah"));
+	TEST_CHECK(path_equal("c:\\blah", "c:\\blah/"));
 
-	TEST_CHECK(!compare_path("c:\\bla", "c:\\blah/"));
-	TEST_CHECK(!compare_path("c:\\bla", "c:\\blah"));
-	TEST_CHECK(!compare_path("c:\\blah", "c:\\bla"));
-	TEST_CHECK(!compare_path("c:\\blah\\sdf", "c:\\blah"));
+	TEST_CHECK(!path_equal("c:\\bla", "c:\\blah/"));
+	TEST_CHECK(!path_equal("c:\\bla", "c:\\blah"));
+	TEST_CHECK(!path_equal("c:\\blah", "c:\\bla"));
+	TEST_CHECK(!path_equal("c:\\blah\\sdf", "c:\\blah"));
 #else
-	TEST_CHECK(compare_path("/blah", "/blah"));
-	TEST_CHECK(compare_path("/blah/", "/blah"));
-	TEST_CHECK(compare_path("/blah", "/blah"));
-	TEST_CHECK(compare_path("/blah", "/blah/"));
+	TEST_CHECK(path_equal("/blah", "/blah"));
+	TEST_CHECK(path_equal("/blah/", "/blah"));
+	TEST_CHECK(path_equal("/blah", "/blah"));
+	TEST_CHECK(path_equal("/blah", "/blah/"));
 
-	TEST_CHECK(!compare_path("/bla", "/blah/"));
-	TEST_CHECK(!compare_path("/bla", "/blah"));
-	TEST_CHECK(!compare_path("/blah", "/bla"));
-	TEST_CHECK(!compare_path("/blah/sdf", "/blah"));
+	TEST_CHECK(!path_equal("/bla", "/blah/"));
+	TEST_CHECK(!path_equal("/bla", "/blah"));
+	TEST_CHECK(!path_equal("/blah", "/bla"));
+	TEST_CHECK(!path_equal("/blah/sdf", "/blah"));
 #endif
 
 	// if has_parent_path() returns false
@@ -273,92 +228,121 @@ TORRENT_TEST(paths)
 #endif
 
 	TEST_EQUAL(complete("."), current_working_directory());
-}
 
-// test split_string
-TORRENT_TEST(split_string)
-{
-	char const* tags[10];
-	char tags_str[] = "  this  is\ta test\t string\x01to be split  and it cannot "
-		"extend over the limit of elements \t";
-	int ret = split_string(tags, 10, tags_str);
-
-	TEST_CHECK(ret == 10);
-	TEST_CHECK(tags[0] == "this"_sv);
-	TEST_CHECK(tags[1] == "is"_sv);
-	TEST_CHECK(tags[2] == "a"_sv);
-	TEST_CHECK(tags[3] == "test"_sv);
-	TEST_CHECK(tags[4] == "string"_sv);
-	TEST_CHECK(tags[5] == "to"_sv);
-	TEST_CHECK(tags[6] == "be"_sv);
-	TEST_CHECK(tags[7] == "split"_sv);
-	TEST_CHECK(tags[8] == "and"_sv);
-	TEST_CHECK(tags[9] == "it"_sv);
-
-	// replace_extension
-	std::string test = "foo.bar";
-	replace_extension(test, "txt");
-	TEST_EQUAL(test, "foo.txt");
-
-	test = "_";
-	replace_extension(test, "txt");
-	TEST_EQUAL(test, "_.txt");
-
-	test = "1.2.3/_";
-	replace_extension(test, "txt");
-	TEST_EQUAL(test, "1.2.3/_.txt");
-}
-
-// file class
-TORRENT_TEST(file)
-{
-	error_code ec;
-	file f;
-#if TORRENT_USE_UNC_PATHS || !defined _WIN32
-	std::string const test_file_name = "con";
+#ifdef TORRENT_WINDOWS
+	TEST_EQUAL(complete(".\\foobar"), current_working_directory() + "\\foobar");
 #else
-	std::string const test_file_name = "test_file";
+	TEST_EQUAL(complete("./foobar"), current_working_directory() + "/foobar");
 #endif
-	TEST_CHECK(f.open(test_file_name, aux::open_mode::write, ec));
-	if (ec)
-		std::printf("open failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
-	TEST_EQUAL(ec, error_code());
-	if (ec) std::printf("%s\n", ec.message().c_str());
-	char test[] = "test";
-	int const test_word_size = int(sizeof(test)) - 1;
-	iovec_t b = {test, test_word_size};
-	TEST_EQUAL(f.writev(0, b, ec), test_word_size);
-	if (ec)
-		std::printf("writev failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
-	TEST_CHECK(!ec);
-	char test_buf[test_word_size + 1] = {0};
-	b = { test_buf, test_word_size };
-	TEST_EQUAL(f.readv(0, b, ec), test_word_size);
-	if (ec)
-		std::printf("readv failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
-	TEST_EQUAL(ec, error_code());
-	TEST_CHECK(test_buf == "test"_sv);
-	f.close();
+}
 
-	TEST_CHECK(f.open(test_file_name, aux::open_mode::read_only, ec));
-	if (ec)
-		std::printf("open failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
-	TEST_EQUAL(ec, error_code());
-	if (ec) std::printf("%s\n", ec.message().c_str());
+TORRENT_TEST(path_compare)
+{
+	TEST_EQUAL(path_compare("a/b/c", "x", "a/b/c", "x"), 0);
 
-	char test_buf2[test_word_size + 1] = {0};
-	std::memset(test_buf, 0, sizeof(test_buf));
-	iovec_t two_buffers[2] {
-			{test_buf, test_word_size},
-			{test_buf2, test_word_size}
-	};
+	// the path and filenames are implicitly concatenated when compared
+	TEST_CHECK(path_compare("a/b/", "a", "a/b/c", "a") < 0);
+	TEST_CHECK(path_compare("a/b/c", "a", "a/b/", "a") > 0);
 
-	TEST_EQUAL(f.readv(0, two_buffers, ec), test_word_size);
-	if (ec)
-		std::printf("readv failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
-	TEST_EQUAL(ec, error_code());
-	TEST_CHECK(test_buf == "test"_sv);
-	f.close();
+	// if one path is shorter and a substring of the other, they are considered
+	// equal. This case is invalid for the purposes of sorting files in v2
+	// torrents and will fail anyway
+	TEST_EQUAL(path_compare("a/b/", "c", "a/b/c", "a"), 0);
+	TEST_EQUAL(path_compare("a/b/c", "a", "a/b", "c"), 0);
+
+	TEST_CHECK(path_compare("foo/b/c", "x", "a/b/c", "x") > 0);
+	TEST_CHECK(path_compare("a/b/c", "x", "foo/b/c", "x") < 0);
+	TEST_CHECK(path_compare("aaa/b/c", "x", "a/b/c", "x") > 0);
+	TEST_CHECK(path_compare("a/b/c", "x", "aaa/b/c", "x") < 0);
+	TEST_CHECK(path_compare("a/b/c/2", "x", "a/b/c/1", "x") > 0);
+	TEST_CHECK(path_compare("a/b/c/1", "x", "a/b/c/2", "x") < 0);
+	TEST_CHECK(path_compare("a/1/c", "x", "a/2/c", "x") < 0);
+	TEST_CHECK(path_compare("a/a/c", "x", "a/aa/c", "x") < 0);
+	TEST_CHECK(path_compare("a/aa/c", "x", "a/a/c", "x") > 0);
+}
+
+TORRENT_TEST(filename)
+{
+#ifdef TORRENT_WINDOWS
+	TEST_EQUAL(filename("blah"), "blah");
+	TEST_EQUAL(filename("\\blah\\foo\\bar"), "bar");
+	TEST_EQUAL(filename("\\blah\\foo\\bar\\"), "bar");
+	TEST_EQUAL(filename("blah\\"), "blah");
+#endif
+	TEST_EQUAL(filename("blah"), "blah");
+	TEST_EQUAL(filename("/blah/foo/bar"), "bar");
+	TEST_EQUAL(filename("/blah/foo/bar/"), "bar");
+	TEST_EQUAL(filename("blah/"), "blah");
+}
+
+TORRENT_TEST(split_path)
+{
+	using r = std::pair<string_view, string_view>;
+
+#ifdef TORRENT_WINDOWS
+	TEST_CHECK(lsplit_path("\\b\\c\\d") == r("b", "c\\d"));
+	TEST_CHECK(lsplit_path("a\\b\\c\\d") == r("a", "b\\c\\d"));
+	TEST_CHECK(lsplit_path("a") == r("a", ""));
+	TEST_CHECK(lsplit_path("") == r("", ""));
+
+	TEST_CHECK(lsplit_path("a\\b/c\\d") == r("a", "b/c\\d"));
+	TEST_CHECK(lsplit_path("a/b\\c\\d") == r("a", "b\\c\\d"));
+
+	TEST_CHECK(rsplit_path("a\\b\\c\\d\\") == r("a\\b\\c", "d"));
+	TEST_CHECK(rsplit_path("\\a\\b\\c\\d") == r("\\a\\b\\c", "d"));
+	TEST_CHECK(rsplit_path("\\a") == r("", "a"));
+	TEST_CHECK(rsplit_path("a") == r("", "a"));
+	TEST_CHECK(rsplit_path("") == r("", ""));
+
+	TEST_CHECK(rsplit_path("a\\b/c\\d\\") == r("a\\b/c", "d"));
+	TEST_CHECK(rsplit_path("a\\b\\c/d\\") == r("a\\b\\c", "d"));
+#endif
+	TEST_CHECK(lsplit_path("/b/c/d") == r("b", "c/d"));
+	TEST_CHECK(lsplit_path("a/b/c/d") == r("a", "b/c/d"));
+	TEST_CHECK(lsplit_path("a") == r("a", ""));
+	TEST_CHECK(lsplit_path("") == r("", ""));
+
+	TEST_CHECK(rsplit_path("a/b/c/d/") == r("a/b/c", "d"));
+	TEST_CHECK(rsplit_path("/a/b/c/d") == r("/a/b/c", "d"));
+	TEST_CHECK(rsplit_path("/a") == r("", "a"));
+	TEST_CHECK(rsplit_path("a") == r("", "a"));
+	TEST_CHECK(rsplit_path("") == r("", ""));
+}
+
+TORRENT_TEST(split_path_pos)
+{
+	using r = std::pair<string_view, string_view>;
+
+#ifdef TORRENT_WINDOWS
+	TEST_CHECK(lsplit_path("\\b\\c\\d", 0) == r("b", "c\\d"));
+	TEST_CHECK(lsplit_path("\\b\\c\\d", 1) == r("b", "c\\d"));
+	TEST_CHECK(lsplit_path("\\b\\c\\d", 2) == r("b", "c\\d"));
+	TEST_CHECK(lsplit_path("\\b\\c\\d", 3) == r("b\\c", "d"));
+	TEST_CHECK(lsplit_path("\\b\\c\\d", 4) == r("b\\c", "d"));
+	TEST_CHECK(lsplit_path("\\b\\c\\d", 5) == r("b\\c\\d", ""));
+	TEST_CHECK(lsplit_path("\\b\\c\\d", 6) == r("b\\c\\d", ""));
+
+	TEST_CHECK(lsplit_path("b\\c\\d", 0) == r("b", "c\\d"));
+	TEST_CHECK(lsplit_path("b\\c\\d", 1) == r("b", "c\\d"));
+	TEST_CHECK(lsplit_path("b\\c\\d", 2) == r("b\\c", "d"));
+	TEST_CHECK(lsplit_path("b\\c\\d", 3) == r("b\\c", "d"));
+	TEST_CHECK(lsplit_path("b\\c\\d", 4) == r("b\\c\\d", ""));
+	TEST_CHECK(lsplit_path("b\\c\\d", 5) == r("b\\c\\d", ""));
+#endif
+	TEST_CHECK(lsplit_path("/b/c/d", 0) == r("b", "c/d"));
+	TEST_CHECK(lsplit_path("/b/c/d", 1) == r("b", "c/d"));
+	TEST_CHECK(lsplit_path("/b/c/d", 2) == r("b", "c/d"));
+	TEST_CHECK(lsplit_path("/b/c/d", 3) == r("b/c", "d"));
+	TEST_CHECK(lsplit_path("/b/c/d", 4) == r("b/c", "d"));
+	TEST_CHECK(lsplit_path("/b/c/d", 5) == r("b/c/d", ""));
+	TEST_CHECK(lsplit_path("/b/c/d", 6) == r("b/c/d", ""));
+
+	TEST_CHECK(lsplit_path("b/c/d", 0) == r("b", "c/d"));
+	TEST_CHECK(lsplit_path("b/c/d", 1) == r("b", "c/d"));
+	TEST_CHECK(lsplit_path("b/c/d", 2) == r("b/c", "d"));
+	TEST_CHECK(lsplit_path("b/c/d", 3) == r("b/c", "d"));
+	TEST_CHECK(lsplit_path("b/c/d", 4) == r("b/c/d", ""));
+	TEST_CHECK(lsplit_path("b/c/d", 5) == r("b/c/d", ""));
 }
 
 TORRENT_TEST(hard_link)
@@ -368,21 +352,10 @@ TORRENT_TEST(hard_link)
 
 	// create a file, write some stuff to it, create a hard link to that file,
 	// read that file and assert we get the same stuff we wrote to the first file
+	lt::span<char const> str = "abcdefghijklmnopqrstuvwxyz";
+	ofstream("original_file").write(str.data(), str.size());
+
 	error_code ec;
-	file f;
-	TEST_CHECK(f.open("original_file", aux::open_mode::write, ec));
-	if (ec)
-		std::printf("open failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
-	TEST_EQUAL(ec, error_code());
-
-	char str[] = "abcdefghijklmnopqrstuvwxyz";
-	iovec_t b = { str, 26 };
-	TEST_EQUAL(f.writev(0, b, ec), 26);
-	if (ec)
-		std::printf("writev failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
-	TEST_EQUAL(ec, error_code());
-	f.close();
-
 	hard_link("original_file", "second_link", ec);
 
 	if (ec)
@@ -390,19 +363,9 @@ TORRENT_TEST(hard_link)
 	TEST_EQUAL(ec, error_code());
 
 
-	TEST_CHECK(f.open("second_link", aux::open_mode::write, ec));
-	if (ec)
-		std::printf("open failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
-	TEST_EQUAL(ec, error_code());
-
 	char test_buf[27] = {};
-	b = { test_buf, 27 };
-	TEST_EQUAL(f.readv(0, b, ec), 26);
-	if (ec)
-		std::printf("readv failed: [%s] %s\n", ec.category().name(), ec.message().c_str());
-	TEST_EQUAL(ec, error_code());
+	std::ifstream("second_link").read(test_buf, 27);
 	TEST_CHECK(test_buf == "abcdefghijklmnopqrstuvwxyz"_sv);
-	f.close();
 
 	remove("original_file", ec);
 	if (ec)
@@ -420,6 +383,46 @@ TORRENT_TEST(stat_file)
 	stat_file("no_such_file_or_directory.file", &st, ec);
 	TEST_CHECK(ec);
 	TEST_EQUAL(ec, boost::system::errc::no_such_file_or_directory);
+}
+
+TORRENT_TEST(relative_path)
+{
+#ifdef TORRENT_WINDOWS
+#define S "\\"
+#else
+#define S "/"
+#endif
+	TEST_EQUAL(lexically_relative("A" S "B" S "C", "A" S "C" S "B")
+		, ".." S ".." S "C" S "B");
+
+	TEST_EQUAL(lexically_relative("A" S "B" S "C" S, "A" S "C" S "B")
+		, ".." S ".." S "C" S "B");
+
+	TEST_EQUAL(lexically_relative("A" S "B" S "C" S, "A" S "C" S "B" S)
+		, ".." S ".." S "C" S "B");
+
+	TEST_EQUAL(lexically_relative("A" S "B" S "C", "A" S "B" S "B")
+		, ".." S "B");
+
+	TEST_EQUAL(lexically_relative("A" S "B" S "C", "A" S "B" S "C")
+		, "");
+
+	TEST_EQUAL(lexically_relative("A" S "B", "A" S "B")
+		, "");
+
+	TEST_EQUAL(lexically_relative("A" S "B", "A" S "B" S "C")
+		, "C");
+
+	TEST_EQUAL(lexically_relative("A" S, "A" S)
+		, "");
+
+	TEST_EQUAL(lexically_relative("", "A" S "B" S "C")
+		, "A" S "B" S "C");
+
+	TEST_EQUAL(lexically_relative("A" S "B" S "C", "")
+		, ".." S ".." S ".." S);
+
+	TEST_EQUAL(lexically_relative("", ""), "");
 }
 
 // UNC tests
@@ -473,15 +476,13 @@ TORRENT_TEST(unc_tests)
 	for (std::string special_name : special_names)
 	{
 		touch_file(special_name, 10);
-		TEST_CHECK(lt::exists(special_name));
+		TEST_CHECK(exists(special_name));
 		lt::remove(special_name, ec);
 		TEST_EQUAL(ec, error_code());
-		TEST_CHECK(!lt::exists(special_name));
+		TEST_CHECK(!exists(special_name));
 	}
 
-	int maximum_component_length;
-	bool support_hard_links;
-	std::tie(maximum_component_length, support_hard_links) = current_directory_caps();
+	auto [maximum_component_length, support_hard_links] = current_directory_caps();
 
 	std::cout << "max file path component length: " << maximum_component_length << "\n"
 		<< "support hard links: " << (support_hard_links?"yes":"no") << "\n";
@@ -504,7 +505,7 @@ TORRENT_TEST(unc_tests)
 		std::cout << "create_directory \"" << long_dir_name << "\" failed: " << ec.message() << "\n";
 		std::wcout << convert_to_native_path_string(long_dir_name) << L"\n";
 	}
-	TEST_CHECK(lt::exists(long_dir_name));
+	TEST_CHECK(exists(long_dir_name));
 	TEST_CHECK(lt::is_directory(long_dir_name, ec));
 	TEST_EQUAL(ec, error_code());
 	if (ec)
@@ -514,7 +515,7 @@ TORRENT_TEST(unc_tests)
 	}
 
 	touch_file(long_file_name1, 10);
-	TEST_CHECK(lt::exists(long_file_name1));
+	TEST_CHECK(exists(long_file_name1));
 
 	lt::rename(long_file_name1, long_file_name2, ec);
 	TEST_EQUAL(ec, error_code());
@@ -523,21 +524,22 @@ TORRENT_TEST(unc_tests)
 		std::cout << "rename \"" << long_file_name1 << "\" failed " << ec.message() << "\n";
 		std::wcout << convert_to_native_path_string(long_file_name1) << L"\n";
 	}
-	TEST_CHECK(!lt::exists(long_file_name1));
-	TEST_CHECK(lt::exists(long_file_name2));
+	TEST_CHECK(!exists(long_file_name1));
+	TEST_CHECK(exists(long_file_name2));
 
-	lt::copy_file(long_file_name2, long_file_name1, ec);
-	TEST_EQUAL(ec, error_code());
-	if (ec)
+	lt::storage_error se;
+	lt::aux::copy_file(long_file_name2, long_file_name1, se);
+	TEST_EQUAL(se.ec, error_code());
+	if (se.ec)
 	{
-		std::cout << "copy_file \"" << long_file_name2 << "\" failed " << ec.message() << "\n";
+		std::cout << "copy_file \"" << long_file_name2 << "\" failed " << se.ec.message() << "\n";
 		std::wcout << convert_to_native_path_string(long_file_name2) << L"\n";
 	}
-	TEST_CHECK(lt::exists(long_file_name1));
+	TEST_CHECK(exists(long_file_name1));
 
 	std::set<std::string> files;
 
-	for (lt::directory i(long_dir_name, ec); !i.done(); i.next(ec))
+	for (lt::aux::directory i(long_dir_name, ec); !i.done(); i.next(ec))
 	{
 		std::string f = i.file();
 		files.insert(f);
@@ -552,17 +554,17 @@ TORRENT_TEST(unc_tests)
 		std::cout << "remove \"" << long_file_name1 << "\" failed " << ec.message() << "\n";
 		std::wcout << convert_to_native_path_string(long_file_name1) << L"\n";
 	}
-	TEST_CHECK(!lt::exists(long_file_name1));
+	TEST_CHECK(!exists(long_file_name1));
 
 	if (support_hard_links)
 	{
 		lt::hard_link(long_file_name2, long_file_name1, ec);
 		TEST_EQUAL(ec, error_code());
-		TEST_CHECK(lt::exists(long_file_name1));
+		TEST_CHECK(exists(long_file_name1));
 
 		lt::remove(long_file_name1, ec);
 		TEST_EQUAL(ec, error_code());
-		TEST_CHECK(!lt::exists(long_file_name1));
+		TEST_CHECK(!exists(long_file_name1));
 	}
 }
 
@@ -571,10 +573,21 @@ TORRENT_TEST(unc_paths)
 	std::string const reserved_name = "con";
 	error_code ec;
 	{
-		file f;
-		TEST_CHECK(f.open(reserved_name, aux::open_mode::write, ec) && !ec);
+		aux::file_handle f(reserved_name, 0, aux::open_mode::write);
+		TEST_CHECK(!ec);
 	}
 	remove(reserved_name, ec);
 	TEST_CHECK(!ec);
 }
+
 #endif
+
+TORRENT_TEST(to_file_open_mode)
+{
+	TEST_CHECK(aux::to_file_open_mode(aux::open_mode::write, false) == file_open_mode::read_write);
+	TEST_CHECK(aux::to_file_open_mode({}, false) == file_open_mode::read_only);
+	TEST_CHECK(aux::to_file_open_mode(aux::open_mode::no_atime, false) == (file_open_mode::read_only | file_open_mode::no_atime));
+	TEST_CHECK(aux::to_file_open_mode(aux::open_mode::write | aux::open_mode::no_atime, false) == (file_open_mode::read_write | file_open_mode::no_atime));
+	TEST_CHECK(aux::to_file_open_mode(aux::open_mode::write, true) == (file_open_mode::read_write | file_open_mode::mmapped));
+}
+

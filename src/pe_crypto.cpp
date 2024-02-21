@@ -1,33 +1,14 @@
 /*
 
-Copyright (c) 2007-2018, Un Shyam, Arvid Norberg, Steven Siloti
+Copyright (c) 2007, Un Shyam
+Copyright (c) 2011, 2014-2016, 2018-2022, Arvid Norberg
+Copyright (c) 2016-2018, 2021, Alden Torres
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2016, 2018, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #if !defined TORRENT_DISABLE_ENCRYPTION
@@ -37,26 +18,15 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <random>
 
 #include "libtorrent/aux_/disable_warnings_push.hpp"
-
 #include <boost/multiprecision/integer.hpp>
-#include <boost/multiprecision/cpp_int.hpp>
-
-// for backwards compatibility with boost < 1.60 which was before export_bits
-// and import_bits were introduced
-#if BOOST_VERSION < 106000
-#include "libtorrent/aux_/cppint_import_export.hpp"
-#endif
-
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
-#include "libtorrent/random.hpp"
+#include "libtorrent/aux_/random.hpp"
 #include "libtorrent/aux_/alloca.hpp"
-#include "libtorrent/pe_crypto.hpp"
+#include "libtorrent/aux_/pe_crypto.hpp"
 #include "libtorrent/hasher.hpp"
 
-namespace libtorrent {
-
-	namespace mp = boost::multiprecision;
+namespace libtorrent::aux {
 
 	namespace {
 		// TODO: it would be nice to get the literal working
@@ -75,7 +45,14 @@ namespace libtorrent {
 		if (end < begin + 96)
 		{
 			int const len = int(end - begin);
+#if defined __GNUC__ && __GNUC__ == 12
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
 			std::memmove(begin + 96 - len, begin, aux::numeric_cast<std::size_t>(len));
+#if defined __GNUC__ && __GNUC__ == 12
+#pragma GCC diagnostic pop
+#endif
 			std::memset(begin, 0, aux::numeric_cast<std::size_t>(96 - len));
 		}
 		return ret;
@@ -210,7 +187,7 @@ namespace libtorrent {
 		return std::make_tuple(next_barrier, out_iovec);
 	}
 
-	int encryption_handler::decrypt(crypto_receive_buffer& recv_buffer
+	int encryption_handler::decrypt(aux::crypto_receive_buffer& recv_buffer
 		, std::size_t& bytes_transferred)
 	{
 		TORRENT_ASSERT(!is_recv_plaintext());
@@ -255,7 +232,7 @@ namespace libtorrent {
 	}
 
 	void encryption_handler::switch_recv_crypto(std::shared_ptr<crypto_plugin> crypto
-		, crypto_receive_buffer& recv_buffer)
+		, aux::crypto_receive_buffer& recv_buffer)
 	{
 		m_dec_handler = crypto;
 		int packet_size = 0;
@@ -328,7 +305,7 @@ namespace libtorrent {
 
 	std::tuple<int, int, int> rc4_handler::decrypt(span<span<char>> bufs)
 	{
-		if (!m_decrypt) std::make_tuple(0, 0, 0);
+		if (!m_decrypt) return std::make_tuple(0, 0, 0);
 
 		int bytes_processed = 0;
 		for (auto& buf : bufs)
@@ -410,6 +387,6 @@ std::size_t rc4_encrypt(unsigned char *out, std::size_t outlen, rc4 *state)
 	return n;
 }
 
-} // namespace libtorrent
+} // namespace libtorrent::aux
 
 #endif // TORRENT_DISABLE_ENCRYPTION

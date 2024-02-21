@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2012-2018, Arvid Norberg
+Copyright (c) 2014-2021, Arvid Norberg
+Copyright (c) 2016-2017, Alden Torres
+Copyright (c) 2019, Steven Siloti
+Copyright (c) 2020, FranciscoPombal
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session_stats.hpp" // for stats_metric
@@ -38,11 +18,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <algorithm>
 
 namespace libtorrent {
-
-#if TORRENT_ABI_VERSION == 1
-	constexpr metric_type_t stats_metric::type_counter;
-	constexpr metric_type_t stats_metric::type_gauge;
-#endif
 
 namespace {
 
@@ -129,7 +104,8 @@ namespace {
 		METRIC(peer, incoming_connections)
 
 		// the number of peer connections for each kind of socket.
-		// these counts include half-open (connecting) peers.
+		// ``num_peers_half_open`` counts half-open (connecting) peers, no other
+		// count includes those peers.
 		// ``num_peers_up_unchoked_all`` is the total number of unchoked peers,
 		// whereas ``num_peers_up_unchoked`` only are unchoked peers that count
 		// against the limit (i.e. excluding peers that are unchoked because the
@@ -242,13 +218,6 @@ namespace {
 		METRIC(ses, num_have_pieces)
 		METRIC(ses, num_total_pieces_added)
 
-#if TORRENT_ABI_VERSION == 1
-		// this counts the number of times a torrent has been
-		// evicted (only applies when dynamic-loading-of-torrent-files
-		// is enabled, which is deprecated).
-		METRIC(ses, torrent_evicted_counter)
-#endif
-
 		// the number of allowed unchoked peers
 		METRIC(ses, num_unchoke_slots)
 
@@ -298,6 +267,9 @@ namespace {
 		METRIC(ses, num_outgoing_pex)
 		METRIC(ses, num_outgoing_metadata)
 		METRIC(ses, num_outgoing_extended)
+		METRIC(ses, num_outgoing_hash_request)
+		METRIC(ses, num_outgoing_hashes)
+		METRIC(ses, num_outgoing_hash_reject)
 
 		// the number of wasted downloaded bytes by reason of the bytes being
 		// wasted.
@@ -362,10 +334,6 @@ namespace {
 
 		// the total number of blocks run through SHA-1 hashing
 		METRIC(disk, num_blocks_hashed)
-
-		// the number of blocks read from the disk cache
-		// Deprecates ``cache_info::blocks_read_hit``.
-		METRIC(disk, num_blocks_cache_hits)
 
 		// the number of disk I/O operation for reads and writes. One disk
 		// operation may transfer more then one block.
@@ -471,19 +439,46 @@ namespace {
 		METRIC(dht, dht_invalid_get)
 		METRIC(dht, dht_invalid_sample_infohashes)
 
-		// uTP counters. Each counter represents the number of time each event
-		// has occurred.
+		// The number of times a lost packet has been interpreted as congestion,
+		// cutting the congestion window in half. Some lost packets are not
+		// interpreted as congestion, notably MTU-probes
 		METRIC(utp, utp_packet_loss)
+
+		// The number of timeouts experienced. This is when a connection doesn't
+		// hear back from the other end within a sliding average RTT + 2 average
+		// deviations from the mean (approximately). The actual time out is
+		// configurable and also depends on the state of the socket.
 		METRIC(utp, utp_timeout)
+
+		// The total number of packets sent and received
 		METRIC(utp, utp_packets_in)
 		METRIC(utp, utp_packets_out)
+
+		// The number of packets lost but re-sent by the fast-retransmit logic.
+		// This logic is triggered after 3 duplicate ACKs.
 		METRIC(utp, utp_fast_retransmit)
+
+		// The number of packets that were re-sent, for whatever reason
 		METRIC(utp, utp_packet_resend)
+
+		// The number of incoming packets where the delay samples were above
+		// and below the delay target, respectively. The delay target is
+		// configurable and is a parameter to the LEDBAT congestion control.
 		METRIC(utp, utp_samples_above_target)
 		METRIC(utp, utp_samples_below_target)
+
+		// The total number of packets carrying payload received and sent,
+		// respectively.
 		METRIC(utp, utp_payload_pkts_in)
 		METRIC(utp, utp_payload_pkts_out)
+
+		// The number of packets received that are not valid uTP packets (but
+		// were sufficiently similar to not be treated as DHT or UDP tracker
+		// packets).
 		METRIC(utp, utp_invalid_pkts_in)
+
+		// The number of duplicate payload packets received. This may happen if
+		// the outgoing ACK is lost.
 		METRIC(utp, utp_redundant_pkts_in)
 
 		// the number of uTP sockets in each respective state
@@ -497,7 +492,7 @@ namespace {
 		// the buffer sizes accepted by
 		// socket send and receive calls respectively.
 		// The larger the buffers are, the more efficient,
-		// because it reqire fewer system calls per byte.
+		// because it require fewer system calls per byte.
 		// The size is 1 << n, where n is the number
 		// at the end of the counter name. i.e.
 		// 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192,
@@ -540,6 +535,11 @@ namespace {
 		METRIC(sock_bufs, socket_recv_size19)
 		METRIC(sock_bufs, socket_recv_size20)
 
+		// if the outstanding tracker announce limit is reached, tracker
+		// announces are queued, to be issued when an announce slot opens up.
+		// this measure the number of tracker announces currently in the
+		// queue
+		METRIC(tracker, num_queued_tracker_announces)
 		// ... more
 	}});
 #undef METRIC
@@ -556,7 +556,7 @@ namespace {
 			stats[i].type = metrics[i].value_index >= counters::num_stats_counters
 				? metric_type_t::gauge : metric_type_t::counter;
 		}
-		return std::move(stats);
+		return TORRENT_RVO(stats);
 	}
 
 	int find_metric_idx(string_view name)

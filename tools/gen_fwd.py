@@ -1,38 +1,17 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # vim: tabstop=8 expandtab shiftwidth=4 softtabstop=4
 
 import os
 
 file_header = '''/*
 
-Copyright (c) 2017, Arvid Norberg
+Copyright (c) 2017-2022, Arvid Norberg
+Copyright (c) 2017-2018, Steven Siloti
+Copyright (c) 2020, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_FWD_HPP
@@ -45,6 +24,8 @@ namespace libtorrent {
 
 file_footer = '''
 
+	using file_layout = file_storage;
+
 }
 
 namespace lt = libtorrent;
@@ -53,31 +34,35 @@ namespace lt = libtorrent;
 '''
 
 classes = os.popen(
-    r'git grep "\(TORRENT_EXPORT\|TORRENT_DEPRECATED_EXPORT\|^TORRENT_[A-Z0-9]\+_NAMESPACE\)"').read().split('\n')
+    r'git grep -E "(TORRENT_EXPORT|TORRENT_DEPRECATED_EXPORT|^TORRENT_[A-Z0-9]+_NAMESPACE)"').read().split('\n')
 
 
 def print_classes(out, classes, keyword):
     current_file = ''
 
     # [(file, decl), ...]
-    classes = [(l.split(':')[0].strip(), ':'.join(l.split(':')[1:]).strip()) for l in classes]
+    classes = [(x.split(':')[0].strip(), ':'.join(x.split(':')[1:]).strip()) for x in classes]
 
     # we only care about header files
     # ignore the forward header itself, that's the one we're generating
     # also ignore any header in the aux_ directory, those are private
-    classes = [l for l in classes if l[0].endswith('.hpp') and not l[0].endswith('/fwd.hpp') and '/aux_/' not in l[0]]
+    classes = [x for x in classes if x[0].endswith('.hpp') and not x[0].endswith('/fwd.hpp') and '/aux_/' not in x[0]]
 
-    namespaces = ['TORRENT_VERSION_NAMESPACE_2',
+    namespaces = ['TORRENT_VERSION_NAMESPACE_4',
+                  'TORRENT_VERSION_NAMESPACE_4_END',
+                  'TORRENT_VERSION_NAMESPACE_3',
+                  'TORRENT_VERSION_NAMESPACE_3_END',
+                  'TORRENT_VERSION_NAMESPACE_2',
                   'TORRENT_VERSION_NAMESPACE_2_END',
                   'TORRENT_CRYPTO_NAMESPACE',
                   'TORRENT_CRYPTO_NAMESPACE_END']
 
     # only include classes with the right kind of export
     classes = [
-        l for l in classes if l[1] in namespaces or (
-            l[1].split(' ')[0] in [
+        x for x in classes if x[1] in namespaces or (
+            x[1].split(' ')[0] in [
                 'class',
-                'struct'] and l[1].split(' ')[1] == keyword)]
+                'struct'] and x[1].split(' ')[1] == keyword)]
 
     # collapse empty namespaces
     classes2 = []
@@ -121,13 +106,17 @@ def print_classes(out, classes, keyword):
             out.write(content)
 
 
-os.remove('include/libtorrent/fwd.hpp')
+try:
+    os.remove('include/libtorrent/fwd.hpp')
+except FileNotFoundError:
+    pass
+
 with open('include/libtorrent/fwd.hpp', 'w+') as f:
     f.write(file_header)
 
     print_classes(f, classes, 'TORRENT_EXPORT')
 
-    f.write('\n#if TORRENT_ABI_VERSION == 1\n')
+    f.write('\n#if TORRENT_ABI_VERSION <= 2\n')
 
     print_classes(f, classes, 'TORRENT_DEPRECATED_EXPORT')
 

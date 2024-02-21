@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2003-2005, 2007-2009, 2012-2021, Arvid Norberg
+Copyright (c) 2016, 2020, Alden Torres
+Copyright (c) 2019, Amir Abrams
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_BENCODE_HPP_INCLUDED
@@ -58,8 +37,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/config.hpp"
 #include "libtorrent/entry.hpp"
 #include "libtorrent/assert.hpp"
-#include "libtorrent/io.hpp" // for write_string
-#include "libtorrent/string_util.hpp" // for is_digit
+#include "libtorrent/aux_/io_bytes.hpp" // for write_string
+#include "libtorrent/aux_/string_util.hpp" // for is_digit
 
 namespace libtorrent {
 
@@ -67,7 +46,7 @@ namespace libtorrent {
 	using invalid_encoding = system_error;
 #endif
 
-namespace detail {
+namespace aux {
 
 	template <class OutIt, class In, typename Cond
 		= typename std::enable_if<std::is_integral<In>::value>::type>
@@ -80,7 +59,7 @@ namespace detail {
 		// not hold number bigger than this:
 		static_assert(sizeof(entry::integer_type) <= 8, "64 bit integers required");
 		static_assert(sizeof(data) <= sizeof(entry::integer_type), "input data too big, see entry::integer_type");
-		char buf[21];
+		std::array<char, 21> buf;
 		auto const str = integer_to_str(buf, val);
 		for (char const c : str)
 		{
@@ -135,61 +114,70 @@ namespace detail {
 		}
 	}
 
-	template<class OutIt>
-	int bencode_recursive(OutIt& out, const entry& e)
+	template <typename OutIt>
+	struct bencode_visitor
 	{
-		int ret = 0;
-		switch(e.type())
+		OutIt& out;
+
+		int operator()(entry::integer_type i)
 		{
-		case entry::int_t:
 			write_char(out, 'i');
-			ret += write_integer(out, e.integer());
+			int const ret = write_integer(out, i);
 			write_char(out, 'e');
-			ret += 2;
-			break;
-		case entry::string_t:
-			ret += write_integer(out, e.string().length());
+			return ret + 2;
+		}
+
+		int operator()(entry::string_type const& str)
+		{
+			int ret = write_integer(out, str.length());
 			write_char(out, ':');
-			ret += write_string(e.string(), out);
-			ret += 1;
-			break;
-		case entry::list_t:
+			ret += write_string(str, out);
+			return ret + 1;
+		}
+
+		int operator()(entry::list_type const& l)
+		{
 			write_char(out, 'l');
-			for (auto const& i : e.list())
-				ret += bencode_recursive(out, i);
+			int ret = 2;
+			for (auto const& i : l)
+				ret += std::visit(*this, static_cast<entry::variant_type const&>(i));
 			write_char(out, 'e');
-			ret += 2;
-			break;
-		case entry::dictionary_t:
+			return ret;
+		}
+
+		int operator()(entry::dictionary_type const& d)
+		{
 			write_char(out, 'd');
-			for (auto const& i : e.dict())
+			int ret = 2;
+			for (auto const& i : d)
 			{
 				// write key
 				ret += write_integer(out, i.first.length());
 				write_char(out, ':');
 				ret += write_string(i.first, out);
 				// write value
-				ret += bencode_recursive(out, i.second);
+				ret += std::visit(*this, static_cast<entry::variant_type const&>(i.second));
 				ret += 1;
 			}
 			write_char(out, 'e');
-			ret += 2;
-			break;
-		case entry::preformatted_t:
-			std::copy(e.preformatted().begin(), e.preformatted().end(), out);
-			ret += static_cast<int>(e.preformatted().size());
-			break;
-		case entry::undefined_t:
+			return ret;
+		}
 
+		int operator()(entry::preformatted_type const& pre)
+		{
+			std::copy(pre.begin(), pre.end(), out);
+			return static_cast<int>(pre.size());
+		}
+
+		int operator()(entry::uninitialized_type const&)
+		{
 			// empty string
 			write_char(out, '0');
 			write_char(out, ':');
-
-			ret += 2;
-			break;
+			return 2;
 		}
-		return ret;
-	}
+	};
+
 #if TORRENT_ABI_VERSION == 1
 	template<class InIt>
 	void bdecode_recursive(InIt& in, InIt end, entry& ret, bool& err, int depth)
@@ -203,9 +191,6 @@ namespace detail {
 		if (in == end)
 		{
 			err = true;
-#if TORRENT_USE_ASSERTS
-			ret.m_type_queried = false;
-#endif
 			return;
 		}
 		switch (*in)
@@ -223,9 +208,6 @@ namespace detail {
 			ret = entry(entry::int_t);
 			char* end_pointer;
 			ret.integer() = std::strtoll(val.c_str(), &end_pointer, 10);
-#if TORRENT_USE_ASSERTS
-			ret.m_type_queried = false;
-#endif
 			if (end_pointer == val.c_str())
 			{
 				err = true;
@@ -246,23 +228,14 @@ namespace detail {
 				bdecode_recursive(in, end, e, err, depth + 1);
 				if (err)
 				{
-#if TORRENT_USE_ASSERTS
-					ret.m_type_queried = false;
-#endif
 					return;
 				}
 				if (in == end)
 				{
 					err = true;
-#if TORRENT_USE_ASSERTS
-					ret.m_type_queried = false;
-#endif
 					return;
 				}
 			}
-#if TORRENT_USE_ASSERTS
-			ret.m_type_queried = false;
-#endif
 			TORRENT_ASSERT(*in == 'e');
 			++in; // 'e'
 			break;
@@ -276,34 +249,16 @@ namespace detail {
 			{
 				entry key;
 				bdecode_recursive(in, end, key, err, depth + 1);
-				if (err || key.type() != entry::string_t)
-				{
-#if TORRENT_USE_ASSERTS
-					ret.m_type_queried = false;
-#endif
-					return;
-				}
+				if (err || key.type() != entry::string_t) return;
 				entry& e = ret[key.string()];
 				bdecode_recursive(in, end, e, err, depth + 1);
-				if (err)
-				{
-#if TORRENT_USE_ASSERTS
-					ret.m_type_queried = false;
-#endif
-					return;
-				}
+				if (err) return;
 				if (in == end)
 				{
 					err = true;
-#if TORRENT_USE_ASSERTS
-					ret.m_type_queried = false;
-#endif
 					return;
 				}
 			}
-#if TORRENT_USE_ASSERTS
-			ret.m_type_queried = false;
-#endif
 			TORRENT_ASSERT(*in == 'e');
 			++in; // 'e'
 			break;
@@ -315,63 +270,48 @@ namespace detail {
 			if (is_digit(char(*in)))
 			{
 				std::string len_s = read_until(in, end, ':', err);
-				if (err)
-				{
-#if TORRENT_USE_ASSERTS
-					ret.m_type_queried = false;
-#endif
-					return;
-				}
+				if (err) return;
 				TORRENT_ASSERT(*in == ':');
 				++in; // ':'
 				int len = atoi(len_s.c_str());
 				ret = entry(entry::string_t);
 				read_string(in, end, len, ret.string(), err);
-				if (err)
-				{
-#if TORRENT_USE_ASSERTS
-					ret.m_type_queried = false;
-#endif
-					return;
-				}
+				if (err) return;
 			}
 			else
 			{
 				err = true;
-#if TORRENT_USE_ASSERTS
-				ret.m_type_queried = false;
-#endif
 				return;
 			}
-#if TORRENT_USE_ASSERTS
-			ret.m_type_queried = false;
-#endif
 		}
 	}
 #endif // TORRENT_ABI_VERSION
 }
 
-	// This function will encode data to bencoded form.
+	// The ``bencode()`` function has two overloads that serializes a tree
+	// structure of entry objects into a bencoded, flat, buffer.
+	// The entry class is the internal representation of the bencoded data.
 	//
-	// The entry_ class is the internal representation of the bencoded data
-	// and it can be used to retrieve information, an entry_ can also be build by
-	// the program and given to ``bencode()`` to encode it into the ``OutIt``
-	// iterator.
+	// The simplest overload simply takes an entry object and returns a vector
+	// with the serialized data.
+	//
+	// The second overload encode it into the ``OutIt`` iterator.
 	//
 	// ``OutIt`` is an OutputIterator_. It's a template and usually
 	// instantiated as ostream_iterator_ or back_insert_iterator_. This
 	// function assumes the value_type of the iterator is a ``char``.
 	// In order to encode entry ``e`` into a buffer, do::
 	//
-	//	std::vector<char> buffer;
+	//	std::vector<char> buf;
 	//	bencode(std::back_inserter(buf), e);
 	//
 	// .. _OutputIterator:  https://en.cppreference.com/w/cpp/named_req/OutputIterator
 	// .. _ostream_iterator: https://en.cppreference.com/w/cpp/iterator/ostream_iterator
 	// .. _back_insert_iterator: https://en.cppreference.com/w/cpp/iterator/back_insert_iterator
+	TORRENT_EXPORT std::vector<char> bencode(entry const& e);
 	template<class OutIt> int bencode(OutIt out, const entry& e)
 	{
-		return detail::bencode_recursive(out, e);
+		return std::visit(aux::bencode_visitor<OutIt>{out}, static_cast<entry::variant_type const&>(e));
 	}
 
 #if TORRENT_ABI_VERSION == 1
@@ -381,8 +321,7 @@ namespace detail {
 	{
 		entry e;
 		bool err = false;
-		detail::bdecode_recursive(start, end, e, err, 0);
-		TORRENT_ASSERT(e.m_type_queried == false);
+		aux::bdecode_recursive(start, end, e, err, 0);
 		if (err) return entry();
 		return e;
 	}
@@ -394,7 +333,7 @@ namespace detail {
 		entry e;
 		bool err = false;
 		InIt s = start;
-		detail::bdecode_recursive(start, end, e, err, 0);
+		aux::bdecode_recursive(start, end, e, err, 0);
 		len = std::distance(s, start);
 		TORRENT_ASSERT(len >= 0);
 		if (err) return entry();

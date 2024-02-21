@@ -1,45 +1,23 @@
 /*
 
-Copyright (c) 2013, Arvid Norberg
+Copyright (c) 2014-2018, 2020-2021, Arvid Norberg
+Copyright (c) 2016, 2018, 2020-2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
-#include "libtorrent/peer_list.hpp"
+#include "libtorrent/aux_/peer_list.hpp"
 #include "libtorrent/torrent_handle.hpp"
-#include "libtorrent/torrent_peer_allocator.hpp"
+#include "libtorrent/aux_/torrent_peer_allocator.hpp"
 #include "libtorrent/peer_connection_interface.hpp"
-#include "libtorrent/stat.hpp"
-#include "libtorrent/ip_voter.hpp"
+#include "libtorrent/aux_/stat.hpp"
+#include "libtorrent/aux_/ip_voter.hpp"
 #include "libtorrent/ip_filter.hpp"
 #include "libtorrent/peer_info.hpp"
-#include "libtorrent/random.hpp"
-#include "libtorrent/socket_io.hpp"
+#include "libtorrent/aux_/random.hpp"
+#include "libtorrent/aux_/socket_io.hpp"
 
 #include "test.hpp"
 #include "setup_transfer.hpp"
@@ -48,6 +26,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <cstdarg>
 
 using namespace lt;
+using namespace lt::aux;
 
 namespace {
 
@@ -57,18 +36,31 @@ struct mock_peer_connection
 	: peer_connection_interface
 	, std::enable_shared_from_this<mock_peer_connection>
 {
-	mock_peer_connection(mock_torrent* tor, bool out, tcp::endpoint const& remote)
+	mock_peer_connection(mock_torrent* tor, bool out)
 		: m_choked(false)
 		, m_outgoing(out)
 		, m_tp(nullptr)
-		, m_remote(remote)
-		, m_local(ep("127.0.0.1", 8080))
 		, m_our_id(nullptr)
 		, m_disconnect_called(false)
 		, m_torrent(*tor)
 	{
 		aux::random_bytes(m_id);
 	}
+
+	mock_peer_connection(mock_torrent* tor, bool out, tcp::endpoint const& remote)
+		: mock_peer_connection(tor, out)
+	{
+		m_remote = remote;
+		m_local = ep("127.0.0.1", 8080);
+	}
+
+#if TORRENT_USE_I2P
+	mock_peer_connection(mock_torrent* tor, bool out, std::string remote)
+		: mock_peer_connection(tor, out)
+	{
+		m_i2p_destination = std::move(remote);
+	}
+#endif
 
 	virtual ~mock_peer_connection() = default;
 
@@ -96,16 +88,31 @@ struct mock_peer_connection
 	bool was_disconnected() const { return m_disconnect_called; }
 	void set_local_ep(tcp::endpoint const& ep) { m_local = ep; }
 
-	lt::stat m_stat;
+	aux::stat m_stat;
 	bool m_choked;
 	bool m_outgoing;
 	torrent_peer* m_tp;
 	tcp::endpoint m_remote;
 	tcp::endpoint m_local;
+#if TORRENT_USE_I2P
+	std::string m_i2p_destination;
+	std::string m_local_i2p_endpoint;
+#endif
 	peer_id m_id;
 	peer_id m_our_id;
 	bool m_disconnect_called;
 	mock_torrent& m_torrent;
+
+#if TORRENT_USE_I2P
+	std::string const& destination() const override
+	{
+		return m_i2p_destination;
+	}
+	std::string const& local_i2p_endpoint() const override
+	{
+		return m_local_i2p_endpoint;
+	}
+#endif
 
 	void get_peer_info(peer_info&) const override {}
 	tcp::endpoint const& remote() const override { return m_remote; }
@@ -123,7 +130,7 @@ struct mock_peer_connection
 	bool fast_reconnect() const override { return true; }
 	bool is_choked() const override { return m_choked; }
 	bool failed() const override { return false; }
-	lt::stat const& statistics() const override { return m_stat; }
+	aux::stat const& statistics() const override { return m_stat; }
 };
 
 struct mock_torrent
@@ -170,7 +177,6 @@ torrent_state init_state()
 {
 	torrent_state st;
 	st.is_finished = false;
-	st.is_paused = false;
 	st.max_peerlist_size = 1000;
 	st.allow_multiple_connections_per_ip = false;
 	st.port = 9999;
@@ -189,6 +195,21 @@ torrent_peer* add_peer(peer_list& p, torrent_state& st, tcp::endpoint const& ep)
 	st.erased.clear();
 	return peer;
 }
+
+#if TORRENT_USE_I2P
+torrent_peer* add_i2p_peer(peer_list& p, torrent_state& st, std::string const& destination)
+{
+	int cc = p.num_connect_candidates();
+	torrent_peer* peer = p.add_i2p_peer(destination, {}, {}, &st);
+	if (peer)
+	{
+		TEST_EQUAL(p.num_connect_candidates(), cc + 1);
+		TEST_EQUAL(peer->dest(), destination);
+	}
+	st.erased.clear();
+	return peer;
+}
+#endif
 
 void connect_peer(peer_list& p, mock_torrent& t, torrent_state& st)
 {
@@ -345,7 +366,7 @@ TORRENT_TEST(update_peer_port)
 }
 
 // test incoming connection
-// and update_peer_port, causing collission
+// and update_peer_port, causing collision
 TORRENT_TEST(update_peer_port_collide)
 {
 	torrent_state st = init_state();
@@ -447,14 +468,14 @@ TORRENT_TEST(port_filter)
 	// now, filter one of the IPs and make sure the peer is removed
 	port_filter filter;
 	filter.add_rule(9000, 10000, 1);
-	std::vector<address> banned;
+	std::vector<tcp::endpoint> banned;
 	p.apply_port_filter(filter, &st, banned);
 	// we just erased a peer, because it was filtered by the ip filter
 	TEST_EQUAL(st.erased.size(), 1);
 	TEST_EQUAL(p.num_connect_candidates(), 0);
 	TEST_EQUAL(p.num_peers(), 1);
 	TEST_EQUAL(banned.size(), 1);
-	TEST_EQUAL(banned[0], addr4("11.0.0.2"));
+	TEST_EQUAL(banned[0], ep("11.0.0.2", 9020));
 	TEST_EQUAL(con2->was_disconnected(), true);
 	TEST_EQUAL(con1->was_disconnected(), false);
 }
@@ -566,7 +587,7 @@ TORRENT_TEST(set_ip_filter)
 TORRENT_TEST(set_port_filter)
 {
 	torrent_state st = init_state();
-	std::vector<address> banned;
+	std::vector<tcp::endpoint> banned;
 
 	mock_torrent t(&st);
 	peer_list p(allocator);
@@ -775,7 +796,7 @@ TORRENT_TEST(double_connection)
 
 	p.new_connection(*con1, 0, &st);
 
-	// and the incoming connection
+	// the seconds incoming connection
 	auto con2 = std::make_shared<mock_peer_connection>(&t, false, ep("10.0.0.2", 3561));
 	con2->set_local_ep(ep("10.0.0.1", 8080));
 
@@ -881,6 +902,126 @@ TORRENT_TEST(double_connection_win)
 	TEST_EQUAL(con_in->was_disconnected(), true);
 }
 
+#if TORRENT_USE_I2P
+// test i2p self-connection
+TORRENT_TEST(self_connection_i2p)
+{
+	torrent_state st = init_state();
+	mock_torrent t(&st);
+	st.allow_multiple_connections_per_ip = false;
+	peer_list p(allocator);
+	t.m_p = &p;
+
+	// add and connect peer
+	torrent_peer* peer = add_i2p_peer(p, st, "foobar");
+	connect_peer(p, t, st);
+
+	auto con_out = shared_from_this(peer->connection);
+	con_out->m_i2p_destination = "foobar";
+	con_out->m_local_i2p_endpoint = "foobar";
+
+	auto con_in = std::make_shared<mock_peer_connection>(&t, false, "foobar");
+	con_in->m_local_i2p_endpoint = "foobar";
+
+	p.new_connection(*con_in, 0, &st);
+
+	// from the peer_list's point of view, this looks like we made one
+	// outgoing connection and received an incoming one. Since they share
+	// the exact same endpoints (IP ports) but just swapped source and
+	// destination, the peer list is supposed to figure out that we connected
+	// to ourself and disconnect it
+	TEST_EQUAL(con_out->was_disconnected(), true);
+	TEST_EQUAL(con_in->was_disconnected(), true);
+}
+
+// test double i2p connection (both incoming)
+TORRENT_TEST(double_connection_i2p)
+{
+	torrent_state st = init_state();
+	mock_torrent t(&st);
+	st.allow_multiple_connections_per_ip = false;
+	peer_list p(allocator);
+	t.m_p = &p;
+
+	// we are "foo" and the other peer is "bar"
+
+	// first incoming connection
+	auto con1 = std::make_shared<mock_peer_connection>(&t, false, "bar");
+	con1->m_local_i2p_endpoint = "foo";
+
+	p.new_connection(*con1, 0, &st);
+
+	// the second incoming connection
+	auto con2 = std::make_shared<mock_peer_connection>(&t, false, "bar");
+	con2->m_local_i2p_endpoint = "foo";
+
+	p.new_connection(*con2, 0, &st);
+
+	// the second incoming connection should be closed
+	TEST_EQUAL(con1->was_disconnected(), false);
+	TEST_EQUAL(con2->was_disconnected(), true);
+}
+
+// test double connection (we loose)
+TORRENT_TEST(double_connection_loose_i2p)
+{
+	torrent_state st = init_state();
+	mock_torrent t(&st);
+	st.allow_multiple_connections_per_ip = false;
+	peer_list p(allocator);
+	t.m_p = &p;
+
+	// we are "foo" and the other peer is "bar"
+
+	// our outgoing connection
+	torrent_peer* peer = add_i2p_peer(p, st, "bar");
+	connect_peer(p, t, st);
+
+	auto con_out = shared_from_this(peer->connection);
+	con_out->m_local_i2p_endpoint = "foo";
+
+	// and the incoming connection
+	auto con_in = std::make_shared<mock_peer_connection>(&t, false, "bar");
+	con_in->m_local_i2p_endpoint = "foo";
+
+	p.new_connection(*con_in, 0, &st);
+
+	// the rules are documented in peer_list.cpp
+	TEST_EQUAL(con_out->was_disconnected(), true);
+	TEST_EQUAL(con_in->was_disconnected(), false);
+}
+
+// test double connection (we win)
+TORRENT_TEST(double_connection_win_i2p)
+{
+	torrent_state st = init_state();
+	mock_torrent t(&st);
+	st.allow_multiple_connections_per_ip = false;
+	peer_list p(allocator);
+	t.m_p = &p;
+
+	// we are "bar" and the other peer is "foo"
+	// "bar" < "foo", so we gets to make the outgoing connection
+
+	// our outgoing connection
+	torrent_peer* peer = add_i2p_peer(p, st, "foo");
+	connect_peer(p, t, st);
+
+	auto con_out = shared_from_this(peer->connection);
+	con_out->m_local_i2p_endpoint = "bar";
+
+	//and the incoming connection
+	auto con_in = std::make_shared<mock_peer_connection>(&t, false, "foo");
+	con_in->m_local_i2p_endpoint = "bar";
+
+	p.new_connection(*con_in, 0, &st);
+
+	// the rules are documented in peer_list.cpp
+	TEST_EQUAL(con_out->was_disconnected(), true);
+	TEST_EQUAL(con_in->was_disconnected(), false);
+}
+#endif
+
 // test incoming connection when we are at the list size limit
 TORRENT_TEST(incoming_size_limit)
 {
@@ -963,6 +1104,116 @@ TORRENT_TEST(new_peer_size_limit)
 		+ has_peer(p, ep("10.0.0.5", 8080))
 		+ has_peer(p, ep("10.0.0.6", 8080))
 		, 5);
+}
+
+TORRENT_TEST(peer_info_comparison)
+{
+	peer_address_compare cmp;
+	ipv4_peer const ip_low(ep("1.1.1.1", 6888), true, {});
+	ipv4_peer const ip_high(ep("100.1.1.1", 6888), true, {});
+	TEST_CHECK(cmp(&ip_low, &ip_high));
+	TEST_CHECK(!cmp(&ip_high, &ip_low));
+	TEST_CHECK(!cmp(&ip_high, &ip_high));
+	TEST_CHECK(!cmp(&ip_low, &ip_low));
+
+	TEST_CHECK(!cmp(&ip_low, addr("1.1.1.1")));
+	TEST_CHECK(cmp(&ip_low, addr("1.1.1.2")));
+	TEST_CHECK(cmp(&ip_low, addr("100.1.1.1")));
+
+	TEST_CHECK(!cmp(addr("1.1.1.1"), &ip_low));
+	TEST_CHECK(cmp(addr("1.1.1.0"), &ip_low));
+	TEST_CHECK(!cmp( addr("100.1.1.1"), &ip_low));
+
+#if TORRENT_USE_I2P
+	i2p_peer const i2p_low("aaaaaa", true, {});
+	i2p_peer const i2p_high("zzzzzz", true, {});
+
+	// noremal IPs always sort before i2p addresses
+	TEST_CHECK(cmp(&ip_low, &i2p_high));
+	TEST_CHECK(cmp(&ip_low, &i2p_low));
+	TEST_CHECK(cmp(&ip_high, &i2p_high));
+	TEST_CHECK(cmp(&ip_high, &i2p_low));
+
+	// i2p addresses always sort after noremal IPs
+	TEST_CHECK(!cmp(&i2p_high, &ip_low));
+	TEST_CHECK(!cmp(&i2p_low, &ip_low));
+	TEST_CHECK(!cmp(&i2p_high, &ip_high));
+	TEST_CHECK(!cmp(&i2p_low, &ip_high));
+
+	// noremal IPs always sort before i2p addresses
+	TEST_CHECK(cmp(addr4("1.1.1.1"), &i2p_high));
+	TEST_CHECK(cmp(addr4("1.1.1.1"), &i2p_low));
+	TEST_CHECK(cmp(addr4("100.1.1.1"), &i2p_high));
+	TEST_CHECK(cmp(addr4("100.1.1.1"), &i2p_low));
+
+	// i2p addresses always sort after noremal IPs
+	TEST_CHECK(!cmp(&i2p_high, addr4("1.1.1.1")));
+	TEST_CHECK(!cmp(&i2p_low, addr4("1.1.1.1")));
+	TEST_CHECK(!cmp(&i2p_high, addr4("100.1.1.1")));
+	TEST_CHECK(!cmp(&i2p_low, addr4("100.1.1.1")));
+
+	// internal i2p sorting
+	TEST_CHECK(cmp(&i2p_low, &i2p_high));
+	TEST_CHECK(!cmp(&i2p_high, &i2p_low));
+	TEST_CHECK(!cmp(&i2p_high, &i2p_high));
+	TEST_CHECK(!cmp(&i2p_low, &i2p_low));
+
+	TEST_CHECK(cmp(&i2p_low, "zzzzzz"));
+	TEST_CHECK(!cmp(&i2p_high, "aaaaaa"));
+	TEST_CHECK(!cmp(&i2p_high, "zzzzzz"));
+	TEST_CHECK(!cmp(&i2p_low, "aaaaaa"));
+	TEST_CHECK(cmp(&i2p_low, "aaaaab"));
+
+	TEST_CHECK(cmp("aaaaaa", &i2p_high));
+	TEST_CHECK(!cmp("zzzzzz", &i2p_low));
+	TEST_CHECK(!cmp("zzzzzz", &i2p_high));
+	TEST_CHECK(cmp("zzzzzy", &i2p_high));
+	TEST_CHECK(!cmp("aaaaaa", &i2p_low));
+#endif
+}
+
+#if TORRENT_USE_I2P
+TORRENT_TEST(peer_info_set_i2p_destination)
+{
+	peer_info p;
+	TORRENT_ASSERT(!(p.flags & peer_info::i2p_socket));
+	p.set_i2p_destination(sha256_hash("................................"));
+
+	TORRENT_ASSERT(p.i2p_destination() == sha256_hash("................................"));
+	TORRENT_ASSERT(p.flags & peer_info::i2p_socket);
+}
+#endif
+
+TORRENT_TEST(clear_peers)
+{
+	torrent_state st = init_state();
+	st.max_peerlist_size = 5;
+	mock_torrent t(&st);
+	peer_list p(allocator);
+	t.m_p = &p;
+
+	torrent_peer* peer1 = add_peer(p, st, ep("10.0.0.1", 8080));
+	TEST_CHECK(peer1);
+	p.set_seed(peer1, true);
+
+	torrent_peer* peer2 = add_peer(p, st, ep("10.0.0.2", 8080));
+	TEST_CHECK(peer2);
+
+	torrent_peer* peer3 = add_peer(p, st, ep("10.0.0.3", 8080));
+	TEST_CHECK(peer3);
+
+	p.connect_one_peer(1, &st);
+
+	TEST_EQUAL(p.num_peers(), 3);
+	TEST_EQUAL(p.num_candidate_cache(), 2);
+	TEST_EQUAL(p.num_connect_candidates(), 3);
+	TEST_EQUAL(p.num_seeds(), 1);
+
+	p.clear();
+	TEST_EQUAL(p.num_peers(), 0);
+	TEST_EQUAL(p.num_candidate_cache(), 0);
+	TEST_EQUAL(p.num_connect_candidates(), 0);
+	TEST_EQUAL(p.num_seeds(), 0);
 }
 
 // TODO: test erasing peers

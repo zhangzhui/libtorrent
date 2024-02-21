@@ -1,42 +1,21 @@
 /*
 
-Copyright (c) 2013-2018, Arvid Norberg
+Copyright (c) 2013-2018, 2020-2022, Arvid Norberg
+Copyright (c) 2016, 2018, 2020-2021, Alden Torres
+Copyright (c) 2016, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
-#include "libtorrent/ip_voter.hpp"
-#include "libtorrent/broadcast_socket.hpp" // for is_any() etc.
-#include "libtorrent/socket_io.hpp" // for hash_address
-#include "libtorrent/random.hpp" // for random()
+#include "libtorrent/aux_/ip_voter.hpp"
+#include "libtorrent/aux_/socket_io.hpp" // for hash_address
+#include "libtorrent/aux_/random.hpp" // for random()
 #include "libtorrent/aux_/time.hpp" // for aux::time_now()
+#include "libtorrent/aux_/ip_helpers.hpp" // for is_local() etc.
 
-namespace libtorrent {
+namespace libtorrent::aux {
 
 	ip_voter::ip_voter()
 		: m_total_votes(0)
@@ -99,9 +78,9 @@ namespace libtorrent {
 	bool ip_voter::cast_vote(address const& ip
 		, aux::ip_source_t const source_type, address const& source)
 	{
-		if (is_any(ip)) return false;
-		if (is_local(ip)) return false;
-		if (is_loopback(ip)) return false;
+		if (ip.is_unspecified()) return false;
+		if (aux::is_local(ip)) return false;
+		if (ip.is_loopback()) return false;
 
 		// don't trust source that aren't connected to us
 		// on a different address family than the external
@@ -175,7 +154,7 @@ namespace libtorrent {
 
 	external_ip::external_ip(address const& local4, address const& global4
 		, address const& local6, address const& global6)
-		: m_addresses{{global4, ensure_v6(global6)}, {local4, ensure_v6(local6)}}
+		: m_addresses{{global4, aux::ensure_v6(global6)}, {local4, aux::ensure_v6(local6)}}
 	{
 		TORRENT_ASSERT(m_addresses[0][1].is_v6());
 		TORRENT_ASSERT(m_addresses[1][1].is_v6());
@@ -185,7 +164,7 @@ namespace libtorrent {
 
 	address external_ip::external_address(address const& ip) const
 	{
-		address ext = m_addresses[is_local(ip)][ip.is_v6()];
+		address ext = m_addresses[aux::is_local(ip)][ip.is_v6()];
 		if (ip.is_v6() && ext == address_v4()) return address_v6();
 		return ext;
 	}

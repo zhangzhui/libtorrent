@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2008-2018, Arvid Norberg
+Copyright (c) 2008-2011, 2013-2021, Arvid Norberg
+Copyright (c) 2016-2017, 2019, Steven Siloti
+Copyright (c) 2018, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_ERROR_CODE_HPP_INCLUDED
@@ -110,7 +89,7 @@ namespace errors {
 		unsupported_url_protocol,
 		// The URL did not conform to URL syntax and failed to be parsed
 		url_parse_error,
-		// The peer sent a 'piece' message of length 0
+		// The peer sent a piece message of length 0
 		peer_sent_empty_piece,
 		// A bencoded structure was corrupt and failed to be parsed
 		parse_failed,
@@ -128,7 +107,7 @@ namespace errors {
 		// The port is blocked by the port-filter, and prevented the
 		// connection
 		port_blocked,
-		// The IPv6 address was expected to end with ']'
+		// The IPv6 address was expected to end with "]"
 		expected_close_bracket_in_address,
 		// The torrent is being destructed, preventing the operation to
 		// succeed
@@ -214,9 +193,9 @@ namespace errors {
 		sync_hash_not_found,
 		// The encryption constant in the handshake is invalid
 		invalid_encryption_constant,
-		// The peer does not support plaintext, which is the selected mode
+		// The peer does not support plain text, which is the selected mode
 		no_plaintext_mode,
-		// The peer does not support rc4, which is the selected mode
+		// The peer does not support RC4, which is the selected mode
 		no_rc4_mode,
 		// The peer does not support any of the encryption modes that the
 		// client supports
@@ -324,6 +303,9 @@ namespace errors {
 		invalid_session_handle,
 		// the listen socket associated with this request was closed
 		invalid_listen_socket,
+		invalid_hash_request,
+		invalid_hashes,
+		invalid_hash_reject,
 
 #if TORRENT_ABI_VERSION == 1
 		// these error codes are deprecated, NAT-PMP/PCP error codes have
@@ -347,12 +329,11 @@ namespace errors {
 		deprecated_124,
 #endif
 
-
-		// The resume data file is missing the 'file sizes' entry
+		// The resume data file is missing the ``file sizes`` entry
 		missing_file_sizes = 130,
-		// The resume data file 'file sizes' entry is empty
+		// The resume data file ``file sizes`` entry is empty
 		no_files_in_resume_data,
-		// The resume data file is missing the 'pieces' and 'slots' entry
+		// The resume data file is missing the ``pieces`` and ``slots`` entry
 		missing_pieces,
 		// The number of files in the resume data does not match the number
 		// of files in the torrent
@@ -365,16 +346,16 @@ namespace errors {
 		mismatching_file_timestamp,
 		// The resume data file is not a dictionary
 		not_a_dictionary,
-		// The 'blocks per piece' entry is invalid in the resume data file
+		// The ``blocks per piece`` entry is invalid in the resume data file
 		invalid_blocks_per_piece,
-		// The resume file is missing the 'slots' entry, which is required
+		// The resume file is missing the ``slots`` entry, which is required
 		// for torrents with compact allocation. *DEPRECATED*
 		missing_slots,
 		// The resume file contains more slots than the torrent
 		too_many_slots,
-		// The 'slot' entry is invalid in the resume data
+		// The ``slot`` entry is invalid in the resume data
 		invalid_slot_list,
-		// One index in the 'slot' list is invalid
+		// One index in the ``slot`` list is invalid
 		invalid_piece_index,
 		// The pieces on disk needs to be re-ordered for the specified
 		// allocation mode. This happens if you specify sparse allocation
@@ -385,7 +366,9 @@ namespace errors {
 		// specifying the flag to only save when there's anything new to save
 		// (torrent_handle::only_if_modified) and there wasn't anything changed.
 		resume_data_not_modified,
-
+		// The torrent contained too many duplicate filenames, exceeding the
+		// configured limit.
+		too_many_duplicate_filenames,
 
 
 		// The HTTP header was not correctly formatted
@@ -405,7 +388,6 @@ namespace errors {
 		no_i2p_endpoint = 161,
 
 
-
 		// The tracker URL doesn't support transforming it into a scrape
 		// URL. i.e. it doesn't contain "announce.
 		scrape_not_available = 170,
@@ -415,18 +397,21 @@ namespace errors {
 		invalid_peer_dict,
 		// tracker sent a failure message
 		tracker_failure,
-		// missing or invalid 'files' entry
+		// missing or invalid ``files`` entry
 		invalid_files_entry,
-		// missing or invalid 'hash' entry
+		// missing or invalid ``hash`` entry
 		invalid_hash_entry,
-		// missing or invalid 'peers' and 'peers6' entry
+		// missing or invalid ``peers`` and ``peers6`` entry
 		invalid_peers_entry,
-		// udp tracker response packet has invalid size
+		// UDP tracker response packet has invalid size
 		invalid_tracker_response_length,
-		// invalid transaction id in udp tracker response
+		// invalid transaction id in UDP tracker response
 		invalid_tracker_transaction_id,
-		// invalid action field in udp tracker response
+		// invalid action field in UDP tracker response
 		invalid_tracker_action,
+		// skipped announce (because it's assumed to be unreachable over the
+		// given source network interface)
+		announce_skipped,
 
 #if TORRENT_ABI_VERSION == 1
 		// expected string in bencoded string
@@ -447,6 +432,29 @@ namespace errors {
 
 		// random number generation failed
 		no_entropy = 200,
+		// blocked by SSRF mitigation
+		ssrf_mitigation,
+		// blocked because IDNA host names are banned
+		blocked_by_idna,
+
+		// the torrent file has an unknown meta version
+		torrent_unknown_version = 210,
+		// the v2 torrent file has no file tree
+		torrent_missing_file_tree,
+		// the torrent contains v2 keys but does not specify meta version 2
+		torrent_missing_meta_version,
+		// the v1 and v2 file metadata does not match
+		torrent_inconsistent_files,
+		// one or more files are missing piece layer hashes
+		torrent_missing_piece_layer,
+		// a piece layer has the wrong size or failed hash check
+		torrent_invalid_piece_layer,
+		// a v2 file entry has no root hash
+		torrent_missing_pieces_root,
+		// the v1 and v2 hashes do not describe the same data
+		torrent_inconsistent_hashes,
+		// a file in the v2 metadata has the pad attribute set
+		torrent_invalid_pad_file,
 
 		// the number of error codes
 		error_code_max
@@ -513,21 +521,34 @@ namespace errors {
 	// error happened on
 	struct TORRENT_EXPORT storage_error
 	{
+		// hidden
 		storage_error(): file_idx(-1), operation(operation_t::unknown) {}
 		explicit storage_error(error_code e): ec(e), file_idx(-1), operation(operation_t::unknown) {}
+		storage_error(error_code e, operation_t const op)
+			: ec(e), file_idx(-1), operation(op) {}
+		storage_error(error_code e, file_index_t f, operation_t const op)
+			: ec(e), file_idx(f), operation(op) {}
 
+		// explicitly converts to true if this object represents an error, and
+		// false if it does not.
 		explicit operator bool() const { return ec.value() != 0; }
 
 		// the error that occurred
 		error_code ec;
 
+		// set and query the index (in the torrent) of the file this error
+		// occurred on. This may also have special values defined in
+		// torrent_status.
 		file_index_t file() const { return file_index_t(file_idx); }
 		void file(file_index_t f) { file_idx = static_cast<int>(f); }
 
-		// the file the error occurred on
+	private:
+		// internal
 		std::int32_t file_idx:24;
 
-		// A code from file_operation_t enum, indicating what
+	public:
+
+		// A code from operation_t enum, indicating what
 		// kind of operation failed.
 		operation_t operation;
 
@@ -535,7 +556,8 @@ namespace errors {
 		// Returns a string literal representing the file operation
 		// that failed. If there were no failure, it returns
 		// an empty string.
-		char const* operation_str() const TORRENT_DEPRECATED_MEMBER
+		TORRENT_DEPRECATED
+		char const* operation_str() const
 		{ return operation_name(operation); }
 #endif
 	};

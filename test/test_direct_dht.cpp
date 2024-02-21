@@ -1,33 +1,12 @@
 /*
 
+Copyright (c) 2015-2020, 2022, Arvid Norberg
 Copyright (c) 2015, Steven Siloti
+Copyright (c) 2016, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
@@ -36,6 +15,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/config.hpp"
 #include "libtorrent/session.hpp"
+#include "libtorrent/session_params.hpp"
 #include "libtorrent/extensions.hpp"
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/bdecode.hpp"
@@ -101,9 +81,9 @@ TORRENT_TEST(direct_dht_request)
 	sp.set_str(settings_pack::dht_bootstrap_nodes, "");
 	sp.set_int(settings_pack::max_retry_port_bind, 800);
 	sp.set_str(settings_pack::listen_interfaces, "127.0.0.1:42434");
-	lt::session responder(sp, {});
+	lt::session responder(session_params(sp, {}));
 	sp.set_str(settings_pack::listen_interfaces, "127.0.0.1:45434");
-	lt::session requester(sp, {});
+	lt::session requester(session_params(sp, {}));
 
 	responder.add_extension(std::make_shared<test_plugin>());
 
@@ -112,7 +92,7 @@ TORRENT_TEST(direct_dht_request)
 	entry r;
 	r["q"] = "test_good";
 	requester.dht_direct_request(uep("127.0.0.1", responder.listen_port())
-		, r, reinterpret_cast<void*>(12345));
+		, r, client_data_t(reinterpret_cast<int*>(12345)));
 
 	dht_direct_response_alert* ra = get_direct_response(requester);
 	TEST_CHECK(ra);
@@ -123,13 +103,13 @@ TORRENT_TEST(direct_dht_request)
 		TEST_EQUAL(ra->endpoint.port(), responder.listen_port());
 		TEST_EQUAL(response.type(), bdecode_node::dict_t);
 		TEST_EQUAL(response.dict_find_dict("r").dict_find_int_value("good"), 1);
-		TEST_EQUAL(ra->userdata, reinterpret_cast<void*>(12345));
+		TEST_EQUAL(ra->userdata.get<int>(), reinterpret_cast<int*>(12345));
 	}
 
 	// failed request
 
 	requester.dht_direct_request(uep("127.0.0.1", 53545)
-		, r, reinterpret_cast<void*>(123456));
+		, r, client_data_t(reinterpret_cast<int*>(123456)));
 
 	ra = get_direct_response(requester);
 	TEST_CHECK(ra);
@@ -138,7 +118,7 @@ TORRENT_TEST(direct_dht_request)
 		TEST_EQUAL(ra->endpoint.address(), make_address("127.0.0.1"));
 		TEST_EQUAL(ra->endpoint.port(), 53545);
 		TEST_EQUAL(ra->response().type(), bdecode_node::none_t);
-		TEST_EQUAL(ra->userdata, reinterpret_cast<void*>(123456));
+		TEST_EQUAL(ra->userdata.get<int>(), reinterpret_cast<int*>(123456));
 	}
 
 	abort.emplace_back(responder.abort());

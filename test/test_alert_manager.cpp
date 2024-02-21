@@ -1,37 +1,18 @@
 /*
 
-Copyright (c) 2015, Arvid Norberg
+Copyright (c) 2018, Steven Siloti
+Copyright (c) 2015-2021, Arvid Norberg
+Copyright (c) 2016, 2018, 2020, Alden Torres
+Copyright (c) 2018, d-komarov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
-#include "libtorrent/alert_manager.hpp"
+#include "test_utils.hpp"
+#include "libtorrent/aux_/alert_manager.hpp"
 #include "libtorrent/torrent_handle.hpp"
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/extensions.hpp"
@@ -44,14 +25,14 @@ using namespace lt;
 
 TORRENT_TEST(limit)
 {
-	alert_manager mgr(500, alert::all_categories);
+	aux::alert_manager mgr(500, alert_category::all);
 
 	TEST_EQUAL(mgr.alert_queue_size_limit(), 500);
 	TEST_EQUAL(mgr.pending(), false);
 
 	// try add 600 torrent_add_alert to make sure we honor the limit of 500
 	// alerts.
-	for (piece_index_t i{0}; i < piece_index_t{600}; ++i)
+	for (auto i = 0_piece; i < 600_piece; ++i)
 		mgr.emplace_alert<piece_finished_alert>(torrent_handle(), i);
 
 	TEST_EQUAL(mgr.pending(), true);
@@ -68,7 +49,7 @@ TORRENT_TEST(limit)
 	// now, try lowering the limit and do the same thing again
 	mgr.set_alert_queue_size_limit(200);
 
-	for (piece_index_t i{0}; i < piece_index_t{600}; ++i)
+	for (auto i = 0_piece; i < 600_piece; ++i)
 		mgr.emplace_alert<piece_finished_alert>(torrent_handle(), i);
 
 	TEST_EQUAL(mgr.pending(), true);
@@ -83,15 +64,15 @@ TORRENT_TEST(limit)
 TORRENT_TEST(limit_int_max)
 {
 	int const inf = std::numeric_limits<int>::max();
-	alert_manager mgr(inf, alert::all_categories);
+	aux::alert_manager mgr(inf, alert_category::all);
 
 	TEST_EQUAL(mgr.alert_queue_size_limit(), inf);
 
-	for (piece_index_t i{0}; i < piece_index_t{600}; ++i)
+	for (auto i = 0_piece; i < 600_piece; ++i)
 		mgr.emplace_alert<piece_finished_alert>(torrent_handle(), i);
 
-	for (piece_index_t i{0}; i < piece_index_t{600}; ++i)
-		mgr.emplace_alert<torrent_removed_alert>(torrent_handle(), sha1_hash());
+	for (auto i = 0_piece; i < 600_piece; ++i)
+		mgr.emplace_alert<torrent_removed_alert>(torrent_handle(), info_hash_t(), client_data_t{});
 
 	std::vector<alert*> alerts;
 	mgr.get_all(alerts);
@@ -101,16 +82,16 @@ TORRENT_TEST(limit_int_max)
 
 TORRENT_TEST(priority_limit)
 {
-	alert_manager mgr(100, alert::all_categories);
+	aux::alert_manager mgr(100, alert_category::all);
 
 	TEST_EQUAL(mgr.alert_queue_size_limit(), 100);
 
 	// this should only add 100 because of the limit
-	for (piece_index_t i{0}; i < piece_index_t{200}; ++i)
+	for (auto i = 0_piece; i < 200_piece; ++i)
 		mgr.emplace_alert<piece_finished_alert>(torrent_handle(), i);
 
 	// the limit is twice as high for priority alerts
-	for (file_index_t i(0); i < file_index_t(300); ++i)
+	for (auto i = 0_file; i < 300_file; ++i)
 		mgr.emplace_alert<file_rename_failed_alert>(torrent_handle(), i, error_code());
 
 	std::vector<alert*> alerts;
@@ -132,7 +113,7 @@ void test_notify_fun(int& cnt)
 TORRENT_TEST(notify_function)
 {
 	int cnt = 0;
-	alert_manager mgr(100, alert::all_categories);
+	aux::alert_manager mgr(100, alert_category::all);
 
 	TEST_EQUAL(mgr.alert_queue_size_limit(), 100);
 	TEST_EQUAL(mgr.pending(), false);
@@ -191,7 +172,7 @@ TORRENT_TEST(extensions)
 {
 #ifndef TORRENT_DISABLE_EXTENSIONS
 	memset(plugin_alerts, 0, sizeof(plugin_alerts));
-	alert_manager mgr(100, alert::all_categories);
+	aux::alert_manager mgr(100, alert_category::all);
 
 	mgr.add_extension(std::make_shared<test_plugin>(0));
 	mgr.add_extension(std::make_shared<test_plugin>(1));
@@ -213,9 +194,10 @@ TORRENT_TEST(extensions)
 #endif
 }
 
+/*
 namespace {
 
-void post_torrent_added(alert_manager* mgr)
+void post_torrent_added(aux::alert_manager* mgr)
 {
 	std::this_thread::sleep_for(lt::milliseconds(10));
 	mgr->emplace_alert<add_torrent_alert>(torrent_handle(), add_torrent_params(), error_code());
@@ -223,9 +205,11 @@ void post_torrent_added(alert_manager* mgr)
 
 } // anonymous namespace
 
+// this test is too flaky
+
 TORRENT_TEST(wait_for_alert)
 {
-	alert_manager mgr(100, alert::all_categories);
+	aux::alert_manager mgr(100, alert_category::all);
 
 	time_point start = clock_type::now();
 
@@ -263,10 +247,11 @@ TORRENT_TEST(wait_for_alert)
 
 	posting_thread.join();
 }
+*/
 
 TORRENT_TEST(alert_mask)
 {
-	alert_manager mgr(100, alert::all_categories);
+	aux::alert_manager mgr(100, alert_category::all);
 
 	TEST_CHECK(mgr.should_post<add_torrent_alert>());
 	TEST_CHECK(mgr.should_post<torrent_paused_alert>());
@@ -277,9 +262,19 @@ TORRENT_TEST(alert_mask)
 	TEST_CHECK(!mgr.should_post<torrent_paused_alert>());
 }
 
+TORRENT_TEST(get_all_empty)
+{
+	aux::alert_manager mgr(100, alert_category::all);
+	std::vector<alert*> alerts(10);
+
+	mgr.get_all(alerts);
+
+	TEST_CHECK(alerts.empty());
+}
+
 TORRENT_TEST(dropped_alerts)
 {
-	alert_manager mgr(1, alert::all_categories);
+	aux::alert_manager mgr(1, alert_category::all);
 
 	// nothing has dropped yet
 	mgr.emplace_alert<torrent_finished_alert>(torrent_handle());
@@ -298,7 +293,7 @@ TORRENT_TEST(dropped_alerts)
 
 TORRENT_TEST(alerts_dropped_alert)
 {
-	alert_manager mgr(1, alert::all_categories);
+	aux::alert_manager mgr(1, alert_category::all);
 
 	mgr.emplace_alert<torrent_finished_alert>(torrent_handle());
 	mgr.emplace_alert<torrent_finished_alert>(torrent_handle());
@@ -308,20 +303,25 @@ TORRENT_TEST(alerts_dropped_alert)
 	std::vector<alert*> alerts;
 	mgr.get_all(alerts);
 
+#ifndef TORRENT_DISABLE_ALERT_MSG
 	TEST_EQUAL(alerts.back()->message(), "dropped alerts: torrent_finished ");
+#endif
+	auto* a = lt::alert_cast<alerts_dropped_alert>(alerts.back());
+	TEST_CHECK(a);
+	TEST_CHECK(a->dropped_alerts[torrent_finished_alert::alert_type] == true);
 }
 
 #ifndef TORRENT_DISABLE_EXTENSIONS
 struct post_plugin : lt::plugin
 {
-	explicit post_plugin(alert_manager& m) : mgr(m) {}
-	void on_alert(alert const*)
+	explicit post_plugin(aux::alert_manager& m) : mgr(m) {}
+	void on_alert(alert const*) override
 	{
 		if (++depth > 10) return;
-		mgr.emplace_alert<piece_finished_alert>(torrent_handle(), piece_index_t{0});
+		mgr.emplace_alert<piece_finished_alert>(torrent_handle(), 0_piece);
 	}
 
-	alert_manager& mgr;
+	aux::alert_manager& mgr;
 	int depth = 0;
 };
 
@@ -329,14 +329,13 @@ struct post_plugin : lt::plugin
 // plugin handler
 TORRENT_TEST(recursive_alerts)
 {
-	alert_manager mgr(100, alert::all_categories);
+	aux::alert_manager mgr(100, alert_category::all);
 	auto pl = std::make_shared<post_plugin>(mgr);
 	mgr.add_extension(pl);
 
-	mgr.emplace_alert<piece_finished_alert>(torrent_handle(), piece_index_t{0});
+	mgr.emplace_alert<piece_finished_alert>(torrent_handle(), 0_piece);
 
 	TEST_EQUAL(pl->depth, 11);
 }
 
 #endif // TORRENT_DISABLE_EXTENSIONS
-

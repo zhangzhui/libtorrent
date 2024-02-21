@@ -1,43 +1,23 @@
 /*
 
-Copyright (c) 2013, Arvid Norberg
+Copyright (c) 2013, 2015-2017, 2019-2021, Arvid Norberg
+Copyright (c) 2018, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
 
 #include "libtorrent/time.hpp"
+#include "libtorrent/aux_/time.hpp"
 
 #include <functional>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <iostream>
 
 using namespace lt;
 
@@ -102,3 +82,43 @@ TORRENT_TEST(time)
 	t4.join();
 }
 
+TORRENT_TEST(test_time_conversion)
+{
+	int success = 0;
+	const int test_count = 10;
+
+	for (int i = 0; i < test_count; ++i)
+	{
+		auto now = aux::time_now32() + seconds32(rand() % 1000);
+		auto ctime = aux::to_time_t(now);
+		auto converted = aux::from_time_t(ctime);
+		if (now == converted)
+			++success;
+		else
+			std::cout << "now: " << now.time_since_epoch().count() << " converted: " << converted.time_since_epoch().count() << '\n';
+	}
+
+	// conversion depends on wall clock and may be flaky
+	TEST_CHECK(success >= test_count - 1);
+}
+
+TORRENT_TEST(test_time_conversion_with_offset)
+{
+	int success = 0;
+	const int test_count = 10;
+
+	for (int i = 0; i < test_count; ++i)
+	{
+		auto now = aux::time_now32() + seconds32(rand() % 1000);
+		auto ctime = aux::to_time_t(now);
+		// offset by 100 seconds
+		auto converted = aux::from_time_t(ctime + 100);
+		if (now + seconds32(100) == converted)
+			++success;
+		else
+			std::cout << "now: " << now.time_since_epoch().count() << " converted: " << converted.time_since_epoch().count() << '\n';
+	}
+
+	// conversion depends on wall clock and may be flaky
+	TEST_CHECK(success >= test_count - 1);
+}

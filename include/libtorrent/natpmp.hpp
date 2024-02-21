@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2007-2018, Arvid Norberg
+Copyright (c) 2007-2010, 2015-2022, Arvid Norberg
+Copyright (c) 2016-2017, 2021, Alden Torres
+Copyright (c) 2017, Pavel Pimenov
+Copyright (c) 2018, Steven Siloti
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_NATPMP_HPP
@@ -37,11 +17,13 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/socket.hpp"
 #include "libtorrent/address.hpp"
 #include "libtorrent/error_code.hpp"
-#include "libtorrent/deadline_timer.hpp"
+#include "libtorrent/aux_/deadline_timer.hpp"
 #include "libtorrent/time.hpp"
-#include "libtorrent/debug.hpp"
+#include "libtorrent/aux_/debug.hpp"
 #include "libtorrent/aux_/portmap.hpp"
 #include "libtorrent/aux_/vector.hpp"
+#include "libtorrent/aux_/enum_net.hpp" // for ip_interface
+#include "libtorrent/aux_/listen_socket_handle.hpp"
 
 namespace libtorrent {
 
@@ -68,7 +50,7 @@ namespace errors {
 	boost::system::error_code make_error_code(pcp_errors e);
 } // namespace errors
 
-	boost::system::error_category& pcp_category();
+	TORRENT_EXPORT boost::system::error_category& pcp_category();
 } // namespace libtorrent
 
 namespace boost {
@@ -80,17 +62,18 @@ namespace system {
 
 namespace libtorrent {
 
-struct TORRENT_EXTRA_EXPORT natpmp
+struct TORRENT_EXTRA_EXPORT natpmp final
 	: std::enable_shared_from_this<natpmp>
-	, single_threaded
+	, aux::single_threaded
 {
-	natpmp(io_context& ios, aux::portmap_callback& cb);
+	natpmp(io_context& ios, aux::portmap_callback& cb, aux::listen_socket_handle ls);
 
-	void start(address local_address, std::string device);
+	void start(aux::ip_interface const& ip);
 
 	// maps the ports, if a port is set to 0
 	// it will not be mapped
-	port_mapping_t add_mapping(portmap_protocol p, int external_port, tcp::endpoint local_ep);
+	port_mapping_t add_mapping(portmap_protocol p, int external_port, tcp::endpoint local_ep
+		, std::string const& device);
 	void delete_mapping(port_mapping_t mapping_index);
 	bool get_mapping(port_mapping_t mapping_index, int& local_port, int& external_port
 		, portmap_protocol& protocol) const;
@@ -192,13 +175,17 @@ private:
 
 	// used to resend udp packets in case
 	// they time out
-	deadline_timer m_send_timer;
+	aux::deadline_timer m_send_timer;
 
 	// timer used to refresh mappings
-	deadline_timer m_refresh_timer;
+	aux::deadline_timer m_refresh_timer;
 
 	// the mapping index that will expire next
 	port_mapping_t m_next_refresh{-1};
+
+	io_context& m_ioc;
+
+	aux::listen_socket_handle m_listen_handle;
 
 	bool m_disabled = false;
 

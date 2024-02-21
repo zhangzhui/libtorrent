@@ -1,33 +1,10 @@
 /*
 
-Copyright (c) 2007-2018, Arvid Norberg
+Copyright (c) 2007-2008, 2010-2011, 2013-2020, 2022, Arvid Norberg
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_ASSERT_HPP_INCLUDED
@@ -85,6 +62,9 @@ extern TORRENT_EXPORT char const* libtorrent_assert_log;
 
 #ifndef TORRENT_USE_SYSTEM_ASSERTS
 
+#define TORRENT_ASSERT_PRECOND_MSG(x, msg) \
+	do { if (x) {} else libtorrent::assert_fail(#x, __LINE__, __FILE__, __func__, msg, 1); } TORRENT_WHILE_0
+
 #define TORRENT_ASSERT_PRECOND(x) \
 	do { if (x) {} else libtorrent::assert_fail(#x, __LINE__, __FILE__, __func__, nullptr, 1); } TORRENT_WHILE_0
 
@@ -93,12 +73,12 @@ extern TORRENT_EXPORT char const* libtorrent_assert_log;
 
 #if TORRENT_USE_IOSTREAM
 #define TORRENT_ASSERT_VAL(x, y) \
-	do { if (x) {} else { std::stringstream __s__; __s__ << #y ": " << y; \
-	libtorrent::assert_fail(#x, __LINE__, __FILE__, __func__, __s__.str().c_str(), 0); } } TORRENT_WHILE_0
+	do { if (x) {} else { std::stringstream _s; _s << #y ": " << y; \
+	libtorrent::assert_fail(#x, __LINE__, __FILE__, __func__, _s.str().c_str(), 0); } } TORRENT_WHILE_0
 
 #define TORRENT_ASSERT_FAIL_VAL(y) \
-	do { std::stringstream __s__; __s__ << #y ": " << y; \
-	libtorrent::assert_fail("<unconditional>", __LINE__, __FILE__, __func__, __s__.str().c_str(), 0); } TORRENT_WHILE_0
+	do { std::stringstream _s; _s << #y ": " << y; \
+	libtorrent::assert_fail("<unconditional>", __LINE__, __FILE__, __func__, _s.str().c_str(), 0); } TORRENT_WHILE_0
 
 #else
 #define TORRENT_ASSERT_VAL(x, y) TORRENT_ASSERT(x)
@@ -110,6 +90,7 @@ extern TORRENT_EXPORT char const* libtorrent_assert_log;
 
 #else
 #include <cassert>
+#define TORRENT_ASSERT_PRECOND_MSG(x, msg) assert(x)
 #define TORRENT_ASSERT_PRECOND(x) assert(x)
 #define TORRENT_ASSERT(x) assert(x)
 #define TORRENT_ASSERT_VAL(x, y) assert(x)
@@ -119,6 +100,7 @@ extern TORRENT_EXPORT char const* libtorrent_assert_log;
 
 #else // TORRENT_USE_ASSERTS
 
+#define TORRENT_ASSERT_PRECOND_MSG(a, msg) do {} TORRENT_WHILE_0
 #define TORRENT_ASSERT_PRECOND(a) do {} TORRENT_WHILE_0
 #define TORRENT_ASSERT(a) do {} TORRENT_WHILE_0
 #define TORRENT_ASSERT_VAL(a, b) do {} TORRENT_WHILE_0

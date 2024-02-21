@@ -1,33 +1,12 @@
 /*
 
-Copyright (c) 2014, Arvid Norberg
+Copyright (c) 2014-2017, 2019-2022, Arvid Norberg
+Copyright (c) 2016, 2020-2021, Alden Torres
+Copyright (c) 2016, Andrei Kurushin
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/bencode.hpp"
@@ -36,10 +15,10 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/io_context.hpp"
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/socket.hpp"
-#include "libtorrent/socket_io.hpp"
-#include "libtorrent/io.hpp"
+#include "libtorrent/aux_/socket_io.hpp"
+#include "libtorrent/aux_/io_bytes.hpp"
 #include "libtorrent/aux_/time.hpp"
-#include "libtorrent/broadcast_socket.hpp" // for is_v6
+#include "libtorrent/aux_/ip_helpers.hpp" // for is_v6
 #include "udp_tracker.hpp"
 #include "test_utils.hpp"
 
@@ -67,13 +46,13 @@ struct udp_tracker
 	{
 		if (ec)
 		{
-			std::printf("%s: UDP tracker, read failed: %s\n", time_now_string(), ec.message().c_str());
+			std::printf("%s: UDP tracker, read failed: %s\n", time_now_string().c_str(), ec.message().c_str());
 			return;
 		}
 
 		if (bytes_transferred < 16)
 		{
-			std::printf("%s: UDP message too short (from: %s)\n", time_now_string(), print_endpoint(*from).c_str());
+			std::printf("%s: UDP message too short (from: %s)\n", time_now_string().c_str(), aux::print_endpoint(*from).c_str());
 			return;
 		}
 
@@ -82,12 +61,12 @@ struct udp_tracker
 			return;
 		}
 
-		std::printf("%s: UDP message %d bytes\n", time_now_string(), int(bytes_transferred));
+		std::printf("%s: UDP message %d bytes\n", time_now_string().c_str(), int(bytes_transferred));
 
 		char* ptr = buffer;
-		detail::read_uint64(ptr);
-		std::uint32_t const action = detail::read_uint32(ptr);
-		std::uint32_t const transaction_id = detail::read_uint32(ptr);
+		aux::read_uint64(ptr);
+		std::uint32_t const action = aux::read_uint32(ptr);
+		std::uint32_t const transaction_id = aux::read_uint32(ptr);
 
 		error_code e;
 
@@ -95,23 +74,17 @@ struct udp_tracker
 		{
 			case 0: // connect
 
-				if (bytes_transferred < 16)
-				{
-					std::printf("invalid connect message: %d Bytes, expected 16 Bytes\n"
-						, int(bytes_transferred));
-					return;
-				}
-				std::printf("%s: UDP connect from %s\n", time_now_string()
-					, print_endpoint(*from).c_str());
+				std::printf("%s: UDP connect from %s\n", time_now_string().c_str()
+					, aux::print_endpoint(*from).c_str());
 				ptr = buffer;
-				detail::write_uint32(0, ptr); // action = connect
-				detail::write_uint32(transaction_id, ptr); // transaction_id
-				detail::write_uint64(10, ptr); // connection_id
+				aux::write_uint32(0, ptr); // action = connect
+				aux::write_uint32(transaction_id, ptr); // transaction_id
+				aux::write_uint64(10, ptr); // connection_id
 				m_socket.send_to(boost::asio::buffer(buffer, 16), *from, 0, e);
 				if (e) std::printf("%s: UDP send_to failed. ERROR: %s\n"
-					, time_now_string(), e.message().c_str());
+					, time_now_string().c_str(), e.message().c_str());
 				else std::printf("%s: UDP sent response to: %s\n"
-					, time_now_string(), print_endpoint(*from).c_str());
+					, time_now_string().c_str(), aux::print_endpoint(*from).c_str());
 				break;
 
 			case 1: // announce
@@ -124,47 +97,47 @@ struct udp_tracker
 				}
 
 				++m_udp_announces;
-				std::printf("%s: UDP announce [%d]\n", time_now_string()
+				std::printf("%s: UDP announce [%d]\n", time_now_string().c_str()
 					, int(m_udp_announces));
 				ptr = buffer;
-				detail::write_uint32(1, ptr); // action = announce
-				detail::write_uint32(transaction_id, ptr); // transaction_id
-				detail::write_uint32(1800, ptr); // interval
-				detail::write_uint32(1, ptr); // incomplete
-				detail::write_uint32(1, ptr); // complete
+				aux::write_uint32(1, ptr); // action = announce
+				aux::write_uint32(transaction_id, ptr); // transaction_id
+				aux::write_uint32(1800, ptr); // interval
+				aux::write_uint32(1, ptr); // incomplete
+				aux::write_uint32(1, ptr); // complete
 				// 1 peers
-				if (is_v6(*from))
+				if (aux::is_v6(*from))
 				{
-					detail::write_uint32(0, ptr);
-					detail::write_uint32(0, ptr);
-					detail::write_uint32(0, ptr);
-					detail::write_uint8(1, ptr);
-					detail::write_uint8(3, ptr);
-					detail::write_uint8(3, ptr);
-					detail::write_uint8(7, ptr);
-					detail::write_uint16(1337, ptr);
+					aux::write_uint32(0, ptr);
+					aux::write_uint32(0, ptr);
+					aux::write_uint32(0, ptr);
+					aux::write_uint8(0, ptr);
+					aux::write_uint8(0, ptr);
+					aux::write_uint8(0, ptr);
+					aux::write_uint8(1, ptr);
+					aux::write_uint16(1337, ptr);
 				}
 				else
 				{
-					detail::write_uint8(1, ptr);
-					detail::write_uint8(3, ptr);
-					detail::write_uint8(3, ptr);
-					detail::write_uint8(7, ptr);
-					detail::write_uint16(1337, ptr);
+					aux::write_uint8(127, ptr);
+					aux::write_uint8(0, ptr);
+					aux::write_uint8(0, ptr);
+					aux::write_uint8(2, ptr);
+					aux::write_uint16(1337, ptr);
 				}
 				m_socket.send_to(boost::asio::buffer(buffer
 					, static_cast<std::size_t>(ptr - buffer)), *from, 0, e);
 				if (e) std::printf("%s: UDP send_to failed. ERROR: %s\n"
-					, time_now_string(), e.message().c_str());
+					, time_now_string().c_str(), e.message().c_str());
 				else std::printf("%s: UDP sent response to: %s\n"
-					, time_now_string(), print_endpoint(*from).c_str());
+					, time_now_string().c_str(), aux::print_endpoint(*from).c_str());
 				break;
 			case 2:
 				// ignore scrapes
-				std::printf("%s: UDP scrape (ignored)\n", time_now_string());
+				std::printf("%s: UDP scrape (ignored)\n", time_now_string().c_str());
 				break;
 			default:
-				std::printf("%s: UDP unknown message: %d\n", time_now_string()
+				std::printf("%s: UDP unknown message: %u\n", time_now_string().c_str()
 					, action);
 				break;
 		}
@@ -198,14 +171,14 @@ struct udp_tracker
 		}
 
 		std::printf("%s: UDP tracker [%p] initialized on port %d\n"
-			, time_now_string(), static_cast<void*>(this), m_port);
+			, time_now_string().c_str(), static_cast<void*>(this), m_port);
 
 		m_thread = std::make_shared<std::thread>(&udp_tracker::thread_fun, this);
 	}
 
 	void stop()
 	{
-		std::printf("%s: UDP tracker [%p], stop\n", time_now_string()
+		std::printf("%s: UDP tracker [%p], stop\n", time_now_string().c_str()
 			, static_cast<void*>(this));
 		m_abort = true;
 		m_socket.cancel();
@@ -215,7 +188,7 @@ struct udp_tracker
 	~udp_tracker()
 	{
 		std::printf("%s: UDP tracker [%p], ~udp_tracker\n"
-			, time_now_string(), static_cast<void*>(this));
+			, time_now_string().c_str(), static_cast<void*>(this));
 		post(m_ios, std::bind(&udp_tracker::stop, this));
 		if (m_thread) m_thread->join();
 	}

@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2017, Arvid Norberg
+Copyright (c) 2016, 2019-2022, Arvid Norberg
+Copyright (c) 2019, Steven Siloti
+Copyright (c) 2020, Tiger Wang
+Copyright (c) 2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/config.hpp"
@@ -38,7 +18,13 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/aux_/throw.hpp"
 #include "libtorrent/aux_/path.hpp"
 #include "libtorrent/error_code.hpp"
+#include "libtorrent/aux_/file.hpp" // for file_handle
+
 #include <cstdint>
+
+#ifdef TORRENT_WINDOWS
+#include "libtorrent/aux_/win_util.hpp"
+#endif
 
 #if TORRENT_HAVE_MMAP
 #include <sys/mman.h> // for mmap
@@ -48,6 +34,10 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/aux_/disable_warnings_push.hpp"
 auto const map_failed = MAP_FAILED;
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
+#endif
+
+#if TORRENT_USE_SYNC_FILE_RANGE
+#include <fcntl.h> // for sync_file_range
 #endif
 
 namespace libtorrent {
@@ -63,74 +53,12 @@ namespace {
 		return (mode & open_mode::write)
 			? file_size : std::min(std::int64_t(fh.get_size()), file_size);
 	}
-} // anonymous
-
-#if TORRENT_HAVE_MAP_VIEW_OF_FILE
-
-namespace {
-
-	DWORD file_access(open_mode_t const mode)
-	{
-		return (mode & open_mode::write)
-			? GENERIC_WRITE | GENERIC_READ
-			: GENERIC_READ;
-	}
-
-	DWORD file_create(open_mode_t const mode)
-	{
-		return (mode & open_mode::write) ? OPEN_ALWAYS : OPEN_EXISTING;
-	}
-
-	DWORD file_flags(open_mode_t const mode)
-	{
-		// one might think it's a good idea to pass in FILE_FLAG_RANDOM_ACCESS. It
-		// turns out that it isn't. That flag will break your operating system:
-		// http://support.microsoft.com/kb/2549369
-		return ((mode & open_mode::hidden) ? FILE_ATTRIBUTE_HIDDEN : FILE_ATTRIBUTE_NORMAL)
-			| ((mode & open_mode::no_cache) ? FILE_FLAG_WRITE_THROUGH : 0)
-			| ((mode & open_mode::random_access) ? 0 : FILE_FLAG_SEQUENTIAL_SCAN)
-			;
-	}
 
 } // anonymous
 
-file_handle::file_handle(string_view name, std::int64_t
-	, open_mode_t const mode)
-	: m_fd(CreateFileW(convert_to_native_path_string(name.to_string()).c_str()
-		, file_access(mode)
-		, FILE_SHARE_WRITE | FILE_SHARE_READ | FILE_SHARE_DELETE
-		, nullptr
-		, file_create(mode)
-		, file_flags(mode)
-		, nullptr))
-		, m_open_mode(mode)
-{
-	if (m_fd == invalid_handle) throw_ex<system_error>(error_code(GetLastError(), system_category()));
-
-	// try to make the file sparse if supported
-	// only set this flag if the file is opened for writing
-	if ((mode & aux::open_mode::sparse)
-		&& (mode & aux::open_mode::write))
-	{
-		DWORD temp;
-		::DeviceIoControl(m_fd, FSCTL_SET_SPARSE, 0, 0, 0, 0, &temp, nullptr);
-	}
-}
-
-#else
+#if !TORRENT_HAVE_MAP_VIEW_OF_FILE
 
 namespace {
-
-	int file_flags(open_mode_t const mode)
-	{
-		return ((mode & open_mode::write)
-			? O_RDWR | O_CREAT : O_RDONLY)
-#ifdef O_NOATIME
-			| ((mode & open_mode::no_atime)
-			? O_NOATIME : 0)
-#endif
-			;
-	}
 
 	int mmap_prot(open_mode_t const m)
 	{
@@ -145,9 +73,7 @@ namespace {
 		return
 			MAP_FILE | MAP_SHARED
 #ifdef MAP_NOCACHE
-			| ((m & open_mode::no_cache)
-			? MAP_NOCACHE
-			: 0)
+			| ((m & open_mode::no_cache) ? MAP_NOCACHE : 0)
 #endif
 #ifdef MAP_NOCORE
 			// BSD has a flag to exclude this region from core files
@@ -155,189 +81,10 @@ namespace {
 #endif
 			;
 	}
+
 } // anonymous
 
-file_handle::file_handle(string_view name, std::int64_t const size
-	, open_mode_t const mode)
-	: m_fd(open(name.to_string().c_str(), file_flags(mode), 0755))
-{
-#ifdef O_NOATIME
-	if (m_fd < 0 && (mode & open_mode::no_atime))
-	{
-		// NOATIME may not be allowed for certain files, it's best-effort,
-		// so just try again without NOATIME
-		m_fd = open(name.to_string().c_str()
-			, file_flags(mode & ~open_mode::no_atime), 0755);
-	}
 #endif
-	if (m_fd < 0) throw_ex<system_error>(error_code(errno, system_category()));
-
-	if (mode & open_mode::truncate)
-	{
-		if (ftruncate(m_fd, static_cast<off_t>(size)) < 0)
-		{
-			int const err = errno;
-			::close(m_fd);
-			throw_ex<system_error>(error_code(err, system_category()));
-		}
-
-		if (!(mode & open_mode::sparse))
-		{
-#if TORRENT_HAS_FALLOCATE
-			// if fallocate failed, we have to use posix_fallocate
-			// which can be painfully slow
-			// if you get a compile error here, you might want to
-			// define TORRENT_HAS_FALLOCATE to 0.
-			int const ret = posix_fallocate(m_fd, 0, size);
-			// posix_allocate fails with EINVAL in case the underlying
-			// filesystem does not support this operation
-			if (ret != 0 && ret != EINVAL)
-			{
-				::close(m_fd);
-				throw_ex<system_error>(error_code(ret, system_category()));
-			}
-#elif defined F_ALLOCSP64
-			flock64 fl64;
-			fl64.l_whence = SEEK_SET;
-			fl64.l_start = 0;
-			fl64.l_len = size;
-			if (fcntl(m_fd, F_ALLOCSP64, &fl64) < 0)
-			{
-				int const err = errno;
-				::close(m_fd);
-				throw_ex<system_error>(error_code(err, system_category()));
-			}
-#elif defined F_PREALLOCATE
-			fstore_t f = {F_ALLOCATECONTIG, F_PEOFPOSMODE, 0, size, 0};
-			if (fcntl(m_fd, F_PREALLOCATE, &f) < 0)
-			{
-				// It appears Apple's new filesystem (APFS) does not
-				// support this control message and fails with EINVAL
-				// if so, just skip it
-				if (errno != EINVAL)
-				{
-					if (errno != ENOSPC)
-					{
-						int const err = errno;
-						::close(m_fd);
-						throw_ex<system_error>(error_code(err, system_category()));
-					}
-					// ok, let's try to allocate non contiguous space then
-					f.fst_flags = F_ALLOCATEALL;
-					if (fcntl(m_fd, F_PREALLOCATE, &f) < 0)
-					{
-						int const err = errno;
-						::close(m_fd);
-						throw_ex<system_error>(error_code(err, system_category()));
-					}
-				}
-			}
-#endif // F_PREALLOCATE
-		}
-	}
-}
-#endif
-
-#ifdef TORRENT_WINDOWS
-namespace {
-	// returns true if the given file has any regions that are
-	// sparse, i.e. not allocated.
-	bool is_sparse(HANDLE file)
-	{
-		LARGE_INTEGER file_size;
-		if (!GetFileSizeEx(file, &file_size))
-			return false;
-
-#ifndef FSCTL_QUERY_ALLOCATED_RANGES
-typedef struct _FILE_ALLOCATED_RANGE_BUFFER {
-	LARGE_INTEGER FileOffset;
-	LARGE_INTEGER Length;
-} FILE_ALLOCATED_RANGE_BUFFER;
-#define FSCTL_QUERY_ALLOCATED_RANGES ((0x9 << 16) | (1 << 14) | (51 << 2) | 3)
-#endif
-		FILE_ALLOCATED_RANGE_BUFFER in;
-		in.FileOffset.QuadPart = 0;
-		in.Length.QuadPart = file_size.QuadPart;
-
-		FILE_ALLOCATED_RANGE_BUFFER out[2];
-
-		DWORD returned_bytes = 0;
-		BOOL ret = DeviceIoControl(file, FSCTL_QUERY_ALLOCATED_RANGES, (void*)&in, sizeof(in)
-			, out, sizeof(out), &returned_bytes, nullptr);
-
-		if (ret == FALSE) return true;
-
-		// if we have more than one range in the file, we're sparse
-		if (returned_bytes != sizeof(FILE_ALLOCATED_RANGE_BUFFER)) {
-			return true;
-		}
-
-		return (in.Length.QuadPart != out[0].Length.QuadPart);
-	}
-} // anonymous namespace
-#endif
-
-void file_handle::close()
-{
-	if (m_fd == invalid_handle) return;
-
-#ifdef TORRENT_WINDOWS
-
-	// if this file is open for writing, has the sparse
-	// flag set, but there are no sparse regions, unset
-	// the flag
-	if ((m_open_mode & aux::open_mode::write)
-		&& (m_open_mode & aux::open_mode::sparse)
-		&& !is_sparse(m_fd))
-	{
-		// according to MSDN, clearing the sparse flag of a file only
-		// works on windows vista and later
-#ifdef TORRENT_MINGW
-		typedef struct _FILE_SET_SPARSE_BUFFER {
-			BOOLEAN SetSparse;
-		} FILE_SET_SPARSE_BUFFER;
-#endif
-		DWORD temp;
-		FILE_SET_SPARSE_BUFFER b;
-		b.SetSparse = FALSE;
-		::DeviceIoControl(m_fd, FSCTL_SET_SPARSE, &b, sizeof(b)
-			, 0, 0, &temp, nullptr);
-	}
-#endif
-
-#if TORRENT_HAVE_MMAP
-	::close(m_fd);
-#else
-	CloseHandle(m_fd);
-#endif
-	m_fd = invalid_handle;
-}
-
-file_handle::~file_handle() { close(); }
-
-file_handle& file_handle::operator=(file_handle&& rhs)
-{
-	if (&rhs == this) return *this;
-	close();
-	m_fd = rhs.m_fd;
-	rhs.m_fd = invalid_handle;
-	return *this;
-}
-
-std::int64_t file_handle::get_size() const
-{
-#if TORRENT_HAVE_MMAP
-	struct ::stat fs;
-	if (::fstat(fd(), &fs) != 0)
-		throw_ex<system_error>(error_code(errno, system_category()));
-	return fs.st_size;
-#else
-	LARGE_INTEGER file_size;
-	if (GetFileSizeEx(fd(), &file_size) == 0)
-		throw_ex<system_error>(error_code(GetLastError(), system_category()));
-	return file_size.QuadPart;
-#endif
-}
 
 #if TORRENT_HAVE_MAP_VIEW_OF_FILE
 
@@ -376,7 +123,7 @@ file_mapping_handle::file_mapping_handle(file_handle file, open_mode_t const mod
 		fm.m_mapping = INVALID_HANDLE_VALUE;
 	}
 
-	file_mapping_handle& file_mapping_handle::operator=(file_mapping_handle&& fm)
+	file_mapping_handle& file_mapping_handle::operator=(file_mapping_handle&& fm) &
 	{
 		if (&fm == this) return *this;
 		close();
@@ -402,26 +149,36 @@ file_mapping_handle::file_mapping_handle(file_handle file, open_mode_t const mod
 file_mapping::file_mapping(file_handle file, open_mode_t const mode, std::int64_t const file_size)
 	: m_size(memory_map_size(mode, file_size, file))
 	, m_file(std::move(file))
-	, m_mapping(m_size > 0 ? mmap(nullptr, static_cast<std::size_t>(m_size)
-			, mmap_prot(mode), mmap_flags(mode), m_file.fd(), 0)
-	: nullptr)
+	, m_mapping((mode & open_mode::no_mmap) ? nullptr
+		: mmap(nullptr, static_cast<std::size_t>(m_size)
+			, mmap_prot(mode), mmap_flags(mode), m_file.fd(), 0))
 {
 	TORRENT_ASSERT(file_size >= 0);
 	// you can't create an mmap of size 0, so we just set it to null. We
 	// still need to create the empty file.
-	if (file_size > 0 && m_mapping == map_failed)
+	if (!(mode & open_mode::no_mmap) && m_mapping == map_failed)
 	{
-		throw_ex<system_error>(error_code(errno, system_category()));
+		throw_ex<storage_error>(error_code(errno, system_category()), operation_t::file_mmap);
 	}
 
-#if TORRENT_USE_MADVISE && defined MADV_DONTDUMP
+#if TORRENT_USE_MADVISE
 	if (file_size > 0)
 	{
+		int const advise = ((mode & open_mode::random_access) ? 0 : MADV_SEQUENTIAL)
+#ifdef MADV_DONTDUMP
 		// on versions of linux that support it, ask for this region to not be
 		// included in coredumps (mostly to make the coredumps more manageable
 		// with large disk caches)
 		// ignore errors here, since this is best-effort
-		madvise(m_mapping, static_cast<std::size_t>(m_size), MADV_DONTDUMP);
+			| MADV_DONTDUMP
+#endif
+#ifdef MADV_NOCORE
+		// This is the BSD counterpart to exclude a range from core dumps
+			| MADV_NOCORE
+#endif
+		;
+		if (advise != 0)
+			madvise(m_mapping, static_cast<std::size_t>(m_size), advise);
 	}
 #endif
 }
@@ -443,24 +200,33 @@ DWORD map_access(open_mode_t const m)
 } // anonymous
 
 file_mapping::file_mapping(file_handle file, open_mode_t const mode
-	, std::int64_t const file_size)
+	, std::int64_t const file_size
+	, std::shared_ptr<std::mutex> open_unmap_lock)
 	: m_size(memory_map_size(mode, file_size, file))
 	, m_file(std::move(file), mode, m_size)
-	, m_mapping(MapViewOfFile(m_file.handle()
-		, map_access(mode), 0, 0, static_cast<std::size_t>(m_size)))
+	, m_open_unmap_lock(open_unmap_lock)
+	, m_mapping((mode & open_mode::no_mmap) ? nullptr
+		: MapViewOfFile(m_file.handle(), map_access(mode), 0, 0, static_cast<std::size_t>(m_size)))
 {
 	// you can't create an mmap of size 0, so we just set it to null. We
 	// still need to create the empty file.
-	if (file_size > 0 && m_mapping == nullptr)
-	{
-		fprintf(stderr, "MapViewOfFile failed: %d\n", GetLastError());
-		throw_ex<system_error>(error_code(GetLastError(), system_category()));
-	}
+	if (!(mode & open_mode::no_mmap) && m_mapping == nullptr)
+		throw_ex<storage_error>(error_code(GetLastError(), system_category()), operation_t::file_mmap);
+}
+
+void file_mapping::flush()
+{
+	if (m_mapping == nullptr) return;
+
+	// ignore errors, this is best-effort
+	FlushViewOfFile(m_mapping, static_cast<std::size_t>(m_size));
 }
 
 void file_mapping::close()
 {
 	if (m_mapping == nullptr) return;
+	flush();
+	std::lock_guard<std::mutex> l(*m_open_unmap_lock);
 	UnmapViewOfFile(m_mapping);
 	m_mapping = nullptr;
 }
@@ -475,23 +241,68 @@ file_mapping::file_mapping(file_mapping&& rhs)
 		rhs.m_mapping = nullptr;
 	}
 
-	file_mapping& file_mapping::operator=(file_mapping&& rhs)
-	{
-		if (&rhs == this) return *this;
-		close();
-		m_file = std::move(rhs.m_file);
-		m_size = rhs.m_size;
-		m_mapping = rhs.m_mapping;
-		rhs.m_mapping = nullptr;
-		return *this;
-	}
+file_mapping& file_mapping::operator=(file_mapping&& rhs) &
+{
+	if (&rhs == this) return *this;
+	close();
+	m_file = std::move(rhs.m_file);
+	m_size = rhs.m_size;
+	m_mapping = rhs.m_mapping;
+	rhs.m_mapping = nullptr;
+	return *this;
+}
 
-	file_mapping::~file_mapping() { close(); }
+file_mapping::~file_mapping() { close(); }
 
-	file_view file_mapping::view()
-	{
-		return file_view(shared_from_this());
-	}
+void file_mapping::dont_need(span<byte const> range)
+{
+	auto* const start = const_cast<byte*>(range.data());
+	auto const size = static_cast<std::size_t>(range.size());
+
+#if TORRENT_USE_MADVISE
+	int const advise = 0
+#if defined TORRENT_LINUX && defined MADV_COLD
+		| MADV_COLD
+#elif !defined TORRENT_LINUX && defined MADV_DONTNEED
+		// note that MADV_DONTNEED is broken on Linux. It can destroy data. We
+		// cannot use it
+		| MADV_DONTNEED
+#endif
+	;
+
+	if (advise)
+		::madvise(start, size, advise);
+#endif
+#ifndef TORRENT_WINDOWS
+	::msync(start, size, MS_INVALIDATE);
+#else
+	TORRENT_UNUSED(start);
+	TORRENT_UNUSED(size);
+#endif
+}
+
+void file_mapping::page_out(span<byte const> range)
+{
+#if TORRENT_HAVE_MAP_VIEW_OF_FILE
+	// ignore errors, this is best-effort
+	FlushViewOfFile(range.data(), static_cast<std::size_t>(range.size()));
+#else
+
+	auto* const start = const_cast<byte*>(range.data());
+	auto const size = static_cast<std::size_t>(range.size());
+#if TORRENT_USE_MADVISE && defined MADV_PAGEOUT
+	::madvise(start, size, MADV_PAGEOUT);
+#elif TORRENT_USE_SYNC_FILE_RANGE
+	// this is best-effort. ignore errors
+	::sync_file_range(m_file.fd(), start - static_cast<const byte*>(m_mapping)
+		, size, SYNC_FILE_RANGE_WRITE);
+#endif
+
+	// msync(MS_ASYNC) is a no-op on Linux > 2.6.19.
+	::msync(start, size, MS_ASYNC);
+
+#endif // MAP_VIEW_OF_FILE
+}
 
 } // aux
 } // libtorrent

@@ -9,45 +9,40 @@ set(_GeneratePkGConfigDir "${CMAKE_CURRENT_LIST_DIR}/GeneratePkgConfig")
 
 include(GNUInstallDirs)
 
-function(_compile_features_to_gcc_flags _res _features)
-	set(features ${_features})
-	# leave only cxx_std_nn items
-	list(FILTER features INCLUDE REGEX cxx_std_)
-	if (${features} STREQUAL "")
-		set(${_res} "" PARENT_SCOPE)
-	else()
-		# if there are more than a single cxx_std_nn feature...
-		list(SORT features)
-		# take the most recent standard, i.e. the last element
-		list(GET features -1 standard)
-		# cmake calls it cxx_std_98, but we (obviously) want -std=c++03
-		string(REPLACE 98 03 standard "${standard}")
-		string(REPLACE cxx_std_ -std=c++ standard "${standard}")
-		set(${_res} "${standard}" PARENT_SCOPE)
-	endif()
-endfunction()
-
 function(_get_target_property_merging_configs _var_name _target_name _propert_name)
-	get_target_property(vals ${_target_name} ${_propert_name})
-	if (NOT vals)
+	get_property(prop_set TARGET ${_target_name} PROPERTY ${_propert_name} SET)
+	if (prop_set)
+		get_property(vals TARGET ${_target_name} PROPERTY ${_propert_name})
+	else()
 		if (CMAKE_BUILD_TYPE)
 			list(APPEND configs ${CMAKE_BUILD_TYPE})
-		elseif()
+		elseif(CMAKE_CONFIGURATION_TYPES)
 			list(APPEND configs ${CMAKE_CONFIGURATION_TYPES})
 		endif()
 		foreach(cfg ${configs})
 			string(TOUPPER "${cfg}" UPPERCFG)
-			get_target_property(mapped_configs ${_target_name} "MAP_IMPORTED_CONFIG_${UPPERCFG}")
+			get_property(mapped_configs TARGET ${_target_name} PROPERTY "MAP_IMPORTED_CONFIG_${UPPERCFG}")
 			if (mapped_configs)
 				list(GET "${mapped_configs}" 0 target_cfg)
 			else()
 				set(target_cfg "${UPPERCFG}")
 			endif()
-			get_target_property(val_for_cfg  ${_target_name} "${_propert_name}_${target_cfg}")
-			if (val_for_cfg)
+			get_property(prop_set TARGET ${_target_name} PROPERTY ${_propert_name}_${target_cfg} SET)
+			if (prop_set)
+				get_property(val_for_cfg TARGET ${_target_name} PROPERTY ${_propert_name}_${target_cfg})
 				list(APPEND vals "$<$<CONFIG:${cfg}>:${val_for_cfg}>")
+				break()
 			endif()
 		endforeach()
+		if (NOT prop_set)
+			get_property(imported_cfgs TARGET ${_target_name} PROPERTY IMPORTED_CONFIGURATIONS)
+			# CMake docs say we can use any of the imported configs
+			list(GET imported_cfgs 0 imported_config)
+			get_property(vals TARGET ${_target_name} PROPERTY ${_propert_name}_${imported_config})
+			# remove config generator expression. Only in this case! Notice we use such expression
+			# ourselves in the loop above
+			string(REPLACE "$<$<CONFIG:${imported_config}>:" "$<1:" vals "${vals}")
+		endif()
 	endif()
 	# HACK for static libraries cmake populates link dependencies as $<LINK_ONLY:lib_name>.
 	# pkg-config does not support special handling for static libraries and as such we will remove
@@ -57,7 +52,7 @@ function(_get_target_property_merging_configs _var_name _target_name _propert_na
 	# but we need INSTALL_INTERFACE here.
 	# See https://gitlab.kitware.com/cmake/cmake/issues/17984
 	string(REPLACE "$<BUILD_INTERFACE:" "$<0:" vals "${vals}")
-	string(REPLACE "$<INSTALL_INTERFACE:" "@CMAKE_INSTALL_PREFIX@/$<1:" vals "${vals}")
+	string(REPLACE "$<INSTALL_INTERFACE:" "\${CMAKE_INSTALL_PREFIX}/$<1:" vals "${vals}")
 	set(${_var_name} "${vals}" PARENT_SCOPE)
 endfunction()
 
@@ -92,7 +87,6 @@ function(_expand_targets _targets _libraries_var _include_dirs_var _compile_opti
 				_get_target_property_merging_configs(_iface_include_dirs ${_dep} INTERFACE_INCLUDE_DIRECTORIES)
 				_get_target_property_merging_configs(_iface_compile_options ${_dep} INTERFACE_COMPILE_OPTIONS)
 				_get_target_property_merging_configs(_iface_definitions ${_dep} INTERFACE_COMPILE_DEFINITIONS)
-				get_target_property(_iface_compile_features ${_dep} INTERFACE_COMPILE_FEATURES)
 
 				if (_imported_location)
 					list(APPEND _new_libs "${_imported_location}")
@@ -108,11 +102,6 @@ function(_expand_targets _targets _libraries_var _include_dirs_var _compile_opti
 
 				if(_iface_compile_options)
 					list(APPEND _options "${_iface_compile_options}")
-				endif()
-
-				if (_iface_compile_features)
-					_compile_features_to_gcc_flags(features_flags ${_iface_compile_features})
-					list(APPEND _options ${features_flags})
 				endif()
 
 				if(_iface_definitions)
@@ -157,6 +146,14 @@ function(generate_and_install_pkg_config_file _target _packageName)
 	set(_generate_target_dir "${CMAKE_CURRENT_BINARY_DIR}/${_target}-pkgconfig")
 	set(_pkg_config_file_template_filename "${_GeneratePkGConfigDir}/pkg-config.cmake.in")
 
+	# Since CMake 3.18 FindThreads may include a generator expression requiring a target, which gets propagated to us through INTERFACE_OPTIONS.
+	# Before CMake 3.19 there's no way to solve this in a general way, so we work around the specific case. See #4956 and CMake bug #21074.
+	if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.19)
+		set(_target_arg TARGET ${_target})
+	else()
+		string(REPLACE "<COMPILE_LANG_AND_ID:CUDA,NVIDIA>" "<COMPILE_LANGUAGE:CUDA>" _interface_compile_options "${_interface_compile_options}")
+	endif()
+
 	# put target and project properties into a file
 	configure_file("${_GeneratePkGConfigDir}/target-compile-settings.cmake.in"
 		"${_generate_target_dir}/compile-settings.cmake" @ONLY)
@@ -165,7 +162,7 @@ function(generate_and_install_pkg_config_file _target _packageName)
 	if (NOT _isMultiConfig)
 		set(_variables_file_name "${_generate_target_dir}/compile-settings-expanded.cmake")
 
-		file(GENERATE OUTPUT "${_variables_file_name}" INPUT "${_generate_target_dir}/compile-settings.cmake")
+		file(GENERATE OUTPUT "${_variables_file_name}" INPUT "${_generate_target_dir}/compile-settings.cmake" ${_target_arg})
 
 		configure_file("${_GeneratePkGConfigDir}/generate-pkg-config.cmake.in"
 			"${_generate_target_dir}/generate-pkg-config.cmake" @ONLY)
@@ -175,7 +172,7 @@ function(generate_and_install_pkg_config_file _target _packageName)
 		foreach(cfg IN LISTS CMAKE_CONFIGURATION_TYPES)
 			set(_variables_file_name "${_generate_target_dir}/${cfg}/compile-settings-expanded.cmake")
 
-			file(GENERATE OUTPUT "${_variables_file_name}" INPUT "${_generate_target_dir}/compile-settings.cmake" CONDITION "$<CONFIG:${cfg}>")
+			file(GENERATE OUTPUT "${_variables_file_name}" INPUT "${_generate_target_dir}/compile-settings.cmake" CONDITION "$<CONFIG:${cfg}>" ${_target_arg})
 
 			configure_file("${_GeneratePkGConfigDir}/generate-pkg-config.cmake.in"
 				"${_generate_target_dir}/${cfg}/generate-pkg-config.cmake" @ONLY)

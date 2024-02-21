@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2007-2018, Arvid Norberg
+Copyright (c) 2007-2010, 2013-2021, Arvid Norberg
+Copyright (c) 2014, Steven Siloti
+Copyright (c) 2015, Thomas Yuan
+Copyright (c) 2016, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef OBSERVER_HPP
@@ -39,6 +19,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <libtorrent/time.hpp>
 #include <libtorrent/address.hpp>
 #include <libtorrent/flags.hpp>
+#include <libtorrent/socket.hpp> // for udp
+#include <libtorrent/kademlia/node_id.hpp>
 
 namespace libtorrent {
 namespace dht {
@@ -58,6 +40,7 @@ struct TORRENT_EXTRA_EXPORT observer
 		: m_algorithm(std::move(a))
 		, m_id(id)
 	{
+		TORRENT_ASSERT(!m_was_sent);
 		TORRENT_ASSERT(m_algorithm);
 		set_target(ep);
 	}
@@ -100,14 +83,28 @@ struct TORRENT_EXTRA_EXPORT observer
 	void set_id(node_id const& id);
 	node_id const& id() const { return m_id; }
 
-	static constexpr observer_flags_t flag_queried = 0_bit;
-	static constexpr observer_flags_t flag_initial = 1_bit;
-	static constexpr observer_flags_t flag_no_id = 2_bit;
-	static constexpr observer_flags_t flag_short_timeout = 3_bit;
-	static constexpr observer_flags_t flag_failed = 4_bit;
-	static constexpr observer_flags_t flag_ipv6_address = 5_bit;
-	static constexpr observer_flags_t flag_alive = 6_bit;
-	static constexpr observer_flags_t flag_done = 7_bit;
+	// an entry that has the queried flag set will have incremented the m_invoke_count
+	// and is supposed to decrement it, once a response is received. It
+	// will also have sent its query to its node
+	static inline constexpr observer_flags_t flag_queried = 0_bit;
+	static inline constexpr observer_flags_t flag_initial = 1_bit;
+	static inline constexpr observer_flags_t flag_no_id = 2_bit;
+	// after a short timeout, we may increase the branch factor and set
+	// this flag. We still wait for the full timeout for a response.
+	// Incrementing the branch factor is a middle-ground of no longer
+	// having much faith in this node responding (so we allow another query
+	// to use its "slot"). When the request completes (either by receiving
+	// a response or timing out), we need to restore the branch factor by
+	// decrementing it.
+	static inline constexpr observer_flags_t flag_short_timeout = 3_bit;
+	// a node
+	static inline constexpr observer_flags_t flag_failed = 4_bit;
+	// This determines whether the m_addr union has the IPv4 or IPv6 address active
+	static inline constexpr observer_flags_t flag_ipv6_address = 5_bit;
+	// This means we have received a response from this node
+	static inline constexpr observer_flags_t flag_alive = 6_bit;
+	// the request has been cancelled
+	static inline constexpr observer_flags_t flag_done = 7_bit;
 
 protected:
 

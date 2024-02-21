@@ -1,33 +1,16 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2021, Dmtry Soloviev
+Copyright (c) 2006-2022, Arvid Norberg
+Copyright (c) 2016-2017, 2020-2021, Alden Torres
+Copyright (c) 2016-2017, Andrei Kurushin
+Copyright (c) 2016, Falcosc
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2017, Pavel Pimenov
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
- * Redistributions of source code must retain the above copyright
-	notice, this list of conditions and the following disclaimer.
- * Redistributions in binary form must reproduce the above copyright
-	notice, this list of conditions and the following disclaimer in
-	the documentation and/or other materials provided with the distribution.
- * Neither the name of the author nor the names of its
-	contributors may be used to endorse or promote products derived
-	from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/config.hpp"
@@ -37,30 +20,31 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <cstdio> // for snprintf
 #include <cinttypes> // for PRId64 et.al.
 
-#include "libtorrent/web_peer_connection.hpp"
+#include "libtorrent/aux_/web_peer_connection.hpp"
 #include "libtorrent/session.hpp"
 #include "libtorrent/entry.hpp"
 #include "libtorrent/bencode.hpp"
 #include "libtorrent/alert_types.hpp"
-#include "libtorrent/invariant_check.hpp"
-#include "libtorrent/io.hpp"
-#include "libtorrent/parse_url.hpp"
+#include "libtorrent/aux_/invariant_check.hpp"
+#include "libtorrent/aux_/io_bytes.hpp"
+#include "libtorrent/aux_/parse_url.hpp"
 #include "libtorrent/peer_info.hpp"
 #include "libtorrent/aux_/session_interface.hpp"
-#include "libtorrent/alert_manager.hpp" // for alert_manager
+#include "libtorrent/aux_/alert_manager.hpp" // for alert_manager
 #include "libtorrent/aux_/escape_string.hpp" // for escape_path
 #include "libtorrent/hex.hpp" // for is_hex
-#include "libtorrent/torrent.hpp"
-#include "libtorrent/http_parser.hpp"
+#include "libtorrent/aux_/random.hpp"
+#include "libtorrent/aux_/torrent.hpp"
+#include "libtorrent/aux_/http_parser.hpp"
 
-namespace libtorrent {
+namespace libtorrent::aux {
 
 constexpr int request_size_overhead = 5000;
 
 std::string escape_file_path(file_storage const& storage, file_index_t index);
 
-web_peer_connection::web_peer_connection(peer_connection_args const& pack
-	, web_seed_t& web)
+web_peer_connection::web_peer_connection(peer_connection_args& pack
+	, aux::web_seed_t& web)
 	: web_connection_base(pack, web)
 	, m_url(web.url)
 	, m_web(&web)
@@ -74,7 +58,7 @@ web_peer_connection::web_peer_connection(peer_connection_args const& pack
 	if (!m_settings.get_bool(settings_pack::report_web_seed_downloads))
 		ignore_stats(true);
 
-	std::shared_ptr<torrent> tor = pack.tor.lock();
+	auto tor = pack.tor.lock();
 	TORRENT_ASSERT(tor);
 
 	// if the web server is known not to support keep-alive. request 4MiB
@@ -88,7 +72,7 @@ web_peer_connection::web_peer_connection(peer_connection_args const& pack
 
 	prefer_contiguous_blocks(preferred_size / tor->block_size());
 
-	std::shared_ptr<torrent> t = associated_torrent().lock();
+	auto t = associated_torrent().lock();
 	bool const single_file_request = t->torrent_file().num_files() == 1;
 
 	if (!single_file_request)
@@ -104,12 +88,12 @@ web_peer_connection::web_peer_connection(peer_connection_args const& pack
 		if (m_path.empty()) m_path += '/';
 		if (m_path[m_path.size() - 1] == '/')
 		{
-			m_path += escape_string(t->torrent_file().name());
+			m_path += lt::escape_string(t->torrent_file().name());
 		}
 
 		if (!m_url.empty() && m_url[m_url.size() - 1] == '/')
 		{
-			m_url += escape_file_path(t->torrent_file().files(), file_index_t(0));
+			m_url += escape_file_path(t->torrent_file().orig_files(), file_index_t(0));
 		}
 	}
 
@@ -135,13 +119,25 @@ std::string escape_file_path(file_storage const& storage, file_index_t index)
 
 void web_peer_connection::on_connected()
 {
+	peer_id pid;
+	aux::random_bytes(pid);
+	set_pid(pid);
+
 	if (m_web->have_files.empty())
 	{
 		incoming_have_all();
 	}
+	else if (m_web->have_files.none_set())
+	{
+		incoming_have_none();
+		m_web->interesting = false;
+#ifndef TORRENT_DISABLE_LOGGING
+		peer_log(peer_log_alert::info, "WEB-SEED", "have no files, not interesting. %s", m_url.c_str());
+#endif
+	}
 	else
 	{
-		std::shared_ptr<torrent> t = associated_torrent().lock();
+		auto t = associated_torrent().lock();
 
 		// only advertise pieces that are contained within the files we have as
 		// indicated by m_web->have_files AND padfiles!
@@ -162,7 +158,19 @@ void web_peer_connection::on_connected()
 			for (piece_index_t k = std::get<0>(range); k < std::get<1>(range); ++k)
 				have.clear_bit(k);
 		}
-		incoming_bitfield(have);
+		t->set_seed(peer_info_struct(), false);
+		if (have.none_set())
+		{
+			incoming_have_none();
+			m_web->interesting = false;
+#ifndef TORRENT_DISABLE_LOGGING
+			peer_log(peer_log_alert::info, "WEB-SEED", "have no pieces, not interesting. %s", m_url.c_str());
+#endif
+		}
+		else
+		{
+			incoming_bitfield(have);
+		}
 	}
 
 	// TODO: 3 this should be an optional<piece_index_t>, piece index -1 should
@@ -211,7 +219,23 @@ void web_peer_connection::disconnect(error_code const& ec
 		m_web->endpoints.erase(m_web->endpoints.begin());
 	}
 
-	std::shared_ptr<torrent> t = associated_torrent().lock();
+	if (ec == errors::uninteresting_upload_peer && m_web)
+	{
+		// if this is an "ephemeral" web seed, it means it was added by receiving
+		// an HTTP redirect. If we disconnect because we're not interested in any
+		// of its pieces, mark it as uninteresting, to avoid reconnecting to it
+		// repeatedly
+		if (m_web->ephemeral) m_web->interesting = false;
+
+		// if the web seed is not ephemeral, but we're still not interested. That
+		// implies that all files either have failed with 404 or with a
+		// redirection to a different web server.
+		m_web->retry = std::max(m_web->retry, aux::time_now32()
+			+ seconds32(m_settings.get_int(settings_pack::urlseed_wait_retry)));
+		TORRENT_ASSERT(m_web->retry > aux::time_now32());
+	}
+
+	auto t = associated_torrent().lock();
 
 	if (!m_requests.empty() && !m_file_requests.empty()
 		&& !m_piece.empty() && m_web)
@@ -231,9 +255,9 @@ void web_peer_connection::disconnect(error_code const& ec
 			// we're about to replace a different restart piece
 			// buffer. So it was wasted download
 			if (t) t->add_redundant_bytes(int(m_web->restart_piece.size())
-				, waste_reason::piece_closing);
+				, aux::waste_reason::piece_closing);
 		}
-		m_web->restart_piece.swap(m_piece);
+		m_web->restart_piece = std::move(m_piece);
 
 		// we have to do this to not count this data as redundant. The
 		// upper layer will call downloading_piece_progress and assume
@@ -246,17 +270,25 @@ void web_peer_connection::disconnect(error_code const& ec
 		// if the web server doesn't support keepalive and we were
 		// disconnected as a graceful EOF, reconnect right away
 		if (t) post(get_context()
-			, std::bind(&torrent::maybe_connect_web_seeds, t));
+			, std::bind(&aux::torrent::maybe_connect_web_seeds, t));
 	}
+
+	if (error >= failure)
+	{
+		m_web->retry = std::max(m_web->retry, aux::time_now32()
+			+ seconds32(m_settings.get_int(settings_pack::urlseed_wait_retry)));
+	}
+
 	peer_connection::disconnect(ec, op, error);
-	if (t) t->disconnect_web_seed(this);
+	TORRENT_ASSERT(m_web->resolving == false);
+	m_web->peer_info.connection = nullptr;
 }
 
 piece_block_progress web_peer_connection::downloading_piece_progress() const
 {
 	if (m_requests.empty()) return {};
 
-	std::shared_ptr<torrent> t = associated_torrent().lock();
+	auto t = associated_torrent().lock();
 	TORRENT_ASSERT(t);
 
 	piece_block_progress ret;
@@ -285,7 +317,7 @@ void web_peer_connection::write_request(peer_request const& r)
 {
 	INVARIANT_CHECK;
 
-	std::shared_ptr<torrent> t = associated_torrent().lock();
+	auto t = associated_torrent().lock();
 	TORRENT_ASSERT(t);
 
 	TORRENT_ASSERT(t->valid_metadata());
@@ -299,33 +331,30 @@ void web_peer_connection::write_request(peer_request const& r)
 	int size = r.length;
 	const int block_size = t->block_size();
 	const int piece_size = t->torrent_file().piece_length();
-	peer_request pr;
+	peer_request pr{};
+
 	while (size > 0)
 	{
 		int request_offset = r.start + r.length - size;
 		pr.start = request_offset % piece_size;
-		pr.length = std::min(block_size, size);
+		pr.length = std::min(std::min(block_size, size), piece_size - pr.start);
 		pr.piece = piece_index_t(static_cast<int>(r.piece) + request_offset / piece_size);
+		TORRENT_ASSERT(validate_piece_request(pr));
 		m_requests.push_back(pr);
-
-#ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::outgoing_message, "REQUESTING", "piece: %d start: %d len: %d"
-			, static_cast<int>(pr.piece), pr.start, pr.length);
-#endif
 
 		if (m_web->restart_request == m_requests.front())
 		{
-			m_piece.swap(m_web->restart_piece);
+			TORRENT_ASSERT(int(m_piece.size()) == m_received_in_piece);
+			TORRENT_ASSERT(m_piece.empty());
+			m_piece = std::move(m_web->restart_piece);
 			peer_request const& front = m_requests.front();
 			TORRENT_ASSERT(front.length > int(m_piece.size()));
 
 #ifndef TORRENT_DISABLE_LOGGING
-			if (should_log(peer_log_alert::info))
-			{
-				peer_log(peer_log_alert::info, "RESTART_DATA", "data: %d req: (%d, %d) size: %d"
+			peer_log(peer_log_alert::info, "RESTART_DATA",
+				"data: %d req: (%d, %d) size: %d"
 					, int(m_piece.size()), static_cast<int>(front.piece), front.start
 					, front.start + front.length - 1);
-			}
 #else
 			TORRENT_UNUSED(front);
 #endif
@@ -337,6 +366,8 @@ void web_peer_connection::write_request(peer_request const& r)
 			// it doesn't know we just re-wrote the request
 			incoming_piece_fragment(int(m_piece.size()));
 			m_web->restart_request.piece = piece_index_t(-1);
+
+			TORRENT_ASSERT(int(m_piece.size()) == m_received_in_piece);
 		}
 
 #if 0
@@ -344,6 +375,12 @@ void web_peer_connection::write_request(peer_request const& r)
 #endif
 		size -= pr.length;
 	}
+
+#ifndef TORRENT_DISABLE_LOGGING
+	peer_log(peer_log_alert::outgoing_message, "REQUESTING", "(piece: %d start: %d) - (piece: %d end: %d)"
+		, static_cast<int>(r.piece), r.start
+		, static_cast<int>(pr.piece), pr.start + pr.length);
+#endif
 
 	bool const single_file_request = t->torrent_file().num_files() == 1;
 	int const proxy_type = m_settings.get_int(settings_pack::proxy_type);
@@ -399,9 +436,6 @@ void web_peer_connection::write_request(peer_request const& r)
 				++num_pad_files;
 				continue;
 			}
-
-			TORRENT_ASSERT(m_web->have_files.empty()
-				|| m_web->have_files.get_bit(f.file_index));
 
 			request += "GET ";
 			if (using_proxy)
@@ -463,28 +497,21 @@ void web_peer_connection::write_request(peer_request const& r)
 	peer_log(peer_log_alert::outgoing_message, "REQUEST", "%s", request.c_str());
 #endif
 
-	send_buffer(request, message_type_request);
+	send_buffer(request);
 }
 
 namespace {
 
-	std::string get_peer_name(http_parser const& p, std::string const& host)
+	std::string get_peer_name(aux::http_parser const& p, std::string const& host)
 	{
-		std::string ret = "URL seed @ ";
-		ret += host;
-
 		std::string const& server_version = p.header("server");
 		if (!server_version.empty())
-		{
-			ret += " (";
-			ret += server_version;
-			ret += ")";
-		}
-		return ret;
+			return server_version;
+		return host;
 	}
 
 	std::tuple<std::int64_t, std::int64_t> get_range(
-		http_parser const& parser, error_code& ec)
+		aux::http_parser const& parser, error_code& ec)
 	{
 		std::int64_t range_start;
 		std::int64_t range_end;
@@ -533,7 +560,7 @@ bool web_peer_connection::received_invalid_data(piece_index_t const index, bool 
 	// 3. if it's a single file torrent, just ban it right away
 	// this handles the case where web seeds may have some files updated but not other
 
-	std::shared_ptr<torrent> t = associated_torrent().lock();
+	auto t = associated_torrent().lock();
 	file_storage const& fs = t->torrent_file().files();
 
 	// single file torrent
@@ -570,17 +597,16 @@ void web_peer_connection::on_receive_padfile()
 
 void web_peer_connection::handle_error(int const bytes_left)
 {
-	std::shared_ptr<torrent> t = associated_torrent().lock();
+	auto t = associated_torrent().lock();
 	TORRENT_ASSERT(t);
 
 	// TODO: 2 just make this peer not have the pieces
 	// associated with the file we just requested. Only
 	// when it doesn't have any of the file do the following
 	// pad files will make it complicated
-	auto const retry_time = value_or(m_parser.header_duration("retry-after")
-		, seconds32(m_settings.get_int(settings_pack::urlseed_wait_retry)));
+
 	// temporarily unavailable, retry later
-	t->retry_web_seed(this, retry_time);
+	t->retry_web_seed(this, m_parser.header_duration("retry-after"));
 	if (t->alerts().should_post<url_seed_alert>())
 	{
 		std::string const error_msg = to_string(m_parser.status_code()).data()
@@ -592,6 +618,21 @@ void web_peer_connection::handle_error(int const bytes_left)
 	disconnect(error_code(m_parser.status_code(), http_category()), operation_t::bittorrent, failure);
 }
 
+void web_peer_connection::disable(error_code const& ec)
+{
+	// we should not try this server again.
+	m_web->disabled = true;
+	disconnect(ec, operation_t::bittorrent, peer_error);
+	if (m_web->ephemeral)
+	{
+		std::shared_ptr<torrent> t = associated_torrent().lock();
+		TORRENT_ASSERT(t);
+		t->remove_web_seed_conn(this);
+	}
+	m_web = nullptr;
+	TORRENT_ASSERT(is_disconnecting());
+}
+
 void web_peer_connection::handle_redirect(int const bytes_left)
 {
 	// this means we got a redirection request
@@ -599,20 +640,24 @@ void web_peer_connection::handle_redirect(int const bytes_left)
 	std::string location = m_parser.header("location");
 	received_bytes(0, bytes_left);
 
-	std::shared_ptr<torrent> t = associated_torrent().lock();
+	auto t = associated_torrent().lock();
 	TORRENT_ASSERT(t);
 
 	if (location.empty())
 	{
-		// we should not try this server again.
-		t->remove_web_seed_conn(this, errors::missing_location, operation_t::bittorrent, peer_error);
-		m_web = nullptr;
-		TORRENT_ASSERT(is_disconnecting());
+		disable(errors::missing_location);
 		return;
 	}
 
 	bool const single_file_request = !m_path.empty()
 		&& m_path[m_path.size() - 1] != '/';
+
+	// when SSRF mitigation is enabled, a web seed on the internet (is_global())
+	// is not allowed to redirect to a server on the local network, so we set
+	// the no_local_ips flag
+	auto const web_seed_flags = torrent::ephemeral
+		| ((m_settings.get_bool(settings_pack::ssrf_mitigation) && aux::is_global(remote().address()))
+			? torrent::no_local_ips : web_seed_flag_t{});
 
 	// add the redirected url and remove the current one
 	if (!single_file_request)
@@ -620,17 +665,15 @@ void web_peer_connection::handle_redirect(int const bytes_left)
 		TORRENT_ASSERT(!m_file_requests.empty());
 		file_index_t const file_index = m_file_requests.front().file_index;
 
-		location = resolve_redirect_location(m_url, location);
+		location = aux::resolve_redirect_location(m_url, location);
 #ifndef TORRENT_DISABLE_LOGGING
 		peer_log(peer_log_alert::info, "LOCATION", "%s", location.c_str());
 #endif
 		// TODO: 3 this could be made more efficient for the case when we use an
 		// HTTP proxy. Then we wouldn't need to add new web seeds to the torrent,
 		// we could just make the redirect table contain full URLs.
-		std::string redirect_base;
-		std::string redirect_path;
 		error_code ec;
-		std::tie(redirect_base, redirect_path) = split_url(location, ec);
+		auto const [redirect_base, redirect_path] = split_url(location, ec);
 
 		if (ec)
 		{
@@ -649,8 +692,8 @@ void web_peer_connection::handle_redirect(int const bytes_left)
 		// with base url=="http://example2.com/" and redirects[0]=="/subpath/file2").
 		// If we try to load resume with such "web_seed_t" then "web_peer_connection" will send
 		// request with wrong path "http://example2.com/file1" (cause "redirects" map is not serialized in resume)
-		web_seed_t* web = t->add_web_seed(redirect_base, web_seed_entry::url_seed
-			, m_external_auth, m_extra_headers, torrent::ephemeral);
+		web_seed_t* web = t->add_web_seed(redirect_base, m_external_auth
+			, m_extra_headers, web_seed_flags);
 		web->have_files.resize(t->torrent_file().num_files(), false);
 
 		// the new web seed we're adding only has this file for now
@@ -668,10 +711,13 @@ void web_peer_connection::handle_redirect(int const bytes_left)
 				// connected to it. Make it advertise that it has this file to the
 				// bittorrent engine
 				file_storage const& fs = t->torrent_file().files();
-				auto const range = aux::file_piece_range_exclusive(fs, file_index);
+				auto const range = aux::file_piece_range_inclusive(fs, file_index);
 				for (piece_index_t i = std::get<0>(range); i < std::get<1>(range); ++i)
 					pc->incoming_have(i);
 			}
+			// we just learned about another file this web server has, make sure
+			// it's marked interesting to enable connecting to it
+			web->interesting = true;
 		}
 
 		// we don't have this file on this server. Don't ask for it again
@@ -679,22 +725,26 @@ void web_peer_connection::handle_redirect(int const bytes_left)
 		if (m_web->have_files[file_index])
 		{
 			m_web->have_files.clear_bit(file_index);
-			disconnect(errors::redirecting, operation_t::bittorrent, peer_error);
+#ifndef TORRENT_DISABLE_LOGGING
+			peer_log(peer_log_alert::info, "MISSING_FILE", "redirection | file: %d"
+				, static_cast<int>(file_index));
+#endif
 		}
+		disconnect(errors::redirecting, operation_t::bittorrent, normal);
 	}
 	else
 	{
-		location = resolve_redirect_location(m_url, location);
+		location = aux::resolve_redirect_location(m_url, location);
 #ifndef TORRENT_DISABLE_LOGGING
 		peer_log(peer_log_alert::info, "LOCATION", "%s", location.c_str());
 #endif
-		t->add_web_seed(location, web_seed_entry::url_seed, m_external_auth
-			, m_extra_headers, torrent::ephemeral);
+		t->add_web_seed(location, m_external_auth, m_extra_headers
+			, web_seed_flags);
 
 		// this web seed doesn't have any files. Don't try to request from it
 		// again this session
 		m_web->have_files.resize(t->torrent_file().num_files(), false);
-		disconnect(errors::redirecting, operation_t::bittorrent, peer_error);
+		disconnect(errors::redirecting, operation_t::bittorrent, normal);
 		m_web = nullptr;
 		TORRENT_ASSERT(is_disconnecting());
 	}
@@ -718,7 +768,7 @@ void web_peer_connection::on_receive(error_code const& error
 		return;
 	}
 
-	std::shared_ptr<torrent> t = associated_torrent().lock();
+	auto t = associated_torrent().lock();
 	TORRENT_ASSERT(t);
 
 	// in case the first file on this series of requests is a padfile
@@ -797,19 +847,24 @@ void web_peer_connection::on_receive(error_code const& error
 #endif
 
 			// if the status code is not one of the accepted ones, abort
-			if (!is_ok_status(m_parser.status_code()))
+			if (!aux::is_ok_status(m_parser.status_code()))
 			{
 				if (!m_file_requests.empty())
 				{
 					file_request_t const& file_req = m_file_requests.front();
 					m_web->have_files.resize(t->torrent_file().num_files(), true);
 					m_web->have_files.clear_bit(file_req.file_index);
+
+#ifndef TORRENT_DISABLE_LOGGING
+					peer_log(peer_log_alert::info, "MISSING_FILE", "http-code: %d | file: %d"
+						, m_parser.status_code(), static_cast<int>(file_req.file_index));
+#endif
 				}
 				handle_error(int(recv_buffer.size()));
 				return;
 			}
 
-			if (is_redirect(m_parser.status_code()))
+			if (aux::is_redirect(m_parser.status_code()))
 			{
 				handle_redirect(int(recv_buffer.size()));
 				return;
@@ -833,17 +888,12 @@ void web_peer_connection::on_receive(error_code const& error
 		// despite the HTTP range being inclusive, range_start and range_end are
 		// exclusive to fit better into C++. i.e. range_end points one byte past
 		// the end of the payload
-		std::int64_t range_start;
-		std::int64_t range_end;
 		error_code ec;
-		std::tie(range_start, range_end) = get_range(m_parser, ec);
+		auto const [range_start, range_end] = get_range(m_parser, ec);
 		if (ec)
 		{
 			received_bytes(0, int(recv_buffer.size()));
-			// we should not try this server again.
-			t->remove_web_seed_conn(this, ec, operation_t::bittorrent, peer_error);
-			m_web = nullptr;
-			TORRENT_ASSERT(is_disconnecting());
+			disable(ec);
 			return;
 		}
 
@@ -1027,7 +1077,11 @@ void web_peer_connection::incoming_payload(char const* buf, int len)
 	// deliver all complete bittorrent requests to the bittorrent engine
 	while (len > 0)
 	{
-		if (m_requests.empty()) return;
+		if (m_requests.empty())
+		{
+			TORRENT_ASSERT(m_piece.empty());
+			return;
+		}
 
 		TORRENT_ASSERT(!m_requests.empty());
 		peer_request const& front_request = m_requests.front();
@@ -1036,6 +1090,7 @@ void web_peer_connection::incoming_payload(char const* buf, int len)
 
 		// m_piece may not hold more than the response to the next BT request
 		TORRENT_ASSERT(front_request.length > piece_size);
+		TORRENT_ASSERT(int(m_piece.size()) == m_received_in_piece);
 
 		// copy_size is the number of bytes we need to add to the end of m_piece
 		// to not exceed the size of the next bittorrent request to be delivered.
@@ -1049,28 +1104,7 @@ void web_peer_connection::incoming_payload(char const* buf, int len)
 		incoming_piece_fragment(copy_size);
 
 		TORRENT_ASSERT(front_request.length >= piece_size);
-		if (int(m_piece.size()) == front_request.length)
-		{
-			std::shared_ptr<torrent> t = associated_torrent().lock();
-			TORRENT_ASSERT(t);
-
-#ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::incoming_message, "POP_REQUEST"
-				, "piece: %d start: %d len: %d"
-				, static_cast<int>(front_request.piece), front_request.start, front_request.length);
-#endif
-
-			// Make a copy of the request and pop it off the queue before calling
-			// incoming_piece because that may lead to a call to disconnect()
-			// which will clear the request queue and invalidate any references
-			// to the request
-			peer_request const front_request_copy = front_request;
-			m_requests.pop_front();
-
-			incoming_piece(front_request_copy, m_piece.data());
-
-			m_piece.clear();
-		}
+		maybe_harvest_piece();
 	}
 }
 
@@ -1106,11 +1140,13 @@ void web_peer_connection::incoming_zeroes(int len)
 
 void web_peer_connection::maybe_harvest_piece()
 {
+	TORRENT_ASSERT(!m_requests.empty());
+
 	peer_request const& front_request = m_requests.front();
 	TORRENT_ASSERT(front_request.length >= int(m_piece.size()));
 	if (int(m_piece.size()) != front_request.length) return;
 
-	std::shared_ptr<torrent> t = associated_torrent().lock();
+	auto t = associated_torrent().lock();
 	TORRENT_ASSERT(t);
 
 #ifndef TORRENT_DISABLE_LOGGING
@@ -1119,9 +1155,14 @@ void web_peer_connection::maybe_harvest_piece()
 		, static_cast<int>(front_request.piece)
 		, front_request.start, front_request.length);
 #endif
+	// Make a copy of the request and pop it off the queue before calling
+	// incoming_piece because that may lead to a call to disconnect()
+	// which will clear the request queue and invalidate any references
+	// to the request
+	peer_request const req = m_requests.front();
 	m_requests.pop_front();
 
-	incoming_piece(front_request, m_piece.data());
+	incoming_piece(req, m_piece.data());
 	m_piece.clear();
 }
 
@@ -1137,7 +1178,7 @@ void web_peer_connection::handle_padfile()
 	if (m_file_requests.empty()) return;
 	if (m_requests.empty()) return;
 
-	std::shared_ptr<torrent> t = associated_torrent().lock();
+	auto t = associated_torrent().lock();
 	TORRENT_ASSERT(t);
 	torrent_info const& info = t->torrent_file();
 

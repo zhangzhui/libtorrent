@@ -1,45 +1,28 @@
 /*
 
-Copyright (c) 2014, Arvid Norberg
+Copyright (c) 2014-2021, Arvid Norberg
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2016, Eugene Shalygin
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2018, 2020-2021, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session.hpp"
 #include "libtorrent/session_settings.hpp"
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/time.hpp"
-#include "libtorrent/random.hpp"
+#include "libtorrent/aux_/random.hpp"
+#include "libtorrent/session_params.hpp"
 #include "libtorrent/aux_/path.hpp"
 #include <iostream>
 #include <tuple>
 
 #include "test.hpp"
+#include "test_utils.hpp"
 #include "setup_transfer.hpp"
 #include "settings.hpp"
 #include "swarm_suite.hpp"
@@ -54,12 +37,14 @@ void test_swarm(test_flags_t const flags)
 {
 	using namespace lt;
 
-	std::printf("\n\n ==== TEST SWARM === %s%s%s%s%s ===\n\n\n"
+	std::printf("\n\n ==== TEST SWARM === %s%s%s%s%s%s%s ===\n\n\n"
 		, (flags & test_flags::super_seeding) ? "super-seeding ": ""
 		, (flags & test_flags::strict_super_seeding) ? "strict-super-seeding ": ""
 		, (flags & test_flags::seed_mode) ? "seed-mode ": ""
 		, (flags & test_flags::time_critical) ? "time-critical ": ""
 		, (flags & test_flags::suggest) ? "suggest ": ""
+		, (flags & test_flags::v1_meta) ? "v1-meta ": ""
+		, (flags & test_flags::v2_meta) ? "v2-meta ": ""
 		);
 
 	// in case the previous run was terminated
@@ -78,8 +63,10 @@ void test_swarm(test_flags_t const flags)
 	settings_pack pack = settings();
 	pack.set_bool(settings_pack::allow_multiple_connections_per_ip, true);
 
+#if TORRENT_ABI_VERSION == 1
 	if (flags & test_flags::strict_super_seeding)
 		pack.set_bool(settings_pack::strict_super_seeding, true);
+#endif
 
 	if (flags & test_flags::suggest)
 		pack.set_int(settings_pack::suggest_mode, settings_pack::suggest_read_cache);
@@ -89,11 +76,8 @@ void test_swarm(test_flags_t const flags)
 	// three peers before finishing.
 	float const rate_limit = 100000;
 
-	int const port = static_cast<int>(lt::random(100));
-	char iface[50];
-	std::snprintf(iface, sizeof(iface), "0.0.0.0:480%02d", port);
 	pack.set_int(settings_pack::upload_rate_limit, int(rate_limit));
-	pack.set_str(settings_pack::listen_interfaces, iface);
+	pack.set_str(settings_pack::listen_interfaces, test_listen_interface());
 	pack.set_int(settings_pack::max_retry_port_bind, 1000);
 
 	pack.set_int(settings_pack::out_enc_policy, settings_pack::pe_forced);
@@ -101,33 +85,32 @@ void test_swarm(test_flags_t const flags)
 
 	lt::session ses1(pack);
 
-	std::snprintf(iface, sizeof(iface), "0.0.0.0:490%02d", port);
-	pack.set_str(settings_pack::listen_interfaces, iface);
+	pack.set_str(settings_pack::listen_interfaces, test_listen_interface());
 	pack.set_int(settings_pack::download_rate_limit, int(rate_limit / 2));
 	pack.set_int(settings_pack::upload_rate_limit, int(rate_limit));
 	lt::session ses2(pack);
 
-	std::snprintf(iface, sizeof(iface), "0.0.0.0:500%02d", port);
-	pack.set_str(settings_pack::listen_interfaces, iface);
+	pack.set_str(settings_pack::listen_interfaces, test_listen_interface());
 	lt::session ses3(pack);
-
-	torrent_handle tor1;
-	torrent_handle tor2;
-	torrent_handle tor3;
 
 	add_torrent_params p;
 	p.flags &= ~torrent_flags::paused;
 	p.flags &= ~torrent_flags::auto_managed;
 	if (flags & test_flags::seed_mode) p.flags |= torrent_flags::seed_mode;
-	// test using piece sizes smaller than 16kB
-	std::tie(tor1, tor2, tor3) = setup_transfer(&ses1, &ses2, &ses3, true
-		, false, true, "_swarm", 8 * 1024, nullptr, bool(flags & test_flags::super_seeding), &p);
+	// test v1 metadata using piece sizes smaller than 16kB
+	int const piece_size = (flags & test_flags::v1_meta) ? 8 * 1024 : 16 * 1024;
+	auto const [tor1, tor2, tor3] = setup_transfer(&ses1, &ses2, &ses3, true
+		, false, true, "_swarm", piece_size, nullptr, bool(flags & test_flags::super_seeding), &p
+		, true, false, nullptr
+		, (flags & test_flags::v1_meta) ? create_torrent::v1_only
+		: (flags & test_flags::v2_meta) ? create_torrent::v2_only
+		: create_flags_t{});
 
 	if (flags & test_flags::time_critical)
 	{
-		tor2.set_piece_deadline(piece_index_t(2), 0);
-		tor2.set_piece_deadline(piece_index_t(5), 1000);
-		tor2.set_piece_deadline(piece_index_t(8), 2000);
+		tor2.set_piece_deadline(2_piece, 0);
+		tor2.set_piece_deadline(5_piece, 1000);
+		tor2.set_piece_deadline(8_piece, 2000);
 	}
 
 	float sum_dl_rate2 = 0.f;
@@ -135,6 +118,7 @@ void test_swarm(test_flags_t const flags)
 	int count_dl_rates2 = 0;
 	int count_dl_rates3 = 0;
 
+	auto const start_time = lt::clock_type::now();
 	for (int i = 0; i < 80; ++i)
 	{
 		print_alerts(ses1, "ses1");
@@ -153,16 +137,16 @@ void test_swarm(test_flags_t const flags)
 
 		if (st2.progress < 1.f && st2.progress > 0.5f)
 		{
-			sum_dl_rate2 += st2.download_payload_rate;
+			sum_dl_rate2 += float(st2.download_payload_rate);
 			++count_dl_rates2;
 		}
 		if (st3.progress < 1.f && st3.progress > 0.5f)
 		{
-			sum_dl_rate3 += st3.download_rate;
+			sum_dl_rate3 += float(st3.download_rate);
 			++count_dl_rates3;
 		}
 
-		print_ses_rate(float(i), &st1, &st2, &st3);
+		print_ses_rate(start_time, &st1, &st2, &st3);
 
 		if (st2.is_seeding && st3.is_seeding) break;
 		std::this_thread::sleep_for(lt::milliseconds(1000));

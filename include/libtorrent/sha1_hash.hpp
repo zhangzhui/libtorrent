@@ -1,33 +1,13 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2013-2021, Arvid Norberg
+Copyright (c) 2016, Alden Torres
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2020, Mike Tzou
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_SHA1_HASH_HPP_INCLUDED
@@ -55,13 +35,6 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	// TODO: find a better place for these functions
-namespace aux {
-
-		TORRENT_EXTRA_EXPORT void bits_shift_left(span<std::uint32_t> number, int n);
-		TORRENT_EXTRA_EXPORT void bits_shift_right(span<std::uint32_t> number, int n);
-} // namespace aux
-
 	// This type holds an N digest or any other kind of N bits
 	// sequence. It implements a number of convenience functions, such
 	// as bit operations, comparison operators etc.
@@ -73,7 +46,7 @@ namespace aux {
 	{
 		static_assert(N % 32 == 0, "N must be a multiple of 32");
 		static constexpr std::ptrdiff_t number_size = N / 32;
-		constexpr static int bits_in_byte = 8;
+		static constexpr int bits_in_byte = 8;
 	public:
 
 		using difference_type = std::ptrdiff_t;
@@ -148,19 +121,9 @@ namespace aux {
 				, [](std::uint32_t v) { return v == 0; });
 		}
 
-		// shift left ``n`` bits.
-		digest32& operator<<=(int const n) noexcept
-		{
-			aux::bits_shift_left(m_number, n);
-			return *this;
-		}
-
-		// shift right ``n`` bits.
-		digest32& operator>>=(int const n) noexcept
-		{
-			aux::bits_shift_right(m_number, n);
-			return *this;
-		}
+		// shift left or right ``n`` bits.
+		digest32& operator<<=(int n) & noexcept;
+		digest32& operator>>=(int n) & noexcept;
 
 		// standard comparison operators
 		bool operator==(digest32 const& n) const noexcept
@@ -206,7 +169,7 @@ namespace aux {
 		}
 
 		// in-place bit-wise XOR with the passed in digest.
-		digest32& operator^=(digest32 const& n) noexcept
+		digest32& operator^=(digest32 const& n) & noexcept
 		{
 			for (auto const v : boost::combine(m_number, n.m_number))
 				boost::get<0>(v) ^= boost::get<1>(v);
@@ -222,7 +185,7 @@ namespace aux {
 		}
 
 		// in-place bit-wise AND of the passed in digest
-		digest32& operator&=(digest32 const& n) noexcept
+		digest32& operator&=(digest32 const& n) & noexcept
 		{
 			for (auto const v : boost::combine(m_number, n.m_number))
 				boost::get<0>(v) &= boost::get<1>(v);
@@ -230,7 +193,7 @@ namespace aux {
 		}
 
 		// in-place bit-wise OR of the two digests.
-		digest32& operator|=(digest32 const& n) noexcept
+		digest32& operator|=(digest32 const& n) & noexcept
 		{
 			for (auto const v : boost::combine(m_number, n.m_number))
 				boost::get<0>(v) |= boost::get<1>(v);
@@ -270,10 +233,24 @@ namespace aux {
 			return std::string(reinterpret_cast<char const*>(m_number.data()), size());
 		}
 
+#if TORRENT_USE_IOSTREAM
+		// print a sha1_hash object to an ostream as 40 hexadecimal digits
+		friend std::ostream& operator<<(std::ostream& os, digest32<N> const& val)
+		{ val.stream_out(os); return os; }
+
+		// read 40 hexadecimal digits from an istream into a sha1_hash
+		friend std::istream& operator>>(std::istream& is, digest32<N>& val)
+		{ val.stream_in(is); return is; }
+#endif // TORRENT_USE_IOSTREAM
+
 	private:
 
-		std::array<std::uint32_t, number_size> m_number;
+#if TORRENT_USE_IOSTREAM
+		void stream_in(std::istream& is);
+		void stream_out(std::ostream& os) const;
+#endif // TORRENT_USE_IOSTREAM
 
+		std::array<std::uint32_t, number_size> m_number;
 	};
 
 	// This type holds a SHA-1 digest or any other kind of 20 byte
@@ -283,26 +260,30 @@ namespace aux {
 	// In libtorrent it is primarily used to hold info-hashes, piece-hashes,
 	// peer IDs, node IDs etc.
 	using sha1_hash = digest32<160>;
+	using sha256_hash = digest32<256>;
 
 #if TORRENT_USE_IOSTREAM
-
-	// print a sha1_hash object to an ostream as 40 hexadecimal digits
-	TORRENT_EXPORT std::ostream& operator<<(std::ostream& os, sha1_hash const& peer);
-
-	// read 40 hexadecimal digits from an istream into a sha1_hash
-	TORRENT_EXPORT std::istream& operator>>(std::istream& is, sha1_hash& peer);
-
+	extern template void digest32<160>::stream_out(std::ostream&) const;
+	extern template void digest32<256>::stream_out(std::ostream&) const;
+	extern template void digest32<160>::stream_in(std::istream&);
+	extern template void digest32<256>::stream_in(std::istream&);
 #endif // TORRENT_USE_IOSTREAM
+
+	extern template digest32<160>& digest32<160>::operator<<=(int) & noexcept;
+	extern template digest32<256>& digest32<256>::operator<<=(int) & noexcept;
+	extern template digest32<160>& digest32<160>::operator>>=(int) & noexcept;
+	extern template digest32<256>& digest32<256>::operator>>=(int) & noexcept;
 }
 
 namespace std {
-	template <>
-	struct hash<libtorrent::sha1_hash>
+	template <std::ptrdiff_t N>
+	struct hash<libtorrent::digest32<N>>
 	{
-		std::size_t operator()(libtorrent::sha1_hash const& k) const
+		std::size_t operator()(libtorrent::digest32<N> const& k) const
 		{
 			std::size_t ret;
-			// this is OK because sha1_hash is already a hash
+			static_assert(N >= sizeof(ret) * 8, "hash is not defined for small digests");
+			// this is OK because digest32<N> is already a hash
 			std::memcpy(&ret, k.data(), sizeof(ret));
 			return ret;
 		}

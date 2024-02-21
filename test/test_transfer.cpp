@@ -1,37 +1,16 @@
 /*
 
-Copyright (c) 2008, Arvid Norberg
+Copyright (c) 2008-2010, 2012-2022, Arvid Norberg
+Copyright (c) 2016, 2018, Alden Torres
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/session.hpp"
 #include "libtorrent/session_settings.hpp"
+#include "libtorrent/session_params.hpp"
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/bencode.hpp"
 #include "libtorrent/time.hpp"
@@ -40,7 +19,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "test.hpp"
 #include "setup_transfer.hpp"
-#include "settings.hpp"
+#include "settings.hpp" // for settings()
 #include "test_utils.hpp"
 
 #include <tuple>
@@ -59,7 +38,8 @@ int peer_disconnects = 0;
 
 bool on_alert(alert const* a)
 {
-	if (alert_cast<peer_disconnected_alert>(a))
+	auto const* const pd = alert_cast<peer_disconnected_alert>(a);
+	if (pd && pd->error != make_error_code(errors::self_connection))
 		++peer_disconnects;
 	else if (alert_cast<peer_error_alert>(a))
 		++peer_disconnects;
@@ -98,7 +78,7 @@ void test_transfer(int proxy_type, settings_pack const& sett
 	session_proxy p2;
 
 	settings_pack pack = settings();
-	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:48075");
+	pack.set_str(settings_pack::listen_interfaces, test_listen_interface());
 
 	pack.set_bool(settings_pack::enable_upnp, false);
 	pack.set_bool(settings_pack::enable_natpmp, false);
@@ -110,7 +90,7 @@ void test_transfer(int proxy_type, settings_pack const& sett
 
 	lt::session ses1(pack);
 
-	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:49075");
+	pack.set_str(settings_pack::listen_interfaces, test_listen_interface());
 	lt::session ses2(pack);
 
 	int proxy_port = 0;
@@ -202,7 +182,11 @@ void test_transfer(int proxy_type, settings_pack const& sett
 	int num_pieces = tor2.torrent_file()->num_pieces();
 	std::vector<int> priorities(std::size_t(num_pieces), 1);
 
-	lt::time_point const start_time = lt::clock_type::now();
+	auto const start_time = lt::clock_type::now();
+
+	static char const* state_str[] =
+		{"checking (q)", "checking", "dl metadata"
+		, "downloading", "finished", "seeding", "allocating", "checking (r)"};
 
 	for (int i = 0; i < 20000; ++i)
 	{
@@ -222,10 +206,11 @@ void test_transfer(int proxy_type, settings_pack const& sett
 
 		if (i % 10 == 0)
 		{
-			print_ses_rate(i / 10.f, &st1, &st2);
+			print_ses_rate(start_time, &st1, &st2);
 		}
 
-		std::cout << "progress: " << st2.progress << "\n";
+		std::cout << "st1-progress: " << (st1.progress * 100.f) << "% state: " << state_str[st1.state] << "\n";
+		std::cout << "st2-progress: " << (st2.progress * 100.f) << "% state: " << state_str[st2.state] << "\n";
 		if ((flags & move_storage) && st2.progress > 0.1f)
 		{
 			flags &= ~move_storage;
@@ -250,7 +235,8 @@ void test_transfer(int proxy_type, settings_pack const& sett
 		if (st2.is_seeding) break;
 
 		TEST_CHECK(st1.state == torrent_status::seeding
-			|| st1.state == torrent_status::checking_files);
+			|| st1.state == torrent_status::checking_files
+			|| st1.state == torrent_status::checking_resume_data);
 		TEST_CHECK(st2.state == torrent_status::downloading
 			|| st2.state == torrent_status::checking_resume_data);
 
@@ -288,7 +274,7 @@ TORRENT_TEST(no_contiguous_buffers)
 	using namespace lt;
 
 	// test no contiguous_recv_buffers
-	settings_pack p;
+	settings_pack p = settings();
 	p.set_bool(settings_pack::contiguous_recv_buffer, false);
 	test_transfer(0, p);
 
@@ -345,7 +331,7 @@ TORRENT_TEST(allow_fast)
 {
 	using namespace lt;
 	// test allowed fast
-	settings_pack p;
+	settings_pack p = settings();
 	p.set_int(settings_pack::allowed_fast_set_size, 2000);
 	test_transfer(0, p);
 
@@ -362,3 +348,33 @@ TORRENT_TEST(allocate)
 	cleanup();
 }
 
+TORRENT_TEST(suggest)
+{
+	using namespace lt;
+	settings_pack p = settings();
+	p.set_int(settings_pack::suggest_mode, settings_pack::suggest_read_cache);
+	test_transfer(0, p);
+
+	cleanup();
+}
+
+TORRENT_TEST(disable_os_cache)
+{
+	using namespace lt;
+	settings_pack p = settings();
+	p.set_int(settings_pack::disk_io_write_mode, settings_pack::disable_os_cache);
+	test_transfer(0, p, {}, storage_mode_allocate);
+
+	cleanup();
+}
+
+
+TORRENT_TEST(write_through)
+{
+	using namespace lt;
+	settings_pack p = settings();
+	p.set_int(settings_pack::disk_io_write_mode, settings_pack::write_through);
+	test_transfer(0, p, {}, storage_mode_allocate);
+
+	cleanup();
+}

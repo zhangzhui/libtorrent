@@ -1,33 +1,14 @@
 /*
 
-Copyright (c) 2007-2018, Arvid Norberg
+Copyright (c) 2007-2020, Arvid Norberg
+Copyright (c) 2008, Andrew Resch
+Copyright (c) 2016-2017, Alden Torres
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2020, Tiger Wang
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "libtorrent/config.hpp"
@@ -64,10 +45,16 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include <cxxabi.h>
 
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-warning-option"
+#pragma clang diagnostic ignored "-Wunsafe-buffer-usage"
+#endif
+
 namespace libtorrent {
 std::string demangle(char const* name)
 {
-// in case this string comes
+	// in case this string comes
 	// this is needed on linux
 	char const* start = std::strchr(name, '(');
 	if (start != nullptr)
@@ -102,11 +89,15 @@ std::string demangle(char const* name)
 	::free(unmangled);
 	return ret;
 }
-}
-#elif defined _WIN32
 
-#include "windows.h"
-#include "dbghelp.h"
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+}
+#elif defined _WIN32 && !defined TORRENT_WINRT
+
+#include "libtorrent/aux_/windows.hpp"
+#include <DbgHelp.h>
 
 namespace libtorrent {
 std::string demangle(char const* name)
@@ -132,6 +123,12 @@ std::string demangle(char const* name) { return name; }
 #if TORRENT_USE_EXECINFO
 #include <execinfo.h>
 
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-warning-option"
+#pragma clang diagnostic ignored "-Wunsafe-buffer-usage"
+#endif
+
 namespace libtorrent {
 
 TORRENT_EXPORT void print_backtrace(char* out, int len, int max_depth, void*)
@@ -152,14 +149,17 @@ TORRENT_EXPORT void print_backtrace(char* out, int len, int max_depth, void*)
 }
 }
 
-#elif defined _WIN32
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
-#include "windows.h"
-#include "libtorrent/utf8.hpp"
+#elif defined _WIN32 && !defined TORRENT_WINRT
+
+#include "libtorrent/aux_/windows.hpp"
 #include <mutex>
 
-#include "winbase.h"
-#include "dbghelp.h"
+#include <WinBase.h>
+#include <DbgHelp.h>
 
 namespace libtorrent {
 
@@ -186,16 +186,21 @@ TORRENT_EXPORT void print_backtrace(char* out, int len, int max_depth
 	std::array<void*, 50> stack;
 
 	STACKFRAME64 stack_frame = {};
-#if defined(_WIN64)
-	int const machine_type = IMAGE_FILE_MACHINE_AMD64;
-	stack_frame.AddrPC.Offset = context_record.Rip;
-	stack_frame.AddrFrame.Offset = context_record.Rbp;
-	stack_frame.AddrStack.Offset = context_record.Rsp;
-#else
+#if defined(_M_IX86)
 	int const machine_type = IMAGE_FILE_MACHINE_I386;
 	stack_frame.AddrPC.Offset = context_record.Eip;
 	stack_frame.AddrFrame.Offset = context_record.Ebp;
 	stack_frame.AddrStack.Offset = context_record.Esp;
+#elif defined(_M_X64)
+	int const machine_type = IMAGE_FILE_MACHINE_AMD64;
+	stack_frame.AddrPC.Offset = context_record.Rip;
+	stack_frame.AddrFrame.Offset = context_record.Rbp;
+	stack_frame.AddrStack.Offset = context_record.Rsp;
+#elif defined(_M_ARM64)
+	int const machine_type = IMAGE_FILE_MACHINE_ARM64;
+	stack_frame.AddrPC.Offset = context_record.Pc;
+	stack_frame.AddrFrame.Offset = context_record.Fp;
+	stack_frame.AddrStack.Offset = context_record.Sp;
 #endif
 	stack_frame.AddrPC.Mode = AddrModeFlat;
 	stack_frame.AddrFrame.Mode = AddrModeFlat;
@@ -372,14 +377,14 @@ TORRENT_EXPORT void assert_fail(char const* expr, int line
 	// if production asserts are defined, don't abort, just print the error
 #ifndef TORRENT_PRODUCTION_ASSERTS
 #ifdef TORRENT_WINDOWS
-	// SIGINT doesn't trigger a break with msvc
-	DebugBreak();
+	// SIGABRT doesn't trigger a break with msvc
+	__debugbreak();
 #else
-	// send SIGINT to the current process
+	// send SIGABRT to the current process
 	// to break into the debugger
-	::raise(SIGABRT);
+	std::raise(SIGABRT);
 #endif
-	::abort();
+	std::abort();
 #endif
 }
 
@@ -400,4 +405,3 @@ TORRENT_EXPORT void assert_fail(char const*, int, char const*
 #endif
 
 } // libtorrent namespace
-

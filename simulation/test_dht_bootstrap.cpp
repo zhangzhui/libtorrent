@@ -1,33 +1,11 @@
 /*
 
-Copyright (c) 2016, Arvid Norberg
+Copyright (c) 2016, 2021, Alden Torres
+Copyright (c) 2016, 2018-2021, Arvid Norberg
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #include "test.hpp"
@@ -36,7 +14,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "fake_peer.hpp" // for fake_node
 #include "libtorrent/time.hpp"
 #include "settings.hpp"
-#include "libtorrent/deadline_timer.hpp"
+#include "libtorrent/aux_/deadline_timer.hpp"
 #include "setup_transfer.hpp" // for addr()
 
 using namespace sim;
@@ -74,6 +52,7 @@ TORRENT_TEST(dht_bootstrap)
 	// we use 0 threads (disk I/O operations will be performed in the network
 	// thread) to be simulator friendly.
 	pack.set_int(lt::settings_pack::aio_threads, 0);
+	pack.set_int(lt::settings_pack::hashing_threads, 0);
 	pack.set_bool(lt::settings_pack::enable_lsd, false);
 	pack.set_bool(lt::settings_pack::enable_upnp, false);
 	pack.set_bool(lt::settings_pack::enable_natpmp, false);
@@ -81,7 +60,7 @@ TORRENT_TEST(dht_bootstrap)
 	sim::asio::io_context ios(sim, addr("10.0.0.1"));
 	std::shared_ptr<lt::session> ses = std::make_shared<lt::session>(pack, ios);
 
-	lt::deadline_timer timer(ios);
+	lt::aux::deadline_timer timer(ios);
 	timer.expires_after(lt::seconds(10));
 	timer.async_wait([&](lt::error_code const&) {
 		zombies.push_back(ses->abort());

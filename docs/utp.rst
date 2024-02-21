@@ -1,7 +1,3 @@
-=================
-libtorrent manual
-=================
-
 .. include:: header.rst
 
 .. contents:: Table of contents
@@ -23,7 +19,7 @@ that their internet "stops working". This can be caused by a number of things,
 for example:
 
 1.  a home router that crashes or slows down when its NAT pin-hole
-    table overflows, triggered by DHT or simply many TCP connections. 
+    table overflows, triggered by DHT or simply many TCP connections.
 
 2. a home router that crashes or slows down by UDP traffic (caused by
    the DHT)
@@ -96,7 +92,7 @@ packet that is successfully transferred will increase cwnd.
 	            cwnd
 	send_rate = ----
 	            RTT
-	
+
 
 Send rate is proportional to cwnd divided by RTT. A smaller cwnd will cause
 the send rate to be lower and a larger cwnd will cause the send rate to be
@@ -130,8 +126,9 @@ It can simply be expressed as::
 
 	cwnd += gain * (target_delay - delay)
 
-.. image:: cwnd_thumb.png
+.. image:: img/cwnd_thumb.png
 	:target: cwnd.png
+	:class: bw
 	:align: right
 
 Similarly to TCP, this is scaled so that the increase is evened out over one RTT.
@@ -163,8 +160,9 @@ baseline measurement, to cancel out any fixed delay. By focusing on the
 variable delay along a link, it will specifically detect points where
 there might be congestion, since those points will have buffers.
 
-.. image:: delays_thumb.png
+.. image:: img/delays_thumb.png
 	:target: delays.png
+	:class: bw
 	:align: right
 
 Delay on the return link is explicitly not included in the delay measurement.
@@ -278,8 +276,9 @@ with jumbo frames.
 clock drift
 -----------
 
-.. image:: our_delay_base_thumb.png
+.. image:: img/our_delay_base_thumb.png
 	:target: our_delay_base.png
+	:class: bw
 	:align: right
 
 Clock drift is clocks progressing at different rates. It's different from clock

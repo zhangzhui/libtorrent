@@ -1,33 +1,14 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg
+Copyright (c) 2006-2008, 2010, 2014-2022, Arvid Norberg
+Copyright (c) 2014-2015, 2017, Steven Siloti
+Copyright (c) 2015-2017, 2020-2021, Alden Torres
+Copyright (c) 2015, Thomas Yuan
+Copyright (c) 2020, Fonic
 All rights reserved.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in
-      the documentation and/or other materials provided with the distribution.
-    * Neither the name of the author nor the names of its
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
 */
 
 #ifndef TORRENT_DHT_TRACKER
@@ -41,10 +22,10 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include <libtorrent/aux_/listen_socket_handle.hpp>
 #include <libtorrent/socket.hpp>
-#include <libtorrent/deadline_timer.hpp>
+#include <libtorrent/aux_/deadline_timer.hpp>
 #include <libtorrent/span.hpp>
 #include <libtorrent/io_context.hpp>
-#include <libtorrent/udp_socket.hpp>
+#include <libtorrent/aux_/udp_socket.hpp>
 #include <libtorrent/entry.hpp>
 
 namespace libtorrent {
@@ -53,11 +34,12 @@ namespace libtorrent {
 #if TORRENT_ABI_VERSION == 1
 	struct session_status;
 #endif
+namespace aux {
+	struct session_settings;
+}
 }
 
-namespace libtorrent {
-namespace dht {
-	struct dht_settings;
+namespace libtorrent::dht {
 
 	struct TORRENT_EXTRA_EXPORT dht_tracker final
 		: socket_manager
@@ -65,12 +47,12 @@ namespace dht {
 	{
 		using send_fun_t = std::function<void(
 			aux::listen_socket_handle const&, udp::endpoint const&
-			, span<char const>, error_code&, udp_send_flags_t)>;
+			, span<char const>, error_code&, aux::udp_send_flags_t)>;
 
 		dht_tracker(dht_observer* observer
 			, io_context& ios
-			, send_fun_t const& send_fun
-			, dht_settings const& settings
+			, send_fun_t send_fun
+			, aux::session_settings const& settings
 			, counters& cnt
 			, dht_storage_interface& storage
 			, dht_state&& state);
@@ -79,7 +61,7 @@ namespace dht {
 		dht_tracker(dht_observer* observer
 			, io_context& ios
 			, send_fun_t const& send_fun
-			, dht_settings const& settings
+			, aux::session_settings const& settings
 			, counters& cnt
 			, dht_storage_interface& storage
 			, dht_state const& state) = delete;
@@ -112,7 +94,8 @@ namespace dht {
 			, std::function<void(std::vector<tcp::endpoint> const&)> f);
 
 		void sample_infohashes(udp::endpoint const& ep, sha1_hash const& target
-			, std::function<void(time_duration
+			, std::function<void(node_id
+				, time_duration
 				, int, std::vector<sha1_hash>
 				, std::vector<std::pair<sha1_hash, udp::endpoint>>)> f);
 
@@ -143,10 +126,11 @@ namespace dht {
 			, std::function<void(msg const&)> f);
 
 #if TORRENT_ABI_VERSION == 1
+#include "libtorrent/aux_/disable_deprecation_warnings_push.hpp"
 		void dht_status(session_status& s);
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
 #endif
-		void dht_status(std::vector<dht_routing_bucket>& table
-			, std::vector<dht_lookup>& requests);
+		std::vector<lt::dht::dht_status> dht_status() const;
 		void update_stats_counters(counters& c) const;
 
 		void incoming_error(error_code const& ec, udp::endpoint const& ep);
@@ -160,16 +144,16 @@ namespace dht {
 		{
 			tracker_node(io_context& ios
 				, aux::listen_socket_handle const& s, socket_manager* sock
-				, dht_settings const& settings
+				, aux::session_settings const& settings
 				, node_id const& nid
 				, dht_observer* observer, counters& cnt
 				, get_foreign_node_t get_foreign_node
 				, dht_storage_interface& storage);
 			tracker_node(tracker_node const&) = delete;
-			tracker_node(tracker_node&&) = default;
+			tracker_node(tracker_node&&) = delete;
 
 			node dht;
-			deadline_timer connection_timer;
+			aux::deadline_timer connection_timer;
 		};
 		using tracker_nodes_t = std::map<aux::listen_socket_handle, tracker_node>;
 
@@ -180,7 +164,7 @@ namespace dht {
 		void refresh_timeout(error_code const& e);
 		void refresh_key(error_code const& e);
 		void update_storage_node_ids();
-		node* get_node(node_id const& id, std::string const& family_name);
+		node* get_node(node_id const& id, string_view family_name);
 
 		// implements socket_manager
 		bool has_quota() override;
@@ -201,9 +185,9 @@ namespace dht {
 		std::vector<char> m_send_buf;
 		dos_blocker m_blocker;
 
-		deadline_timer m_key_refresh_timer;
-		deadline_timer m_refresh_timer;
-		dht_settings const& m_settings;
+		aux::deadline_timer m_key_refresh_timer;
+		aux::deadline_timer m_refresh_timer;
+		aux::session_settings const& m_settings;
 
 		bool m_running;
 
@@ -213,8 +197,9 @@ namespace dht {
 		// state for the send rate limit
 		int m_send_quota;
 		time_point m_last_tick;
+
+		io_context& m_ioc;
 	};
-} // namespace dht
-} // namespace libtorrent
+} // namespace libtorrent::dht
 
 #endif
