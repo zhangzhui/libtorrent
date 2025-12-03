@@ -39,8 +39,8 @@ int const piece_size = 0x4000;
 add_torrent_params create_torrent(std::vector<lt::create_file_entry> files
 	, bool const v1_only = false)
 {
-	add_torrent_params ret;
-	ret.ti = ::make_torrent(std::move(files), 0, v1_only ? create_torrent::v1_only : create_flags_t{});
+	add_torrent_params ret = ::make_torrent(std::move(files)
+		, 0, v1_only ? create_torrent::v1_only : create_flags_t{});
 	ret.flags &= ~lt::torrent_flags::auto_managed;
 	ret.flags &= ~lt::torrent_flags::paused;
 	ret.save_path = ".";
@@ -254,7 +254,7 @@ TORRENT_TEST(unaligned_file_redirect)
 
 	bool seeding = false;
 
-	lt::file_storage const& fs = params.ti->files();
+	lt::file_storage const& fs = params.ti->layout();
 
 	run_test(
 		[&params](lt::session& ses)
@@ -301,7 +301,7 @@ TORRENT_TEST(multi_file_redirect_pad_files)
 
 	// since the final torrent is different than what we built (because of pad
 	// files), ask about it.
-	file_storage const& fs = params.ti->files();
+	file_storage const& fs = params.ti->layout();
 
 	bool seeding = false;
 
@@ -351,7 +351,7 @@ TORRENT_TEST(multi_file_redirect)
 	lt::add_torrent_params params = ::create_torrent(std::move(files));
 	params.url_seeds.push_back("http://2.2.2.2:8080/");
 
-	file_storage const& fs = params.ti->files();
+	file_storage const& fs = params.ti->layout();
 
 	bool seeding = false;
 
@@ -401,7 +401,7 @@ TORRENT_TEST(multi_file_redirect_through_proxy)
 	lt::add_torrent_params params = ::create_torrent(std::move(files));
 	params.url_seeds.push_back("http://2.2.2.2:8080/");
 
-	file_storage const& fs = params.ti->files();
+	file_storage const& fs = params.ti->layout();
 
 	bool seeding = false;
 
@@ -466,7 +466,7 @@ TORRENT_TEST(multi_file_unaligned_redirect)
 	lt::add_torrent_params params = ::create_torrent(std::move(files), true);
 	params.url_seeds.push_back("http://2.2.2.2:8080/");
 
-	file_storage const& fs = params.ti->files();
+	file_storage const& fs = params.ti->layout();
 
 	run_test(
 		[&params](lt::session& ses)
@@ -538,7 +538,7 @@ TORRENT_TEST(urlseed_timeout)
 // check for correct handle of unexpected http status response.
 // with disabled "close_redundant_connections" alive web server connection
 // may be closed in such manner.
-TORRENT_TEST(no_close_redudant_webseed)
+TORRENT_TEST(no_close_redundant_webseed)
 {
 	using namespace lt;
 
@@ -651,7 +651,7 @@ bool test_idna(char const* url, char const* redirect, bool allow_idna)
 	lt::add_torrent_params params = ::create_torrent(std::move(files));
 	params.url_seeds.emplace_back(url);
 
-	file_storage const& fs = params.ti->files();
+	file_storage const& fs = params.ti->layout();
 
 	bool seeding = false;
 
@@ -728,7 +728,7 @@ bool test_ssrf(char const* url, char const* redirect, bool enable_feature)
 	lt::add_torrent_params params = ::create_torrent(std::move(files));
 	params.url_seeds.emplace_back(url);
 
-	file_storage const& fs = params.ti->files();
+	file_storage const& fs = params.ti->layout();
 
 	bool seeding = false;
 

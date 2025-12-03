@@ -33,6 +33,11 @@ using namespace sim;
 
 #define DEBUG_SWARM 0
 
+#if DEBUG_SWARM
+#include <cstdio>
+#include "libtorrent/aux_/file_pointer.hpp"
+#endif
+
 constexpr swarm_test_t swarm_test::download;
 constexpr swarm_test_t swarm_test::upload;
 constexpr swarm_test_t swarm_test::no_auto_stop;
@@ -196,7 +201,7 @@ void setup_swarm(int num_nodes
 	int const swarm_id = unit_test::test_counter();
 	std::string path = save_path(swarm_id, 0);
 
-	std::shared_ptr<lt::torrent_info> ti;
+	lt::add_torrent_params atp;
 
 	if (type & swarm_test::real_disk)
 	{
@@ -204,11 +209,11 @@ void setup_swarm(int num_nodes
 		if (ec) std::printf("failed to create directory: \"%s\": %s\n"
 			, path.c_str(), ec.message().c_str());
 		std::ofstream file(lt::combine_path(path, "temporary").c_str());
-		ti = ::create_torrent(&file, "temporary", 0x4000, (type & swarm_test::large_torrent) ? 50 : 9, false);
+		atp = ::create_torrent(&file, "temporary", 0x4000, (type & swarm_test::large_torrent) ? 50 : 9, false);
 	}
 	else
 	{
-		ti = ::create_test_torrent(0x4000, (type & swarm_test::large_torrent) ? 50 : 9, {});
+		atp = ::create_test_torrent(0x4000, (type & swarm_test::large_torrent) ? 50 : 9, {});
 	}
 
 	if (bool(type & swarm_test::download) && bool(type & swarm_test::upload))
@@ -289,8 +294,11 @@ void setup_swarm(int num_nodes
 		{
 			p.save_path = ".";
 		}
+		p.ti = atp.ti;
+		p.merkle_trees = atp.merkle_trees;
+		p.merkle_tree_mask = atp.merkle_tree_mask;
+		p.verified_leaf_hashes = atp.verified_leaf_hashes;
 
-		p.ti = ti;
 		if (i == 0) add_torrent(p);
 		ses->async_add_torrent(p);
 
@@ -311,6 +319,12 @@ void setup_swarm(int num_nodes
 				// line
 #if DEBUG_SWARM == 0
 				if (i != 0) return;
+#else
+				char path[200];
+				lt::error_code ignore;
+				lt::create_directory("logs", ignore);
+				std::snprintf(path, sizeof(path), "logs/node-%d.log", i);
+				lt::aux::file_pointer log_output(::fopen(path, "a"));
 #endif
 
 				for (lt::alert* a : alerts)
@@ -320,24 +334,26 @@ void setup_swarm(int num_nodes
 					std::uint32_t const millis = std::uint32_t(
 						lt::duration_cast<lt::milliseconds>(d).count());
 
+#if DEBUG_SWARM != 0
+					std::fprintf(log_output.file(),
+						"%4u.%03u: %-25s %s\n"
+						, millis / 1000, millis % 1000
+						, a->what()
+						, a->message().c_str());
+
+					// the behavior of the test itself should not be affected by
+					// whether we're printing logs for all nodes
+					if (i != 0) continue;
+#endif
+					// when debugging, we print *all* alerts to the log
 					if (should_print(a))
 					{
 						std::printf(
-#if DEBUG_SWARM != 0
-							"[%d] "
-#endif
 							"%4u.%03u: %-25s %s\n"
-#if DEBUG_SWARM != 0
-							, i
-#endif
 							, millis / 1000, millis % 1000
 							, a->what()
 							, a->message().c_str());
 					}
-
-#if DEBUG_SWARM != 0
-					if (i != 0) continue;
-#endif
 
 					// if a torrent was added save the torrent handle
 					if (lt::add_torrent_alert* at = lt::alert_cast<lt::add_torrent_alert>(a))

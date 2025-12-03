@@ -156,7 +156,11 @@ see LICENSE file.
 #define TORRENT_HAVE_MMAP 1
 #endif
 
-#if defined __GLIBC__ && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 27))
+#if defined __GLIBC__ && (__GLIBC__ < 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ < 27))
+#define TORRENT_HAS_COPY_FILE_RANGE 0
+#elif defined __ANDROID__
+#define TORRENT_HAS_COPY_FILE_RANGE 0
+#else
 #define TORRENT_HAS_COPY_FILE_RANGE 1
 #endif
 
@@ -596,7 +600,8 @@ see LICENSE file.
 // call 'std::move' explicitly to avoid copying
 #	define TORRENT_RVO(x) std::move(x)
 #elif (__cplusplus >= 201703L && defined __cpp_guaranteed_copy_elision) \
-	|| (defined _MSC_VER && _MSC_VER > 1928)
+	|| (defined _MSC_VER && _MSC_VER > 1928) \
+	|| (defined __GNUC__ && __GNUC__ >= 9)
 #	define TORRENT_RVO(x) x
 #else
 #	define TORRENT_RVO(x) std::move(x)

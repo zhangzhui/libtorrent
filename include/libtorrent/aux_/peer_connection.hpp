@@ -462,6 +462,10 @@ namespace libtorrent::aux {
 		tcp::endpoint const& remote() const override { return m_remote; }
 		tcp::endpoint local_endpoint() const override { return m_local; }
 
+		// this is for peer_alerts. It's either an IP endpoint or an i2p
+		// destination hash
+		peer_endpoint_t remote_endpoint() const;
+
 #if TORRENT_USE_I2P
 		std::string const& destination() const override;
 		std::string const& local_i2p_endpoint() const override;
@@ -536,9 +540,9 @@ namespace libtorrent::aux {
 #ifndef TORRENT_DISABLE_LOGGING
 		bool should_log(peer_log_alert::direction_t direction) const final;
 		void peer_log(peer_log_alert::direction_t direction
-			, char const* event, char const* fmt, ...) const noexcept final TORRENT_FORMAT(4,5);
+			, peer_log_alert::event_t event, char const* fmt, ...) const noexcept final TORRENT_FORMAT(4,5);
 		void peer_log(peer_log_alert::direction_t direction
-			, char const* event) const noexcept;
+			, peer_log_alert::event_t event) const noexcept;
 #endif
 
 		// the message handlers are called
@@ -656,7 +660,7 @@ namespace libtorrent::aux {
 		int max_out_request_queue() const;
 
 		std::time_t last_seen_complete() const { return m_last_seen_complete; }
-		void set_last_seen_complete(int ago) { m_last_seen_complete = ::time(nullptr) - ago; }
+		void set_last_seen_complete(int ago) { m_last_seen_complete = aux::posix_time() - ago; }
 
 		std::int64_t uploaded_in_last_round() const
 		{ return m_statistics.total_payload_upload() - m_uploaded_at_last_round; }

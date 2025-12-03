@@ -147,9 +147,7 @@ void run_test(
 
 	int const num_files = (flags & tx::multiple_files) ? 3 : 1;
 
-	lt::add_torrent_params atp;
-
-	atp.ti = ::create_test_torrent(piece_size, num_pieces, cflags, num_files);
+	lt::add_torrent_params atp = ::create_test_torrent(piece_size, num_pieces, cflags, num_files);
 	// this is unused by the test disk I/O
 	atp.save_path = ".";
 	atp.flags &= ~lt::torrent_flags::auto_managed;
@@ -164,7 +162,7 @@ void run_test(
 
 	if (flags & tx::web_seed)
 	{
-		auto const& fs = atp.ti->files();
+		auto const& fs = atp.ti->layout();
 		for (lt::file_index_t f : fs.file_range())
 		{
 			std::string file_path = fs.file_path(f, "/");
@@ -191,21 +189,24 @@ void run_test(
 	if (!(flags & tx::web_seed))
 		ses[1]->async_add_torrent(atp);
 
-	auto torrent = atp.ti;
-
 	atp.save_path = save_path(0);
+	if (flags & tx::web_seed)
+		atp.url_seeds.emplace_back("http://2.2.2.2:8080/");
+
+#if TORRENT_ABI_VERSION < 4
+	auto atp_copy = atp;
+#endif
 	if (flags & tx::magnet_download)
 	{
 		atp.info_hashes = atp.ti->info_hashes();
 		atp.ti.reset();
 	}
-	if (flags & tx::web_seed)
-		atp.url_seeds.emplace_back("http://2.2.2.2:8080/");
 
 	ses[0]->async_add_torrent(atp);
 
 	sim::timer t(sim, timeout, [&](boost::system::error_code const&)
 	{
+#if TORRENT_ABI_VERSION < 4
 		auto h = ses[0]->get_torrents();
 		auto ti = h[0].torrent_file_with_hashes();
 
@@ -219,14 +220,13 @@ void run_test(
 			if (ti->v2())
 				TEST_EQUAL(ti->v2_piece_hashes_verified(), true);
 
-#if TORRENT_ABI_VERSION < 4
 			{
 				auto downloaded = serialize(*ti);
-				auto added = serialize(*torrent);
+				auto added = serialize(atp_copy);
 				TEST_CHECK(downloaded == added);
 			}
-#endif
 		}
+#endif
 
 		test(ses);
 

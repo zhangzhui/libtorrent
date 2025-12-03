@@ -4,7 +4,7 @@ Copyright (c) 2005, 2007-2010, 2012-2022, Arvid Norberg
 Copyright (c) 2016, 2018, 2021, Alden Torres
 Copyright (c) 2016, Andrei Kurushin
 Copyright (c) 2016-2018, Steven Siloti
-Copyright (c) 2016, Vladimir Golovnev
+Copyright (c) 2016, 2025, Vladimir Golovnev (glassez)
 Copyright (c) 2018, d-komarov
 All rights reserved.
 
@@ -35,6 +35,8 @@ see LICENSE file.
 #include "libtorrent/mmap_disk_io.hpp"
 #include "libtorrent/posix_disk_io.hpp"
 #include "libtorrent/flags.hpp"
+#include "libtorrent/aux_/readwrite.hpp"
+#include "libtorrent/load_torrent.hpp"
 
 #include <memory>
 #include <functional> // for bind
@@ -136,7 +138,7 @@ void run_until(io_context& ios, bool const& done)
 	}
 }
 
-std::shared_ptr<torrent_info> setup_torrent_info(std::vector<char>& buf)
+lt::aux::torrent_info_ptr setup_torrent_info(std::vector<char>& buf)
 {
 	std::vector<lt::create_file_entry> fs;
 	fs.emplace_back(combine_path("temp_storage", "test1.tmp"), 0x8000);
@@ -149,19 +151,8 @@ std::shared_ptr<torrent_info> setup_torrent_info(std::vector<char>& buf)
 	sha1_hash h = hasher(std::vector<char>(0x4000, 0)).final();
 	for (piece_index_t i(0); i < 6_piece; ++i) t.set_hash(i, h);
 
-	bencode(std::back_inserter(buf), t.generate());
-	error_code ec;
-
-	auto info = std::make_shared<torrent_info>(buf, ec, from_span);
-
-	if (ec)
-	{
-		std::printf("torrent_info constructor failed: %s\n"
-			, ec.message().c_str());
-		throw system_error(ec);
-	}
-
-	return info;
+	buf = bencode(t.generate());
+	return load_torrent_buffer(buf).ti;
 }
 
 // file_pool_type is a meta function returning the file pool type for a specific
@@ -206,19 +197,20 @@ std::shared_ptr<posix_storage> make_storage(storage_params const& p
 }
 
 template <typename StorageType, typename FilePool>
-std::pair<std::shared_ptr<StorageType>, std::shared_ptr<torrent_info>>
+std::pair<std::shared_ptr<StorageType>, std::shared_ptr<torrent_info const>>
 setup_torrent(
 	FilePool& fp
 	, std::vector<char>& buf
 	, std::string const& test_path
 	, aux::session_settings& set)
 {
-	std::shared_ptr<torrent_info> info = setup_torrent_info(buf);
+	auto info = setup_torrent_info(buf);
 
 	aux::vector<download_priority_t, file_index_t> priorities;
+	renamed_files rf;
 	storage_params p{
-		info->files(),
-		nullptr,
+		info->layout(),
+		rf,
 		test_path,
 		storage_mode_allocate,
 		priorities,
@@ -302,10 +294,10 @@ std::vector<char> new_piece(std::size_t const size)
 }
 
 template <typename StorageType>
-void run_storage_tests(std::shared_ptr<torrent_info> info
+void run_storage_tests(std::shared_ptr<torrent_info const> info
 	, lt::storage_mode_t storage_mode)
 {
-	lt::file_storage const& fs = info->files();
+	lt::file_storage const& fs = info->layout();
 	TORRENT_ASSERT(fs.num_files() > 0);
 	{
 	error_code ec;
@@ -330,9 +322,10 @@ void run_storage_tests(std::shared_ptr<torrent_info> info
 	boost::asio::io_context ios;
 	aux::vector<download_priority_t, file_index_t> priorities;
 	std::string const cwd = current_working_directory();
+	renamed_files rf;
 	storage_params p{
 		fs,
-		nullptr,
+		rf,
 		cwd,
 		storage_mode,
 		priorities,
@@ -490,7 +483,7 @@ void test_rename(std::string const& test_path)
 	aux::session_settings set;
 
 	auto [s, info] = setup_torrent<StorageType>(fp, buf, test_path, set);
-	file_storage const& fs = info->files();
+	file_storage const& fs = info->layout();
 
 	// directories are not created up-front, unless they contain
 	// an empty file
@@ -510,7 +503,139 @@ void test_rename(std::string const& test_path)
 	}
 	TEST_CHECK(!se.ec);
 
-	TEST_EQUAL(s->files().file_path(0_file), "new_filename");
+	TEST_EQUAL(s->names().file_path(0_file), "new_filename");
+}
+
+namespace {
+std::int64_t file_size_on_disk(std::string const& path)
+{
+#ifdef TORRENT_WINDOWS
+	native_path_string f = convert_to_native_path_string(path);
+	// in order to open a directory, we need the FILE_FLAG_BACKUP_SEMANTICS
+	HANDLE h = CreateFileW(f.c_str(), 0, FILE_SHARE_DELETE | FILE_SHARE_READ
+		| FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+	TEST_CHECK(h != INVALID_HANDLE_VALUE);
+	FILE_STANDARD_INFO Standard;
+	TEST_CHECK(GetFileInformationByHandleEx(h, FILE_INFO_BY_HANDLE_CLASS::FileStandardInfo, &Standard, sizeof(FILE_STANDARD_INFO)));
+	CloseHandle(h);
+	return Standard.AllocationSize.QuadPart;
+#else
+	struct ::stat st{};
+	TEST_EQUAL(::stat(path.c_str(), &st), 0);
+	return std::int64_t(st.st_blocks) * 512;
+#endif
+}
+}
+
+template <typename StorageType>
+void test_pre_allocate()
+{
+	std::string const test_path = complete("pre_allocate_test_path");
+	delete_dirs(combine_path(test_path, "temp_storage"));
+
+	bool const supports_prealloc = fs_supports_prealloc();
+	std::vector<char> buf;
+	typename file_pool_type<StorageType>::type fp;
+	io_context ios;
+
+	aux::session_settings set;
+	std::shared_ptr<torrent_info const> info = setup_torrent_info(buf);
+	file_storage const& fs = info->layout();
+
+	aux::vector<download_priority_t, file_index_t> priorities{
+		lt::dont_download,
+		lt::default_priority,
+		lt::default_priority,
+		lt::default_priority,
+		lt::default_priority,
+	};
+	renamed_files rf;
+	storage_params p{
+		info->layout(),
+		rf,
+		test_path,
+		storage_mode_allocate,
+		priorities,
+		sha1_hash{},
+		info->v1(),
+		info->v2()
+	};
+	auto s = make_storage<StorageType>(p, fp);
+
+	// allocate the files and create the directories
+	storage_error se;
+	s->initialize(set, se);
+	if (se)
+	{
+		TEST_ERROR(se.ec.message().c_str());
+		std::printf("storage::initialize %s: %d\n"
+			, se.ec.message().c_str(), static_cast<int>(se.file()));
+		throw system_error(se.ec);
+	}
+
+	std::vector<char> piece1 = new_piece(0x4000);
+	span<char> iov = span<char>(piece1);
+
+	// ensure all files, except the first one, have been allocated
+	for (auto i : fs.file_range())
+	{
+		if (fs.file_size(i) > 0)
+		{
+			int ret = write(s, set, iov, fs.piece_index_at_file(i), 0, aux::open_mode::write, se);
+			TEST_EQUAL(ret, int(iov.size()));
+			TEST_CHECK(!se.ec);
+		}
+
+		error_code ec;
+		file_status st;
+		std::string const path = fs.file_path(i, test_path);
+		stat_file(path, &st, ec);
+		if (i == file_index_t{0})
+		{
+			// the first file has priority 0, and so should not be created
+			TEST_EQUAL(ec, boost::system::errc::no_such_file_or_directory);
+		}
+		else
+		{
+			TEST_CHECK(!ec);
+			std::cerr << "error: " << ec.message() << std::endl;
+			TEST_EQUAL(st.file_size, fs.file_size(i));
+
+			if (supports_prealloc || fs.file_size(i) == 0)
+			{
+				TEST_CHECK(file_size_on_disk(path) >= fs.file_size(i));
+			}
+			else
+			{
+				TEST_CHECK(file_size_on_disk(path) <= fs.file_size(i));
+			}
+		}
+	}
+
+	std::cerr << "set file priority" << std::endl;
+	// set priority of file 0 to non-zero, and make sure we create the file now
+	priorities[0_file] = lt::default_priority;
+	s->set_file_priority(set, priorities, se);
+	TEST_CHECK(!se.ec);
+
+	for (auto i : fs.file_range())
+	{
+		error_code ec;
+		file_status st;
+		std::string const path = fs.file_path(i, test_path);
+		stat_file(path, &st, ec);
+		std::cerr << "error: " << ec.message() << std::endl;
+		TEST_CHECK(!ec);
+
+		if (supports_prealloc || fs.file_size(i) == 0)
+		{
+			TEST_CHECK(file_size_on_disk(path) >= fs.file_size(i));
+		}
+		else
+		{
+			TEST_CHECK(file_size_on_disk(path) <= fs.file_size(i));
+		}
+	}
 }
 
 using lt::operator""_bit;
@@ -524,7 +649,6 @@ void test_check_files(check_files_flag_t const flags
 	, lt::disk_io_constructor_type const disk_constructor)
 {
 	std::string const test_path = current_working_directory();
-	std::shared_ptr<torrent_info> info;
 
 	error_code ec;
 	constexpr int piece_size_check = 16 * 1024;
@@ -555,8 +679,7 @@ void test_check_files(check_files_flag_t const flags
 	ofstream(combine_path(test_path, combine_path("temp_storage", "test3.tmp")).c_str())
 		.write(piece2.data(), std::streamsize(piece2.size()));
 
-	std::vector<char> const buf = bencode(t.generate());
-	info = std::make_shared<torrent_info>(buf, ec, from_span);
+	std::shared_ptr<torrent_info const> info = load_torrent_buffer(bencode(t.generate())).ti;
 
 	aux::session_settings set;
 	boost::asio::io_context ios;
@@ -571,9 +694,10 @@ void test_check_files(check_files_flag_t const flags
 	if (flags & zero_prio)
 		priorities.resize(std::size_t(info->num_files()), download_priority_t{});
 
+	renamed_files rf;
 	storage_params p{
-		info->files(),
-		nullptr,
+		info->layout(),
+		rf,
 		test_path,
 		(flags & sparse) ? storage_mode_sparse : storage_mode_allocate,
 		priorities,
@@ -617,8 +741,6 @@ void run_test()
 	std::string const test_path = current_working_directory();
 	std::cout << "\n=== " << test_path << " ===\n" << std::endl;
 
-	std::shared_ptr<torrent_info> info;
-
 	std::vector<char> piece0 = new_piece(piece_size);
 	std::vector<char> piece1 = new_piece(piece_size);
 	std::vector<char> piece2 = new_piece(piece_size);
@@ -650,8 +772,7 @@ void run_test()
 	t.set_hash(2_piece, hasher(piece2).final());
 	t.set_hash(3_piece, hasher(piece3).final());
 
-	std::vector<char> const buf = bencode(t.generate());
-	info = std::make_shared<torrent_info>(buf, from_span);
+	std::shared_ptr<torrent_info const> info = load_torrent_buffer(bencode(t.generate())).ti;
 
 	// run_storage_tests writes piece 0, 1 and 2. not 3
 	run_storage_tests<StorageType>(info, storage_mode_sparse);
@@ -682,10 +803,14 @@ TORRENT_TEST(check_files_oversized_mmap)
 	test_check_files(sparse | test_oversized, lt::mmap_disk_io_constructor);
 }
 
-
 TORRENT_TEST(check_files_allocate_mmap)
 {
 	test_check_files(zero_prio, lt::mmap_disk_io_constructor);
+}
+
+TORRENT_TEST(test_pre_allocate_mmap)
+{
+	test_pre_allocate<mmap_storage>();
 }
 #endif
 TORRENT_TEST(check_files_sparse_posix)
@@ -708,6 +833,14 @@ TORRENT_TEST(check_files_allocate_posix)
 {
 	test_check_files(zero_prio, lt::posix_disk_io_constructor);
 }
+
+// posix_storage doesn't support pre-allocating files on non-windows
+/*
+TORRENT_TEST(test_pre_allocate_posix)
+{
+	test_pre_allocate<posix_storage>();
+}
+*/
 
 #if TORRENT_HAVE_MMAP || TORRENT_HAVE_MAP_VIEW_OF_FILE
 TORRENT_TEST(rename_mmap_disk_io)
@@ -742,7 +875,7 @@ void test_fastresume(bool const test_deprecated)
 	if (ec) std::cout << "create_directory '" << combine_path(test_path, "tmp1")
 		<< "': " << ec.message() << std::endl;
 	ofstream file(combine_path(test_path, "tmp1/temporary").c_str());
-	std::shared_ptr<torrent_info> t = ::create_torrent(&file);
+	add_torrent_params atp = ::create_torrent(&file);
 	file.close();
 	TEST_CHECK(exists(complete("tmp1/temporary")));
 	if (!exists(complete("tmp1/temporary")))
@@ -753,17 +886,17 @@ void test_fastresume(bool const test_deprecated)
 		settings_pack pack = settings();
 		lt::session ses(pack);
 
-		add_torrent_params p;
-		p.ti = std::make_shared<torrent_info>(std::cref(*t));
+		add_torrent_params p = atp;
 		p.save_path = combine_path(test_path, "tmp1");
 		p.storage_mode = storage_mode_sparse;
 		error_code ignore;
 		torrent_handle h = ses.add_torrent(std::move(p), ignore);
-		TEST_CHECK(exists(combine_path(p.save_path, "temporary")));
-		if (!exists(combine_path(p.save_path, "temporary")))
+
+		torrent_status s = h.status();
+		TEST_CHECK(exists(combine_path(s.save_path, "temporary")));
+		if (!exists(combine_path(s.save_path, "temporary")))
 			return;
 
-		torrent_status s;
 		for (int i = 0; i < 50; ++i)
 		{
 			print_alerts(ses, "ses");
@@ -819,7 +952,7 @@ void test_fastresume(bool const test_deprecated)
 
 		p.flags &= ~torrent_flags::paused;
 		p.flags &= ~torrent_flags::auto_managed;
-		p.ti = std::make_shared<torrent_info>(std::cref(*t));
+		p.ti = atp.ti;
 		p.save_path = combine_path(test_path, "tmp1");
 		p.storage_mode = storage_mode_sparse;
 		torrent_handle h = ses.add_torrent(std::move(p), ec);
@@ -860,9 +993,9 @@ bool got_file_rename_alert(alert const* a)
 TORRENT_TEST(rename_file)
 {
 	std::vector<char> buf;
-	std::shared_ptr<torrent_info> info = setup_torrent_info(buf);
+	auto info = setup_torrent_info(buf);
 
-	file_storage const& fs = info->files();
+	file_storage const& fs = info->layout();
 
 	settings_pack pack = settings();
 	pack.set_bool(settings_pack::disable_hash_checks, true);
@@ -941,7 +1074,7 @@ void test_rename_file_fastresume(bool test_deprecated)
 	create_directory(combine_path(test_path, "tmp2"), ec);
 	if (ec) std::cout << "create_directory: " << ec.message() << std::endl;
 	ofstream file(combine_path(test_path, "tmp2/temporary").c_str());
-	std::shared_ptr<torrent_info> t = ::create_torrent(&file);
+	add_torrent_params atp = ::create_torrent(&file);
 	file.close();
 	TEST_CHECK(exists(combine_path(test_path, "tmp2/temporary")));
 
@@ -951,7 +1084,7 @@ void test_rename_file_fastresume(bool test_deprecated)
 		lt::session ses(pack);
 
 		add_torrent_params p;
-		p.ti = std::make_shared<torrent_info>(std::cref(*t));
+		p.ti = atp.ti;
 		p.save_path = combine_path(test_path, "tmp2");
 		p.storage_mode = storage_mode_sparse;
 		torrent_handle h = ses.add_torrent(std::move(p), ec);
@@ -1002,7 +1135,7 @@ void test_rename_file_fastresume(bool test_deprecated)
 		{
 			p = read_resume_data(resume_data);
 		}
-		p.ti = std::make_shared<torrent_info>(std::cref(*t));
+		p.ti = atp.ti;
 		p.save_path = combine_path(test_path, "tmp2");
 		p.storage_mode = storage_mode_sparse;
 		torrent_handle h = ses.add_torrent(std::move(p), ec);
@@ -1179,8 +1312,7 @@ TORRENT_TEST(readwrite_stripe_1)
 	std::vector<char> buf(std::size_t(fs.total_size()));
 	fill_pattern(buf);
 
-	int ret = readwrite(fs, buf, 0_piece, 0, ec
-		, std::ref(fop));
+	int ret = readwrite(fs, span<char>(buf), 0_piece, 0, ec, std::ref(fop));
 
 	TEST_EQUAL(ret, fs.total_size());
 	TEST_EQUAL(fop.m_file_data.size(), 4);
@@ -1204,7 +1336,7 @@ TORRENT_TEST(readwrite_single_buffer)
 	std::vector<char> buf(size_t(fs.total_size()));
 	fill_pattern(buf);
 
-	int ret = readwrite(fs, buf, 0_piece, 0, ec, std::ref(fop));
+	int ret = readwrite(fs, span<char>(buf), 0_piece, 0, ec, std::ref(fop));
 
 	TEST_EQUAL(ret, fs.total_size());
 	TEST_EQUAL(fop.m_file_data.size(), 4);
@@ -1228,7 +1360,7 @@ TORRENT_TEST(readwrite_read)
 	std::vector<char> buf(size_t(fs.total_size()));
 
 	// read everything
-	int ret = readwrite(fs, buf, 0_piece, 0, ec, std::ref(fop));
+	int ret = readwrite(fs, span<char>(buf), 0_piece, 0, ec, std::ref(fop));
 
 	TEST_EQUAL(ret, fs.total_size());
 	TEST_CHECK(check_pattern(buf, 0));
@@ -1243,7 +1375,7 @@ TORRENT_TEST(readwrite_read_short)
 	std::vector<char> buf(size_t(fs.total_size()));
 
 	// read everything
-	int ret = readwrite(fs, buf, 0_piece, 0, ec, std::ref(fop));
+	int ret = readwrite(fs, span<char>(buf), 0_piece, 0, ec, std::ref(fop));
 
 	TEST_EQUAL(static_cast<int>(ec.file()), 3);
 
@@ -1261,7 +1393,7 @@ TORRENT_TEST(readwrite_error)
 	std::vector<char> buf(size_t(fs.total_size()));
 
 	// read everything
-	int ret = readwrite(fs, buf, 0_piece, 0, ec, std::ref(fop));
+	int ret = readwrite(fs, span<char>(buf), 0_piece, 0, ec, std::ref(fop));
 
 	TEST_EQUAL(ret, 12);
 	TEST_EQUAL(static_cast<int>(ec.file()), 2);
@@ -1286,7 +1418,7 @@ TORRENT_TEST(readwrite_zero_size_files)
 	std::vector<char> buf(size_t(fs.total_size()));
 
 	// read everything
-	int ret = readwrite(fs, buf, 0_piece, 0, ec, std::ref(fop));
+	int ret = readwrite(fs, span<char>(buf), 0_piece, 0, ec, std::ref(fop));
 
 	TEST_EQUAL(ret, fs.total_size());
 	TEST_CHECK(check_pattern(buf, 0));
@@ -1532,7 +1664,9 @@ void test_unaligned_read(lt::disk_io_constructor_type constructor, Fun fun)
 	delete_dirs(combine_path(save_path, "test"));
 
 	lt::aux::vector<lt::download_priority_t, lt::file_index_t> prios;
-	lt::storage_params params(fs, nullptr
+	lt::renamed_files rf;
+	lt::storage_params params(fs
+		, rf
 		, save_path
 		, lt::storage_mode_sparse
 		, prios

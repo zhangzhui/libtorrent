@@ -156,6 +156,36 @@ libtorrent session plugins no longer have all callbacks called unconditionally.
 The plugin has to register which callbacks it's interested in receiving by returning a bitmask from ``feature_flags_t implemented_features()``.
 The return value is documented in the plugin class.
 
+torrent_info deprecation
+========================
+
+torrent_info has been made to only hold the immutable part of a torrent file, i.e.
+what's in the info-section. This is the content that determines the info-hash, and
+therefore the uniqueness of the torrent.
+
+Properties that don't belong in the info-dictionary have been deprecated from
+torrent_info, they are now placed in add_torrent_params instead. This includes properties like:
+
+* trackers
+* DHT nodes
+* comment
+* creation date
+* created by
+* piece layers (for v2 torrents)
+* collections and similar torrent lists (except for the ones that live in the
+  info dict)
+
+It also means constructing a torrent_info object from a whole torrent file is
+deprecated. Use load_torrent_*() instead.
+
+torrent_alert deprecation
+=========================
+
+torrent_alert::torrent_name() was deprecated. When ABI version < 4 (controlled
+by the ``deprecated-functions`` feature in the Jamfile), the ABI of
+torrent_alert is changed. The name of the torrent is no longer allocated and
+copied into every alert deriving from torrent_alert.
+
 RSS functions removed
 =====================
 

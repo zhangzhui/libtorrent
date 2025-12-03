@@ -1,5 +1,7 @@
 [project]
-requires-python = ">=3.7"
+name = "libtorrent"
+requires-python = ">=3.9"
+version = "2.0.11"
 
 [tool.cibuildwheel]
 manylinux-i686-image = "manylinux2014"
@@ -25,8 +27,7 @@ test-command = [
 [tool.cibuildwheel.macos.environment]
 BOOST_BUILD_PATH = "/tmp/boost/tools/build"
 BOOST_ROOT = "/tmp/boost"
-BOOST_VERSION = "1.81.0"
-MACOSX_DEPLOYMENT_TARGET = "10.14" # required for full C++17 support
+BOOST_VERSION = "1.83.0"
 PATH = "/tmp/boost:$PATH"
 
 [[tool.cibuildwheel.overrides]]
@@ -48,7 +49,7 @@ test-command = [
 [tool.cibuildwheel.overrides.environment] # sub-table of previous block!
 BOOST_BUILD_PATH = "/tmp/boost/tools/build"
 BOOST_ROOT = "/tmp/boost"
-BOOST_VERSION = "1.81.0"
+BOOST_VERSION = "1.83.0"
 PATH = "/usr/local/ccache/bin:/tmp/boost:$PATH"
 
 [[tool.cibuildwheel.overrides]]
@@ -69,20 +70,18 @@ test-command = [
 [tool.cibuildwheel.overrides.environment] # sub-table of previous block!
 BOOST_BUILD_PATH = "/tmp/boost/tools/build"
 BOOST_ROOT = "/tmp/boost"
-BOOST_VERSION = "1.81.0"
+BOOST_VERSION = "1.83.0"
 PATH = "/usr/lib/ccache/bin:/tmp/boost:$PATH"
 
 [[tool.cibuildwheel.overrides]]
 before-all = [
-  "bash -c './tools/cibuildwheel/setup_boost.sh $BOOST_VERSION $BOOST_ROOT'",
-  "bash -c 'choco install --no-progress --x86 openssl'" # choco only allows EITHER 32 OR 64-bit version of a package
+  "bash -c './tools/cibuildwheel/setup_boost.sh $BOOST_VERSION $BOOST_ROOT'"
 ]
 select = "*-win32"
 
 [[tool.cibuildwheel.overrides]]
 before-all = [
-  "bash -c './tools/cibuildwheel/setup_boost.sh $BOOST_VERSION $BOOST_ROOT'",
-  "bash -c 'choco install --no-progress openssl'" # choco only allows EITHER 32 OR 64-bit version of a package
+  "bash -c './tools/cibuildwheel/setup_boost.sh $BOOST_VERSION $BOOST_ROOT'"
 ]
 select = "*-win_amd64"
 
@@ -92,7 +91,7 @@ test-command = '''bash -c "cd '{project}/bindings/python' && python -m pip insta
 [tool.cibuildwheel.windows.environment]
 BOOST_BUILD_PATH = 'c:/boost/tools/build'
 BOOST_ROOT = 'c:/boost'
-BOOST_VERSION = "1.81.0"
+BOOST_VERSION = "1.83.0"
 PATH = 'c:/boost;$PATH'
 
 [tool.isort]

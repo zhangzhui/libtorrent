@@ -83,6 +83,7 @@ int settings_key(int const tag)
 		case SET_ALLOW_IDNA: return sp::allow_idna;
 		case SET_ENABLE_SET_FILE_VALID_DATA: return sp::enable_set_file_valid_data;
 		case SET_SOCKS5_UDP_SEND_LOCAL_EP: return sp::socks5_udp_send_local_ep;
+		case SET_PROXY_SEND_HOST_IN_CONNECT: return sp::proxy_send_host_in_connect;
 		case SET_TRACKER_COMPLETION_TIMEOUT: return sp::tracker_completion_timeout;
 		case SET_TRACKER_RECEIVE_TIMEOUT: return sp::tracker_receive_timeout;
 		case SET_STOP_TRACKER_TIMEOUT: return sp::stop_tracker_timeout;
@@ -222,6 +223,9 @@ int settings_key(int const tag)
 		case SET_I2P_OUTBOUND_QUANTITY: return sp::i2p_outbound_quantity;
 		case SET_I2P_INBOUND_LENGTH: return sp::i2p_inbound_length;
 		case SET_I2P_OUTBOUND_LENGTH: return sp::i2p_outbound_length;
+		case SET_ANNOUNCE_PORT: return sp::announce_port;
+		case SET_I2P_INBOUND_LENGTH_VARIANCE: return sp::i2p_inbound_length_variance;
+		case SET_I2P_OUTBOUND_LENGTH_VARIANCE: return sp::i2p_outbound_length_variance;
 		case SET_MIN_WEBSOCKET_ANNOUNCE_INTERVAL: return sp::min_websocket_announce_interval;
 		case SET_WEBTORRENT_CONNECTION_TIMEOUT: return sp::webtorrent_connection_timeout;
 		default:

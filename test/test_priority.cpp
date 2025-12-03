@@ -102,7 +102,7 @@ void test_transfer(settings_pack const& sett, bool test_deprecated = false)
 	error_code ec;
 	create_directory("tmp1_priority", ec);
 	ofstream file("tmp1_priority/temporary");
-	std::shared_ptr<torrent_info> t = ::create_torrent(&file, "temporary", 16 * 1024, 13, false);
+	add_torrent_params atp = ::create_torrent(&file, "temporary", 16 * 1024, 13, false);
 	file.close();
 
 	wait_for_listen(ses1, "ses1");
@@ -112,7 +112,7 @@ void test_transfer(settings_pack const& sett, bool test_deprecated = false)
 
 	// test using piece sizes smaller than 16kB
 	std::tie(tor1, tor2, ignore) = setup_transfer(&ses1, &ses2, nullptr
-		, true, false, true, "_priority", 8 * 1024, &t, false, nullptr);
+		, true, false, true, "_priority", 8 * 1024, &atp, false);
 
 	int const num_pieces = tor2.torrent_file()->num_pieces();
 	aux::vector<download_priority_t, piece_index_t> priorities(std::size_t(num_pieces), 1_pri);
@@ -290,7 +290,7 @@ done:
 	}
 	p.flags &= ~torrent_flags::paused;
 	p.flags &= ~torrent_flags::auto_managed;
-	p.ti = t;
+	p.ti = atp.ti;
 	p.save_path = "tmp2_priority";
 
 	tor2 = ses2.add_torrent(p, ec);
@@ -471,20 +471,18 @@ TORRENT_TEST(file_priority_multiple_calls)
 	settings_pack pack = settings();
 	lt::session ses(pack);
 
-	auto t = ::generate_torrent(true);
+	add_torrent_params addp = ::generate_torrent(true);
 
-	add_torrent_params addp;
 	addp.flags &= ~torrent_flags::paused;
 	addp.flags &= ~torrent_flags::auto_managed;
 	addp.save_path = ".";
-	addp.ti = t;
 	torrent_handle h = ses.add_torrent(addp);
 
-	for (file_index_t const i : t->files().file_range())
+	for (file_index_t const i : addp.ti->layout().file_range())
 		h.file_priority(i, lt::low_priority);
 
 	std::vector<download_priority_t> const expected(
-		std::size_t(t->files().num_files()), lt::low_priority);
+		std::size_t(addp.ti->num_files()), lt::low_priority);
 	for (int i = 0; i < 10; ++i)
 	{
 		auto const p = h.get_file_priorities();
@@ -502,14 +500,12 @@ TORRENT_TEST(export_file_while_seed)
 	error_code ec;
 	create_directory("tmp2_priority", ec);
 	ofstream file("tmp2_priority/temporary");
-	auto t = ::create_torrent(&file, "temporary", 16 * 1024, 13, false);
+	add_torrent_params addp = ::create_torrent(&file, "temporary", 16 * 1024, 13, false);
 	file.close();
 
-	add_torrent_params addp;
 	addp.flags &= ~torrent_flags::paused;
 	addp.flags &= ~torrent_flags::auto_managed;
 	addp.save_path = ".";
-	addp.ti = t;
 	torrent_handle h = ses.add_torrent(addp);
 
 	// write to the partfile
@@ -534,7 +530,7 @@ TORRENT_TEST(export_file_while_seed)
 		&& st.state != torrent_status::checking_files);
 	TEST_CHECK(st.num_pieces == 0);
 
-	for (piece_index_t i : t->piece_range())
+	for (piece_index_t i : addp.ti->piece_range())
 		h.add_piece(i, piece.data());
 
 	TEST_CHECK(!exists("temporary"));
@@ -564,13 +560,12 @@ TORRENT_TEST(test_piece_priority_after_resume)
 {
 	auto const new_prio = lt::low_priority;
 
-	add_torrent_params p;
-	auto ti = generate_torrent();
+	add_torrent_params p = generate_torrent();
+	auto ti = p.ti;
 	{
 		auto const prio = top_priority;
 
 		p.save_path = ".";
-		p.ti = ti;
 		p.file_priorities.resize(1, prio);
 
 		lt::session ses(settings());
@@ -619,15 +614,13 @@ lt::download_priority_t rand_prio(Engine& rng)
 
 TORRENT_TEST(file_priority_stress_test)
 {
-	add_torrent_params atp;
-	auto ti = generate_torrent();
-	int const num_files = ti->num_files();
+	add_torrent_params atp = generate_torrent();
+	int const num_files = atp.ti->num_files();
 
 	lt::aux::vector<lt::download_priority_t, lt::file_index_t>
 		local_prios(static_cast<std::size_t>(num_files), lt::default_priority);
 
 	atp.save_path = ".";
-	atp.ti = ti;
 	atp.file_priorities = local_prios;
 	atp.flags &= ~torrent_flags::need_save_resume;
 
@@ -688,7 +681,7 @@ TORRENT_TEST(file_priority_stress_test)
 	TEST_CHECK(st.need_save_resume_data & torrent_handle::if_config_changed);
 
 	auto const pp = h.get_piece_priorities();
-	auto const& fs = ti->files();
+	auto const& fs = atp.ti->layout();
 	lt::piece_index_t i(0);
 
 	std::cout << "piece prios:\n";

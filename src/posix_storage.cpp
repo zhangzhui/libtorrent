@@ -17,6 +17,8 @@ see LICENSE file.
 #include "libtorrent/aux_/open_mode.hpp"
 #include "libtorrent/aux_/file_pointer.hpp"
 #include "libtorrent/torrent_status.hpp"
+#include "libtorrent/aux_/storage_utils.hpp" // for read_zeroes, move_storage
+#include "libtorrent/aux_/readwrite.hpp"
 
 using namespace libtorrent::flags; // for flag operators
 
@@ -25,7 +27,7 @@ using namespace libtorrent::flags; // for flag operators
 // on this platform. It's supposed to make file
 // related functions support 64-bit offsets.
 #if TORRENT_HAS_FTELLO
-static_assert(sizeof(ftello(nullptr)) >= 8, "64 bit file operations are required");
+static_assert(sizeof(ftello(std::declval<FILE*>())) >= 8, "64 bit file operations are required");
 #endif
 static_assert(sizeof(off_t) >= 8, "64 bit file operations are required");
 #endif
@@ -35,14 +37,16 @@ namespace aux {
 
 	posix_storage::posix_storage(storage_params const& p)
 		: m_files(p.files)
+		, m_renamed_files(std::move(p.renamed_files))
 		, m_save_path(p.path)
 		, m_file_priority(p.priorities)
 		, m_part_file_name("." + to_hex(p.info_hash) + ".parts")
-	{
-		if (p.mapped_files) m_mapped_files = std::make_unique<file_storage>(*p.mapped_files);
-	}
+	{}
 
-	file_storage const& posix_storage::files() const { return m_mapped_files ? *m_mapped_files : m_files; }
+	filenames posix_storage::names() const
+	{
+		return {m_files, m_renamed_files};
+	}
 
 	posix_storage::~posix_storage()
 	{
@@ -59,7 +63,8 @@ namespace aux {
 			, files().num_pieces(), files().piece_length());
 	}
 
-	void posix_storage::set_file_priority(aux::vector<download_priority_t, file_index_t>& prio
+	void posix_storage::set_file_priority(settings_interface const&
+		, aux::vector<download_priority_t, file_index_t>& prio
 		, storage_error& ec)
 	{
 		// extend our file priorities in case it's truncated
@@ -67,7 +72,7 @@ namespace aux {
 		if (prio.size() > m_file_priority.size())
 			m_file_priority.resize(prio.size(), default_priority);
 
-		file_storage const& fs = files();
+		filenames const fs = names();
 		for (file_index_t i(0); i < prio.end_index(); ++i)
 		{
 			// pad files always have priority 0.
@@ -197,7 +202,7 @@ namespace aux {
 	}
 
 	int posix_storage::write(settings_interface const&
-		, span<char> buffer
+		, span<char const> buffer
 		, piece_index_t const piece, int const offset
 		, storage_error& error)
 	{
@@ -207,7 +212,7 @@ namespace aux {
 		return readwrite(files(), buffer, piece, offset, error
 			, [this](file_index_t const file_index
 				, std::int64_t const file_offset
-				, span<char> buf, storage_error& ec)
+				, span<char const> buf, storage_error& ec)
 		{
 			if (files().pad_file_at(file_index))
 			{
@@ -262,14 +267,14 @@ namespace aux {
 	bool posix_storage::has_any_file(storage_error& error)
 	{
 		m_stat_cache.reserve(files().num_files());
-		return aux::has_any_file(files(), m_save_path, m_stat_cache, error);
+		return aux::has_any_file(names(), m_save_path, m_stat_cache, error);
 	}
 
 	bool posix_storage::verify_resume_data(add_torrent_params const& rd
 		, vector<std::string, file_index_t> const& links
 		, storage_error& ec)
 	{
-		return aux::verify_resume_data(rd, links, files()
+		return aux::verify_resume_data(rd, links, names()
 			, m_file_priority, m_stat_cache, m_save_path, ec);
 	}
 
@@ -289,7 +294,7 @@ namespace aux {
 		// release the underlying part file. Otherwise we may not be able to
 		// delete it
 		if (m_part_file) m_part_file.reset();
-		aux::delete_files(files(), m_save_path, m_part_file_name, options, error);
+		aux::delete_files(names(), m_save_path, m_part_file_name, options, error);
 	}
 
 	std::pair<status_t, std::string> posix_storage::move_storage(std::string const& sp
@@ -301,7 +306,7 @@ namespace aux {
 			if (!m_part_file) return;
 			m_part_file->move_partfile(new_save_path, e);
 		};
-		std::tie(ret, m_save_path) = aux::move_storage(files(), m_save_path, sp
+		std::tie(ret, m_save_path) = aux::move_storage(names(), m_save_path, sp
 			, std::move(move_partfile), flags, ec);
 
 		// clear the stat cache in case the new location has new files
@@ -313,7 +318,7 @@ namespace aux {
 	void posix_storage::rename_file(file_index_t const index, std::string const& new_filename, storage_error& ec)
 	{
 		if (index < file_index_t(0) || index >= files().end_file()) return;
-		std::string const old_name = files().file_path(index, m_save_path);
+		std::string const old_name = m_renamed_files.file_path(m_files, index, m_save_path);
 
 		if (exists(old_name, ec.ec))
 		{
@@ -321,6 +326,16 @@ namespace aux {
 			if (is_complete(new_filename)) new_path = new_filename;
 			else new_path = combine_path(m_save_path, new_filename);
 			std::string new_dir = parent_path(new_path);
+
+			error_code best_effort;
+			if (exists(new_path, best_effort))
+			{
+				// We don't want to overwrite an existing file
+				ec.ec = error_code(boost::system::errc::file_exists, generic_category());
+				ec.file(index);
+				ec.operation = operation_t::file_rename;
+				return;
+			}
 
 			// create any missing directories that the new filename
 			// lands in
@@ -352,18 +367,14 @@ namespace aux {
 			return;
 		}
 
-		if (!m_mapped_files)
-		{
-			m_mapped_files = std::make_unique<file_storage>(files());
-		}
-		m_mapped_files->rename_file(index, new_filename);
+		m_renamed_files.rename_file(files(), index, new_filename);
 	}
 
 	status_t posix_storage::initialize(settings_interface const&, storage_error& ec)
 	{
 		m_stat_cache.reserve(files().num_files());
 
-		file_storage const& fs = files();
+		filenames const fs = names();
 		// if some files have priority 0, we need to check if they exist on the
 		// filesystem, in which case we won't use a partfile for them.
 		// this is to be backwards compatible with previous versions of
@@ -404,7 +415,7 @@ namespace aux {
 	file_pointer posix_storage::open_file(file_index_t idx, open_mode_t const mode
 		, std::int64_t const offset, storage_error& ec)
 	{
-		std::string const fn = files().file_path(idx, m_save_path);
+		std::string const fn = m_renamed_files.file_path(m_files, idx, m_save_path);
 
 		auto const* mode_str = (mode & open_mode::write)
 #ifdef TORRENT_WINDOWS

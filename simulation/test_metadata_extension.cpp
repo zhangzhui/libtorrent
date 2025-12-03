@@ -77,7 +77,11 @@ void run_metadata_test(int flags)
 		default_add_torrent.flags |= torrent_flags::upload_mode;
 	}
 
+#if TORRENT_ABI_VERSION < 4
 	std::shared_ptr<lt::torrent_info> ti;
+#else
+	std::shared_ptr<lt::torrent_info const> ti;
+#endif
 
 	// TODO: we use real_disk here because the test disk io doesn't support
 	// multiple torrents, and readd will add back the same torrent before the
@@ -93,11 +97,11 @@ void run_metadata_test(int flags)
 		, [&ti](lt::add_torrent_params& params) {
 			// we want to add the torrent via magnet link
 			error_code ec;
+			add_torrent_params const p = parse_magnet_uri(
+				lt::make_magnet_uri(params), ec);
+			TEST_CHECK(!ec);
 			ti = params.ti;
 			params.ti.reset();
-			add_torrent_params const p = parse_magnet_uri(
-				lt::make_magnet_uri(*ti), ec);
-			TEST_CHECK(!ec);
 			params.name = p.name;
 			params.trackers = p.trackers;
 			params.tracker_tiers = p.tracker_tiers;

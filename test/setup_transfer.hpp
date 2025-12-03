@@ -21,8 +21,9 @@ see LICENSE file.
 #include "libtorrent/units.hpp"
 #include "libtorrent/create_torrent.hpp"
 #include "libtorrent/fwd.hpp"
+#include "libtorrent/add_torrent_params.hpp"
 
-EXPORT std::shared_ptr<lt::torrent_info> generate_torrent(bool with_files = false, bool with_hashes = false);
+EXPORT lt::add_torrent_params generate_torrent(bool with_files = false, bool with_hashes = false);
 
 EXPORT int load_file(std::string const& filename, std::vector<char>& v
 	, lt::error_code& ec, int limit = 8000000);
@@ -67,10 +68,10 @@ EXPORT void wait_for_seeding(lt::session& ses, char const* name);
 EXPORT std::vector<char> generate_piece(lt::piece_index_t idx, int piece_size = 0x4000);
 EXPORT lt::file_storage make_file_storage(lt::span<const int> file_sizes
 	, int const piece_size, std::string base_name = "test_dir-");
-EXPORT std::shared_ptr<lt::torrent_info> make_torrent(std::vector<lt::create_file_entry> files, int piece_size, lt::create_flags_t flags = {});
+EXPORT lt::add_torrent_params make_torrent(std::vector<lt::create_file_entry> files, int piece_size, lt::create_flags_t flags = {});
 EXPORT std::vector<lt::create_file_entry> create_random_files(std::string const& path, lt::span<const int> file_sizes);
 
-EXPORT std::shared_ptr<lt::torrent_info> create_torrent(std::ostream* file = nullptr
+EXPORT lt::add_torrent_params create_torrent(std::ostream* file = nullptr
 	, char const* name = "temporary", int piece_size = 16 * 1024, int num_pieces = 13
 	, bool add_tracker = true, lt::create_flags_t flags = {}, std::string ssl_certificate = "");
 
@@ -80,9 +81,8 @@ EXPORT std::tuple<lt::torrent_handle
 setup_transfer(lt::session* ses1, lt::session* ses2
 	, lt::session* ses3, bool clear_files, bool use_metadata_transfer = true
 	, bool connect = true, std::string suffix = "", int piece_size = 16 * 1024
-	, std::shared_ptr<lt::torrent_info>* torrent = nullptr
+	, lt::add_torrent_params const* atp = nullptr
 	, bool super_seeding = false
-	, lt::add_torrent_params const* p = nullptr
 	, bool stop_lsd = true, bool use_ssl_ports = false
 	, std::shared_ptr<lt::torrent_info>* torrent2 = nullptr
 	, lt::create_flags_t flags = {});
@@ -94,7 +94,7 @@ EXPORT void stop_web_server();
 EXPORT int start_websocket_server(bool ssl = false, int min_interval = 30);
 EXPORT void stop_websocket_server();
 
-EXPORT int start_proxy(int type);
+EXPORT int start_proxy(int type, bool require_host = false);
 EXPORT void stop_proxy(int port);
 EXPORT void stop_all_proxies();
 

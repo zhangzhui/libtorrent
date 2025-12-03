@@ -61,7 +61,7 @@ namespace {
 			auto storage = std::make_unique<posix_storage>(params);
 			if (idx == m_torrents.end_index()) m_torrents.emplace_back(std::move(storage));
 			else m_torrents[idx] = std::move(storage);
-			return storage_holder(idx, *this);
+			return {idx, *this};
 		}
 
 		void remove_torrent(storage_index_t const idx) override
@@ -335,7 +335,7 @@ namespace {
 		{
 			posix_storage* st = m_torrents[storage].get();
 			storage_error error;
-			st->set_file_priority(prio, error);
+			st->set_file_priority(m_settings, prio, error);
 			post(m_ios, [p = std::move(prio), h = std::move(handler), error] () mutable
 				{ h(error, std::move(p)); });
 		}

@@ -16,7 +16,6 @@ see LICENSE file.
 #include "libtorrent/aux_/stat_cache.hpp"
 #include "libtorrent/file_storage.hpp"
 #include "libtorrent/storage_defs.hpp"
-#include "libtorrent/aux_/storage_utils.hpp" // for iovec_t
 #include "libtorrent/hex.hpp" // to_hex
 #include "libtorrent/aux_/open_mode.hpp" // for aux::open_mode_t
 #include "libtorrent/aux_/file_pointer.hpp"
@@ -32,7 +31,8 @@ namespace aux {
 	struct TORRENT_EXTRA_EXPORT posix_storage
 	{
 		explicit posix_storage(storage_params const& p);
-		file_storage const& files() const;
+		file_storage const& files() const { return m_files; }
+		filenames names() const;
 		~posix_storage();
 
 		int read(settings_interface const& sett
@@ -41,12 +41,13 @@ namespace aux {
 			, storage_error& error);
 
 		int write(settings_interface const& sett
-			, span<char> buffer
+			, span<char const> buffer
 			, piece_index_t const piece, int const offset
 			, storage_error& error);
 
 		bool has_any_file(storage_error& error);
-		void set_file_priority(aux::vector<download_priority_t, file_index_t>& prio
+		void set_file_priority(settings_interface const&
+			, aux::vector<download_priority_t, file_index_t>& prio
 			, storage_error& ec);
 		bool verify_resume_data(add_torrent_params const& rd
 			, aux::vector<std::string, file_index_t> const& links
@@ -73,7 +74,7 @@ namespace aux {
 		void use_partfile(file_index_t index, bool b);
 
 		file_storage const& m_files;
-		std::unique_ptr<file_storage> m_mapped_files;
+		renamed_files m_renamed_files;
 		std::string m_save_path;
 		stat_cache m_stat_cache;
 

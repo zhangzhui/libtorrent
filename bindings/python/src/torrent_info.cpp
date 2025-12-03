@@ -40,6 +40,7 @@ namespace
 #if TORRENT_ABI_VERSION < 4
     std::vector<announce_entry>::const_iterator begin_trackers(torrent_info& i)
     {
+        python_deprecated("trackers() is deprecated");
         return i.trackers().begin();
     }
 
@@ -47,15 +48,16 @@ namespace
     {
         return i.trackers().end();
     }
-#endif
 
     void add_node(torrent_info& ti, char const* hostname, int port)
     {
+        python_deprecated("add_node() is deprecated");
         ti.add_node(std::make_pair(hostname, port));
     }
 
     list nodes(torrent_info const& ti)
     {
+        python_deprecated("nodes() is deprecated");
         list result;
 
         for (auto const& i : ti.nodes())
@@ -64,9 +66,9 @@ namespace
         return result;
     }
 
-#if TORRENT_ABI_VERSION < 4
     list get_web_seeds(torrent_info const& ti)
     {
+        python_deprecated("web_seeds() is deprecated");
         std::vector<web_seed_entry> const& ws = ti.web_seeds();
         list ret;
         for (std::vector<web_seed_entry>::const_iterator i = ws.begin()
@@ -83,6 +85,7 @@ namespace
 
     void set_web_seeds(torrent_info& ti, list ws)
     {
+        python_deprecated("set_web_seeds is deprecated");
         std::vector<web_seed_entry> web_seeds;
         int const len = static_cast<int>(boost::python::len(ws));
         for (int i = 0; i < len; i++)
@@ -99,6 +102,7 @@ namespace
 #if TORRENT_ABI_VERSION <= 2
     list get_merkle_tree(torrent_info const& ti)
     {
+        python_deprecated("get_merkle_tree is deprecated");
         std::vector<sha1_hash> const& mt = ti.merkle_tree();
         list ret;
         for (std::vector<sha1_hash>::const_iterator i = mt.begin()
@@ -111,6 +115,7 @@ namespace
 
     void set_merkle_tree(torrent_info& ti, list hashes)
     {
+        python_deprecated("set_merkle_tree is deprecated");
         std::vector<sha1_hash> h;
         for (int i = 0, e = int(len(hashes)); i < e; ++i)
             h.push_back(sha1_hash(bytes(extract<bytes>(hashes[i])).arr.data()));
@@ -318,6 +323,7 @@ load_torrent_limits dict_to_limits(dict limits)
     return ret;
 }
 
+#if TORRENT_ABI_VERSION < 4
 std::shared_ptr<torrent_info> buffer_constructor0(bytes b)
 {
    return std::make_shared<torrent_info>(b.arr, from_span);
@@ -339,6 +345,7 @@ std::shared_ptr<torrent_info> file_constructor1(lt::string_view filename, dict l
 {
    return std::make_shared<torrent_info>(std::string(filename), dict_to_limits(limits));
 }
+#endif
 
 std::shared_ptr<torrent_info> sha1_constructor0(sha1_hash const& ih)
 {
@@ -350,6 +357,7 @@ std::shared_ptr<torrent_info> sha256_constructor0(sha256_hash const& ih)
     return std::make_shared<torrent_info>(info_hash_t(ih));
 }
 
+#if TORRENT_ABI_VERSION < 4
 std::shared_ptr<torrent_info> bencoded_constructor0(dict d)
 {
     entry ent = extract<entry>(d);
@@ -366,6 +374,7 @@ std::shared_ptr<torrent_info> bencoded_constructor1(dict d, dict limits)
     return std::make_shared<torrent_info>(buf, dict_to_limits(limits)
         , lt::from_span);
 }
+#endif
 
 #if TORRENT_ABI_VERSION == 1
 std::shared_ptr<file_entry> file_entry_constructor()
@@ -380,7 +389,9 @@ void bind_torrent_info()
 {
     return_value_policy<copy_const_reference> copy;
 
+#if TORRENT_ABI_VERSION < 4
     void (torrent_info::*rename_file0)(file_index_t, std::string const&) = &torrent_info::rename_file;
+#endif
 
     class_<file_slice>("file_slice")
         .add_property("file_index", make_getter((&file_slice::file_index), by_value()))
@@ -406,12 +417,14 @@ void bind_torrent_info()
 
     class_<torrent_info, std::shared_ptr<torrent_info>>("torrent_info", no_init)
         .def(init<info_hash_t const&>(arg("info_hash")))
+#if TORRENT_ABI_VERSION < 4
         .def("__init__", make_constructor(&bencoded_constructor0))
         .def("__init__", make_constructor(&bencoded_constructor1))
         .def("__init__", make_constructor(&buffer_constructor0))
         .def("__init__", make_constructor(&buffer_constructor1))
         .def("__init__", make_constructor(&file_constructor0))
         .def("__init__", make_constructor(&file_constructor1))
+#endif
         .def(init<torrent_info const&>((arg("ti"))))
 
         .def("__init__", make_constructor(&sha1_constructor0))
@@ -432,8 +445,10 @@ void bind_torrent_info()
 #endif
 
         .def("name", &torrent_info::name, copy)
+#if TORRENT_ABI_VERSION < 4
         .def("comment", &torrent_info::comment, copy)
         .def("creator", &torrent_info::creator, copy)
+#endif
         .def("total_size", &torrent_info::total_size)
         .def("size_on_disk", &torrent_info::size_on_disk)
         .def("piece_length", &torrent_info::piece_length)
@@ -451,10 +466,13 @@ void bind_torrent_info()
         .def("collections", &torrent_info::collections)
         .def("ssl_cert", &torrent_info::ssl_cert)
         .def("num_files", &torrent_info::num_files)
-        .def("rename_file", rename_file0)
-        .def("remap_files", &torrent_info::remap_files)
-        .def("files", &torrent_info::files, return_internal_reference<>())
-        .def("orig_files", &torrent_info::orig_files, return_internal_reference<>())
+#if TORRENT_ABI_VERSION < 4
+        .def("rename_file", depr(rename_file0))
+        .def("remap_files", depr(&torrent_info::remap_files))
+        .def("files", depr(&torrent_info::files), return_internal_reference<>())
+        .def("orig_files", depr(&torrent_info::orig_files), return_internal_reference<>())
+#endif
+
 #if TORRENT_ABI_VERSION == 1
         .def("file_at", depr(&torrent_info::file_at))
 #endif // TORRENT_ABI_VERSION
@@ -467,12 +485,10 @@ void bind_torrent_info()
 #endif
 #if TORRENT_ABI_VERSION < 4
         .def("trackers", range(begin_trackers, end_trackers))
-#endif
-
         .def("creation_date", &torrent_info::creation_date)
-
         .def("add_node", &add_node)
         .def("nodes", &nodes)
+#endif
 #if TORRENT_ABI_VERSION <= 2
         .def("metadata", depr(&metadata))
         .def("metadata_size", depr(&torrent_info::metadata_size))

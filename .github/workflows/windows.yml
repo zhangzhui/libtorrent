@@ -33,21 +33,15 @@ jobs:
 
       steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
            submodules: true
-
-      - name: install openssl (64 bit)
-        uses: nick-fields/retry@v2
-        with:
-          timeout_minutes: 30
-          retry_wait_seconds: 4
-          max_attempts: 3
-          command: choco install openssl --limitoutput --no-progress
+           fetch-depth: 1
+           filter: tree:0
 
       - name: install boost
         run: |
-          git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.78.0 https://github.com/boostorg/boost.git
+          git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.88.0 https://github.com/boostorg/boost.git
           cd boost
           bootstrap.bat
 
@@ -62,7 +56,7 @@ jobs:
           set PATH=%BOOST_ROOT%;%PATH%
           set PYTHON_INTERPRETER=python
           cd test
-          b2 -l400 warnings=all warnings-as-errors=on ${{ matrix.config }} deterministic-tests
+          b2 -l400 msvc-version-macro=on warnings=all warnings-as-errors=on ${{ matrix.config }} deterministic-tests
 
 
       - name: tests (flaky)
@@ -75,24 +69,26 @@ jobs:
           :retry
           if %c%==0 exit /B 1
           set /a c = %c% -1
-          b2 -l400 warnings=all warnings-as-errors=on ${{ matrix.config }}
+          b2 -l400 msvc-version-macro=on warnings=all warnings-as-errors=on ${{ matrix.config }}
           if %errorlevel%==0 exit /B 0
           if %c% gtr 0 goto retry
           exit /B 1
 
    simulations:
       name: Simulations
-      runs-on: windows-2019
+      runs-on: windows-2022
 
       steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
            submodules: true
+           fetch-depth: 1
+           filter: tree:0
 
       - name: install boost
         run: |
-          git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.78.0 https://github.com/boostorg/boost.git
+          git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.88.0 https://github.com/boostorg/boost.git
           cd boost
           bootstrap.bat
 
@@ -117,20 +113,20 @@ jobs:
           echo %BOOST_ROOT%
           echo %PATH%
           cd simulation
-          b2 --hash release address-model=64 link=static debug-iterators=off invariant-checks=on define=BOOST_ASIO_DISABLE_IOCP asserts=on testing.execute=off
+          b2 --hash release msvc-version-macro=on address-model=64 link=static debug-iterators=off invariant-checks=on define=BOOST_ASIO_DISABLE_IOCP asserts=on testing.execute=off
 
       - name: run sims
-        uses: nick-fields/retry@v2
+        uses: nick-fields/retry@v3
         with:
           max_attempts: 3
           timeout_minutes: 120
           command: |
             cd simulation
-            b2 --hash -l800 release address-model=64 link=static debug-iterators=off invariant-checks=on define=BOOST_ASIO_DISABLE_IOCP asserts=on
+            b2 --hash -l800 release msvc-version-macro=on address-model=64 link=static debug-iterators=off invariant-checks=on define=BOOST_ASIO_DISABLE_IOCP asserts=on
 
    build:
       name: Build
-      runs-on: windows-2019
+      runs-on: windows-2022
       continue-on-error: true
 
       strategy:
@@ -144,23 +140,17 @@ jobs:
 
       steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
            submodules: true
+           fetch-depth: 1
+           filter: tree:0
 
       - name: install boost
         run: |
-          git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.78.0 https://github.com/boostorg/boost.git
+          git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.88.0 https://github.com/boostorg/boost.git
           cd boost
           bootstrap.bat
-
-      - name: install openssl (64 bit)
-        uses: nick-fields/retry@v2
-        with:
-          timeout_minutes: 30
-          retry_wait_seconds: 4
-          max_attempts: 3
-          command: choco install openssl --limitoutput --no-progress
 
       - name: boost headers
         run: |
@@ -171,7 +161,7 @@ jobs:
         run: |
           set BOOST_ROOT=%CD%\boost
           set PATH=%BOOST_ROOT%;%PATH%
-          b2 ${{ matrix.config }} address-model=64 warnings=all warnings-as-errors=on
+          b2 ${{ matrix.config }} msvc-version-macro=on address-model=64 warnings=all warnings-as-errors=on
 
       - name: build examples
         if: ${{ ! contains(matrix.config, 'windows-api=store') }}
@@ -179,7 +169,7 @@ jobs:
           set BOOST_ROOT=%CD%\boost
           set PATH=%BOOST_ROOT%;%PATH%
           cd examples
-          b2 ${{ matrix.config }} address-model=64 warnings=all warnings-as-errors=on
+          b2 ${{ matrix.config }} msvc-version-macro=on address-model=64 warnings=all warnings-as-errors=on
 
       - name: build tools
         if: ${{ ! contains(matrix.config, 'windows-api=store') }}
@@ -187,7 +177,7 @@ jobs:
           set BOOST_ROOT=%CD%\boost
           set PATH=%BOOST_ROOT%;%PATH%
           cd tools
-          b2 ${{ matrix.config }} address-model=64 warnings=all warnings-as-errors=on
+          b2 ${{ matrix.config }} msvc-version-macro=on address-model=64 warnings=all warnings-as-errors=on
 
    mingw:
       name: MingW
@@ -201,21 +191,15 @@ jobs:
 
       steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
            submodules: true
-
-      - name: install openssl (64 bit)
-        uses: nick-fields/retry@v2
-        with:
-          timeout_minutes: 30
-          retry_wait_seconds: 4
-          max_attempts: 3
-          command: choco install openssl --limitoutput --no-progress
+           fetch-depth: 1
+           filter: tree:0
 
       - name: install boost
         run: |
-          git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.78.0 https://github.com/boostorg/boost.git
+          git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.88.0 https://github.com/boostorg/boost.git
           cd boost
           bootstrap.bat
 
@@ -225,10 +209,10 @@ jobs:
           .\b2 headers
 
       - name: Set up MinGW
-        uses: egor-tensin/setup-mingw@v2
+        uses: msys2/setup-msys2@v2
         with:
-          static: 0
-          platform: x64
+          update: true
+          install: mingw-w64-x86_64-openssl
 
       - name: tests (deterministic)
         run: |

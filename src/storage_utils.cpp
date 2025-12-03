@@ -33,92 +33,7 @@ see LICENSE file.
 
 namespace libtorrent { namespace aux {
 
-	// much of what needs to be done when reading and writing is buffer
-	// management and piece to file mapping. Most of that is the same for reading
-	// and writing. This function is a template, and the fileop decides what to
-	// do with the file and the buffers.
-	int readwrite(file_storage const& files, span<char> buf
-		, piece_index_t const piece, const int offset
-		, storage_error& ec, fileop op)
-	{
-		TORRENT_ASSERT(piece >= piece_index_t(0));
-		TORRENT_ASSERT(piece < files.end_piece());
-		TORRENT_ASSERT(offset >= 0);
-		TORRENT_ASSERT(buf.size() > 0);
-
-		TORRENT_ASSERT(buf.size() > 0);
-		TORRENT_ASSERT(static_cast<int>(piece) * static_cast<std::int64_t>(files.piece_length())
-			+ offset + buf.size() <= files.total_size());
-
-		// find the file iterator and file offset
-		std::int64_t const torrent_offset = static_cast<int>(piece) * std::int64_t(files.piece_length()) + offset;
-		file_index_t file_index = files.file_index_at_offset(torrent_offset);
-		TORRENT_ASSERT(torrent_offset >= files.file_offset(file_index));
-		TORRENT_ASSERT(torrent_offset < files.file_offset(file_index) + files.file_size(file_index));
-		std::int64_t file_offset = torrent_offset - files.file_offset(file_index);
-
-		int ret = 0;
-
-		while (buf.size() > 0)
-		{
-			// the number of bytes left to read in the current file (specified by
-			// file_index). This is the minimum of (file_size - file_offset) and
-			// buf.size().
-			int file_bytes_left = int(buf.size());
-			if (file_offset + file_bytes_left > files.file_size(file_index))
-				file_bytes_left = std::max(static_cast<int>(files.file_size(file_index) - file_offset), 0);
-
-			// there are no bytes left in this file, move to the next one
-			// this loop skips over empty files
-			if (file_bytes_left == 0)
-			{
-				do
-				{
-					++file_index;
-					file_offset = 0;
-					TORRENT_ASSERT(file_index < files.end_file());
-
-					// this should not happen. buf.size() should be clamped by the total
-					// size of the torrent, so we should never run off the end of it
-					if (file_index >= files.end_file()) return ret;
-
-					// skip empty files
-				}
-				while (files.file_size(file_index) == 0);
-
-				file_bytes_left = int(buf.size());
-				if (file_offset + file_bytes_left > files.file_size(file_index))
-					file_bytes_left = std::max(static_cast<int>(files.file_size(file_index) - file_offset), 0);
-				TORRENT_ASSERT(file_bytes_left > 0);
-			}
-
-			int const bytes_transferred = op(file_index, file_offset
-				, buf.first(file_bytes_left), ec);
-			TORRENT_ASSERT(bytes_transferred <= file_bytes_left);
-			if (ec)
-			{
-				ec.file(file_index);
-				return ret;
-			}
-
-			buf = buf.subspan(bytes_transferred);
-			file_offset += bytes_transferred;
-			ret += bytes_transferred;
-
-			// if the file operation returned 0, we've hit end-of-file. We're done
-			if (bytes_transferred == 0 && file_bytes_left > 0 )
-			{
-				// fill in this information in case the caller wants to treat
-				// a short-read as an error
-				ec.operation = operation_t::file_read;
-				ec.ec = boost::asio::error::eof;
-				ec.file(file_index);
-			}
-		}
-		return ret;
-	}
-
-	std::pair<status_t, std::string> move_storage(file_storage const& f
+	std::pair<status_t, std::string> move_storage(filenames const& f
 		, std::string save_path
 		, std::string const& destination_save_path
 		, std::function<void(std::string const&, error_code&)> const& move_partfile
@@ -324,7 +239,7 @@ namespace libtorrent { namespace aux {
 
 	}
 
-	void delete_files(file_storage const& fs, std::string const& save_path
+	void delete_files(filenames const& fs, std::string const& save_path
 		, std::string const& part_file_name, remove_flags_t const options, storage_error& ec)
 	{
 		if (options & session::delete_files)
@@ -387,7 +302,7 @@ namespace libtorrent { namespace aux {
 namespace {
 
 std::int64_t get_filesize(stat_cache& stat, file_index_t const file_index
-	, file_storage const& fs, std::string const& save_path, storage_error& ec)
+	, filenames const& fs, std::string const& save_path, storage_error& ec)
 {
 	error_code error;
 	std::int64_t const size = stat.get_filesize(file_index, fs, save_path, error);
@@ -412,7 +327,7 @@ std::int64_t get_filesize(stat_cache& stat, file_index_t const file_index
 
 	bool verify_resume_data(add_torrent_params const& rd
 		, aux::vector<std::string, file_index_t> const& links
-		, file_storage const& fs
+		, filenames const& fs
 		, aux::vector<download_priority_t, file_index_t> const& file_priority
 		, stat_cache& stat
 		, std::string const& save_path
@@ -554,7 +469,7 @@ std::int64_t get_filesize(stat_cache& stat, file_index_t const file_index
 	}
 
 	bool has_any_file(
-		file_storage const& fs
+		filenames const& fs
 		, std::string const& save_path
 		, stat_cache& cache
 		, storage_error& ec)
@@ -597,7 +512,7 @@ std::int64_t get_filesize(stat_cache& stat, file_index_t const file_index
 		return int(size);
 	}
 
-	void initialize_storage(file_storage const& fs
+	void initialize_storage(filenames const& fs
 		, std::string const& save_path
 		, stat_cache& sc
 		, aux::vector<download_priority_t, file_index_t> const& file_priority

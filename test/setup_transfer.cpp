@@ -34,6 +34,7 @@ see LICENSE file.
 #include "libtorrent/aux_/merkle.hpp"
 #include "libtorrent/disk_interface.hpp" // for default_block_size
 #include "libtorrent/aux_/ip_helpers.hpp"
+#include "libtorrent/load_torrent.hpp"
 
 #include "test.hpp"
 #include "test_utils.hpp"
@@ -56,7 +57,7 @@ using namespace lt;
 #define SEPARATOR "/"
 #endif
 
-std::shared_ptr<torrent_info> generate_torrent(bool const with_files, bool const with_hashes)
+lt::add_torrent_params generate_torrent(bool const with_files, bool const with_hashes)
 {
 	if (with_files)
 	{
@@ -105,8 +106,7 @@ std::shared_ptr<torrent_info> generate_torrent(bool const with_files, bool const
 		}
 	}
 
-	std::vector<char> const buf = bencode(t.generate());
-	return std::make_shared<torrent_info>(buf, from_span);
+	return load_torrent_buffer(bencode(t.generate()));
 }
 
 namespace {
@@ -367,6 +367,23 @@ int load_file(std::string const& filename, std::vector<char>& v
 	return 0;
 }
 
+namespace {
+
+std::string print_endpoint(peer_endpoint_t const& ep)
+{
+	if (auto i = std::get_if<peer_alert::ip_endpoint>(&ep))
+	{
+		return print_endpoint(*i);
+	}
+	else if (auto i2p = std::get_if<peer_alert::i2p_endpoint>(&ep))
+	{
+		return lt::aux::to_hex(*i2p);
+	}
+	TORRENT_ASSERT_FAIL();
+	return {};
+}
+}
+
 bool print_alerts(lt::session& ses, char const* name
 	, bool allow_no_torrents, bool allow_failed_fastresume
 	, std::function<bool(lt::alert const*)> predicate, bool no_output)
@@ -380,7 +397,7 @@ bool print_alerts(lt::session& ses, char const* name
 		{
 			std::printf("%s: %s: [%s] (%s): %s\n", time_to_string(a->timestamp()).c_str()
 				, name, a->what()
-				, print_endpoint(p->endpoint).c_str(), p->message().c_str());
+				, print_endpoint(p->ep).c_str(), p->message().c_str());
 		}
 		else if (a->type() == invalid_request_alert::alert_type)
 		{
@@ -659,7 +676,7 @@ void wait_for_port(int const port)
 		}
 		s.connect(tcp::endpoint(make_address("127.0.0.1")
 			, std::uint16_t(port)), ec);
-		if (ec == boost::system::errc::connection_refused)
+		if (ec)
 		{
 			if (i == 100)
 			{
@@ -720,7 +737,7 @@ int find_available_port()
 } // anonymous namespace
 
 // returns a port on success and -1 on failure
-int start_proxy(int proxy_type)
+int start_proxy(int proxy_type, bool const require_host)
 {
 	using namespace lt;
 
@@ -735,6 +752,7 @@ int start_proxy(int proxy_type)
 	char const* type = "";
 	char const* auth = "";
 	char const* cmd = "";
+	char const* host = require_host ? " --require-host-header" : "";
 
 	switch (proxy_type)
 	{
@@ -766,7 +784,7 @@ int start_proxy(int proxy_type)
 	for (auto const& python_exe : python_exes)
 	{
 		char buf[1024];
-		std::snprintf(buf, sizeof(buf), "%s %s --port %d%s", python_exe.c_str(), cmd, port, auth);
+		std::snprintf(buf, sizeof(buf), "%s %s --port %d%s%s", python_exe.c_str(), cmd, port, auth, host);
 
 		std::printf("%s starting proxy on port %d (%s %s)...\n", time_now_string().c_str(), port, type, auth);
 		std::printf("%s\n", buf);
@@ -821,7 +839,7 @@ lt::file_storage make_file_storage(span<const int> const file_sizes
 	return fs;
 }
 
-std::shared_ptr<lt::torrent_info> make_torrent(std::vector<lt::create_file_entry> files
+add_torrent_params make_torrent(std::vector<lt::create_file_entry> files
 	, int piece_size,  lt::create_flags_t const flags)
 {
 	lt::create_torrent ct(std::move(files), piece_size, flags);
@@ -886,8 +904,7 @@ std::shared_ptr<lt::torrent_info> make_torrent(std::vector<lt::create_file_entry
 		}
 	}
 
-	std::vector<char> const buf = bencode(ct.generate());
-	return std::make_shared<torrent_info>(buf, from_span);
+	return load_torrent_buffer(bencode(ct.generate()));
 }
 
 std::vector<lt::create_file_entry> create_random_files(std::string const& path, span<const int> file_sizes)
@@ -924,7 +941,7 @@ std::vector<lt::create_file_entry> create_random_files(std::string const& path, 
 	return fs;
 }
 
-std::shared_ptr<torrent_info> create_torrent(std::ostream* file
+add_torrent_params create_torrent(std::ostream* file
 	, char const* name, int piece_size
 	, int num_pieces, bool add_tracker, lt::create_flags_t const flags
 	, std::string ssl_certificate)
@@ -996,17 +1013,16 @@ std::shared_ptr<torrent_info> create_torrent(std::ostream* file
 		}
 	}
 
-	std::vector<char> tmp = bencode(t.generate());
-	error_code ec;
-	return std::make_shared<torrent_info>(tmp, ec, from_span);
+	return load_torrent_buffer(bencode(t.generate()));
 }
 
 std::tuple<torrent_handle, torrent_handle, torrent_handle>
 setup_transfer(lt::session* ses1, lt::session* ses2, lt::session* ses3
 	, bool clear_files, bool use_metadata_transfer, bool connect_peers
 	, std::string suffix, int piece_size
-	, std::shared_ptr<torrent_info>* torrent, bool super_seeding
-	, add_torrent_params const* p, bool stop_lsd, bool use_ssl_ports
+	, add_torrent_params const* atp
+	, bool super_seeding
+	, bool stop_lsd, bool use_ssl_ports
 	, std::shared_ptr<torrent_info>* torrent2, create_flags_t const flags)
 {
 	TORRENT_ASSERT(ses1);
@@ -1042,35 +1058,42 @@ setup_transfer(lt::session* ses1, lt::session* ses2, lt::session* ses3
 		ses3->apply_settings(pack);
 	}
 
-	std::shared_ptr<torrent_info> t;
-	if (torrent == nullptr)
+	add_torrent_params param;
+	if (atp == nullptr || !atp->ti)
 	{
 		error_code ec;
 		create_directory("tmp1" + suffix, ec);
 		std::string const file_path = combine_path("tmp1" + suffix, "temporary");
 		ofstream file(file_path.c_str());
-		t = ::create_torrent(&file, "temporary", piece_size, 9, false, flags);
+		if (atp == nullptr)
+		{
+			param = ::create_torrent(&file, "temporary", piece_size, 9, false, flags);
+		}
+		else
+		{
+			auto temp = ::create_torrent(&file, "temporary", piece_size, 9, false, flags);
+			param = *atp;
+			param.ti = temp.ti;
+		}
 		file.close();
 		if (clear_files)
 		{
 			remove_all(combine_path("tmp2" + suffix, "temporary"), ec);
 			remove_all(combine_path("tmp3" + suffix, "temporary"), ec);
 		}
-		std::printf("generated torrent: %s %s\n", aux::to_hex(t->info_hashes().v2).c_str(), file_path.c_str());
+		std::printf("generated torrent: %s %s\n", aux::to_hex(param.ti->info_hashes().v2).c_str(), file_path.c_str());
 	}
 	else
 	{
-		t = *torrent;
+		param = *atp;
 	}
+	auto ti = param.ti;
 
 	// they should not use the same save dir, because the
 	// file pool will complain if two torrents are trying to
 	// use the same files
-	add_torrent_params param;
 	param.flags &= ~torrent_flags::paused;
 	param.flags &= ~torrent_flags::auto_managed;
-	if (p) param = *p;
-	param.ti = t;
 	param.save_path = "tmp1" + suffix;
 	param.flags |= torrent_flags::seed_mode;
 	error_code ec;
@@ -1095,7 +1118,6 @@ setup_transfer(lt::session* ses1, lt::session* ses2, lt::session* ses3
 
 	if (ses3)
 	{
-		param.ti = t;
 		param.save_path = "tmp3" + suffix;
 		tor3 = ses3->add_torrent(param, ec);
 		TEST_CHECK(!ses3->get_torrents().empty());
@@ -1104,7 +1126,7 @@ setup_transfer(lt::session* ses1, lt::session* ses2, lt::session* ses3
 	if (use_metadata_transfer)
 	{
 		param.ti.reset();
-		param.info_hashes = t->info_hashes();
+		param.info_hashes = ti->info_hashes();
 	}
 	else if (torrent2)
 	{
@@ -1112,7 +1134,7 @@ setup_transfer(lt::session* ses1, lt::session* ses2, lt::session* ses3
 	}
 	else
 	{
-		param.ti = t;
+		param.ti = ti;
 	}
 	param.save_path = "tmp2" + suffix;
 

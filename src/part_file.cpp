@@ -46,7 +46,6 @@ see LICENSE file.
 #include "libtorrent/assert.hpp"
 #include "libtorrent/aux_/vector.hpp"
 #include "libtorrent/aux_/path.hpp"
-#include "libtorrent/aux_/storage_utils.hpp" // for iovec_t
 
 #include <functional> // for std::function
 #include <cstdint>
@@ -149,7 +148,7 @@ namespace libtorrent::aux {
 		return slot;
 	}
 
-	int part_file::write(span<char> buf, piece_index_t const piece
+	int part_file::write(span<char const> buf, piece_index_t const piece
 		, int const offset, error_code& ec)
 	{
 		TORRENT_ASSERT(offset >= 0);
@@ -244,7 +243,7 @@ namespace libtorrent::aux {
 	{
 		std::string const fn = combine_path(m_path, m_name);
 		try {
-			return aux::file_handle(fn, 0, mode);
+			return {fn, 0, mode};
 		}
 		catch (storage_error const& e)
 		{
@@ -256,7 +255,7 @@ namespace libtorrent::aux {
 				ec.clear();
 				create_directories(m_path, ec);
 				if (ec) return {};
-				return aux::file_handle(fn, 0, mode);
+				return {fn, 0, mode};
 			}
 			return {};
 		}
@@ -347,7 +346,6 @@ namespace libtorrent::aux {
 				span<char> v = {buf.get(), block_to_copy};
 				auto bytes_read = aux::pread_all(file.fd(), v, slot_offset(slot) + piece_offset, ec);
 				v = v.first(static_cast<std::ptrdiff_t>(bytes_read));
-				TORRENT_ASSERT(!ec);
 				if (ec || v.empty()) return;
 
 				f(file_offset, {buf.get(), block_to_copy});

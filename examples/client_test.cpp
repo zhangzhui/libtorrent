@@ -52,8 +52,11 @@ see LICENSE file.
 #include "libtorrent/write_resume_data.hpp"
 #include "libtorrent/string_view.hpp"
 #include "libtorrent/disk_interface.hpp" // for open_file_state
-#include "libtorrent/disabled_disk_io.hpp" // for disabled_disk_io_constructor
 #include "libtorrent/load_torrent.hpp"
+
+#include "libtorrent/mmap_disk_io.hpp"
+#include "libtorrent/posix_disk_io.hpp"
+#include "libtorrent/disabled_disk_io.hpp"
 
 #include "torrent_view.hpp"
 #include "session_view.hpp"
@@ -86,7 +89,7 @@ using lt::add_torrent_params;
 using lt::total_seconds;
 using lt::torrent_flags_t;
 using lt::seconds;
-using lt::operator "" _sv;
+using lt::operator ""_sv;
 using lt::address_v4;
 using lt::address_v6;
 using lt::make_address_v6;
@@ -301,7 +304,7 @@ int peer_index(lt::tcp::endpoint addr, std::vector<lt::peer_info> const& peers)
 {
 	using namespace lt;
 	auto i = std::find_if(peers.begin(), peers.end()
-		, [&addr](peer_info const& pi) { return pi.ip == addr; });
+		, [&addr](peer_info const& pi) { return pi.remote_endpoint() == addr; });
 	if (i == peers.end()) return -1;
 
 	return int(i - peers.begin());
@@ -398,7 +401,7 @@ int print_peer_info(std::string& out
 			else
 #endif
 			{
-				std::snprintf(str, sizeof(str), "%-30s ", ::print_endpoint(i->ip).c_str());
+				std::snprintf(str, sizeof(str), "%-30s ", ::print_endpoint(i->remote_endpoint()).c_str());
 				out += str;
 			}
 		}
@@ -410,7 +413,7 @@ int print_peer_info(std::string& out
 			else
 #endif
 			{
-				std::snprintf(str, sizeof(str), "%-30s ", ::print_endpoint(i->local_endpoint).c_str());
+				std::snprintf(str, sizeof(str), "%-30s ", ::print_endpoint(i->local_endpoint()).c_str());
 				out += str;
 			}
 		}
@@ -1342,7 +1345,10 @@ CLIENT OPTIONS
   -e <loops>            exit client after the specified number of iterations
                         through the main loop
   -O                    print session stats counters to the log
-  -1                    exit on first torrent completing (useful for benchmarks))"
+  -1                    exit on first torrent completing (useful for benchmarks)
+  -i <disk-io>          specify which disk I/O back-end to use. One of:
+                        mmap, posix, disabled
+)"
 #ifdef TORRENT_UTP_LOG_ENABLE
 R"(
   -q                    Enable uTP transport-level verbose logging
@@ -1365,12 +1371,7 @@ BITTORRENT OPTIONS
 NETWORK OPTIONS
   -x <file>             loads an emule IP-filter file
   -Y                    Rate limit local peers
-)"
-#if TORRENT_USE_I2P
-R"(  -i <i2p-host>         the hostname to an I2P SAM bridge to use
-)"
-#endif
-R"(
+
 DISK OPTIONS
   -a <mode>             sets the allocation mode. [sparse|allocate]
   -0                    disable disk I/O, read garbage and don't flush to disk
@@ -1552,6 +1553,23 @@ int main(int argc, char* argv[])
 				break;
 			case 'T': max_connections_per_torrent = atoi(arg); break;
 			case 'r': peer = arg; break;
+			case 'i': {
+#if TORRENT_HAVE_MMAP || TORRENT_HAVE_MAP_VIEW_OF_FILE
+				if (arg == "mmap"_sv)
+					params.disk_io_constructor = lt::mmap_disk_io_constructor;
+				else
+#endif
+				if (arg == "posix"_sv)
+					params.disk_io_constructor = lt::posix_disk_io_constructor;
+				else if (arg == "disabled"_sv)
+					params.disk_io_constructor = lt::disabled_disk_io_constructor;
+				else
+				{
+					std::fprintf(stderr, "unknown disk-io subsystem: \"%s\"\n", arg);
+					std::exit(1);
+				}
+				break;
+			}
 			case 'e':
 				{
 					loop_limit = atoi(arg);
@@ -2148,7 +2166,7 @@ done:
 					lt::bitfield avail(num_pieces);
 					for (int idx = 0; idx != num_pieces; ++idx)
 					{
-						if (client_state.piece_availability[idx] > 0)
+						if (client_state.piece_availability[std::size_t(idx)] > 0)
 							avail.set_bit(idx);
 					}
 					int height_out = 0;
@@ -2211,24 +2229,29 @@ done:
 				// TODO: ti may be nullptr here, we should check
 
 				auto const& file_progress = client_state.file_progress;
+				// if there are a lot of files in the torrent, the less space we use to print each file
+				lt::file_storage const& fs = ti->layout();
+				int const num_files = fs.num_files();
+				int const file_width = num_files < 10 ? 75 : num_files < 20 ? 65 : num_files < 30 ? 55 : num_files < 40 ? 45 : 35;
 				int p = 0; // this is horizontal position
-				for (file_index_t const i : ti->files().file_range())
+				for (file_index_t const i : fs.file_range())
 				{
 					auto const idx = std::size_t(static_cast<int>(i));
 					if (pos + 1 >= terminal_height) break;
 
-					bool const pad_file = ti->files().pad_file_at(i);
+					bool const pad_file = fs.pad_file_at(i);
 					if (pad_file && !show_pad_files) continue;
 
 					if (idx >= file_progress.size()) break;
 
-					int const progress = ti->files().file_size(i) > 0
-						? int(file_progress[idx] * 1000 / ti->files().file_size(i)) : 1000;
-					TORRENT_ASSERT(file_progress[idx] <= ti->files().file_size(i));
+					// 0-sized files are always fully downloaded
+					int const progress = fs.file_size(i) > 0
+						? int(file_progress[idx] * 1000 / fs.file_size(i)) : 1000;
+					TORRENT_ASSERT(file_progress[idx] <= fs.file_size(i));
 
-					bool const complete = file_progress[idx] == ti->files().file_size(i);
+					bool const complete = file_progress[idx] == fs.file_size(i);
 
-					std::string title{ti->files().file_name(i)};
+					std::string title{fs.file_name(i)};
 					if (!complete)
 					{
 						std::snprintf(str, sizeof(str), " (%.1f%%)", progress / 10.0);
@@ -2238,24 +2261,25 @@ done:
 					if (f != file_status.end() && f->file_index == i)
 					{
 						title += " [ ";
-						if ((f->open_mode & lt::file_open_mode::rw_mask) == lt::file_open_mode::read_write) title += "read/write ";
-						else if ((f->open_mode & lt::file_open_mode::rw_mask) == lt::file_open_mode::read_only) title += "read ";
-						else if ((f->open_mode & lt::file_open_mode::rw_mask) == lt::file_open_mode::write_only) title += "write ";
-						if (f->open_mode & lt::file_open_mode::random_access) title += "random_access ";
-						if (f->open_mode & lt::file_open_mode::sparse) title += "sparse ";
-						if (f->open_mode & lt::file_open_mode::mmapped) title += "mmapped ";
+						if ((f->open_mode & lt::file_open_mode::rw_mask) == lt::file_open_mode::read_write) title += "rw ";
+						else if ((f->open_mode & lt::file_open_mode::rw_mask) == lt::file_open_mode::read_only) title += "r ";
+						else if ((f->open_mode & lt::file_open_mode::rw_mask) == lt::file_open_mode::write_only) title += "w ";
+						if (!(f->open_mode & lt::file_open_mode::random_access)) title += "seq ";
+						if (!(f->open_mode & lt::file_open_mode::sparse)) title += "alloc ";
+						if (f->open_mode & lt::file_open_mode::mmapped) title += "mm ";
 						title += "]";
 						++f;
 					}
 
-					const int file_progress_width = pad_file ? 10 : 65;
+					const int file_progress_width = pad_file ? 10 : file_width;
 
 					// do we need to line-break?
-					if (p + file_progress_width + 13 > terminal_width)
+					if (p + file_progress_width + 14 > terminal_width)
 					{
 						out += "\x1b[K\n";
 						pos += 1;
 						p = 0;
+						if (pos + 1 >= terminal_height) break;
 					}
 
 					std::snprintf(str, sizeof(str), "%s %7s p: %d ",
@@ -2266,7 +2290,7 @@ done:
 						, add_suffix(file_progress[idx]).c_str()
 						, static_cast<std::uint8_t>(file_prio[idx]));
 
-					p += file_progress_width + 13;
+					p += file_progress_width + 14;
 					out += str;
 				}
 

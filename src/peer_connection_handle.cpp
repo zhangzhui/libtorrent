@@ -128,9 +128,9 @@ void peer_connection_handle::get_peer_info(peer_info& p) const
 torrent_handle peer_connection_handle::associated_torrent() const
 {
 	std::shared_ptr<aux::peer_connection> pc = native_handle();
-	if (!pc) return torrent_handle();
+	if (!pc) return {};
 	auto t = pc->associated_torrent().lock();
-	if (!t) return torrent_handle();
+	if (!t) return {};
 	return t->get_handle();
 }
 
@@ -212,7 +212,7 @@ bool peer_connection_handle::should_log(peer_log_alert::direction_t direction) c
 
 TORRENT_FORMAT(4,5)
 void peer_connection_handle::peer_log(peer_log_alert::direction_t direction
-	, char const* event, char const* fmt, ...) const
+	, peer_log_alert::event_t event, char const* fmt, ...) const
 {
 #ifndef TORRENT_DISABLE_LOGGING
 	std::shared_ptr<aux::peer_connection> pc = native_handle();

@@ -163,7 +163,7 @@ namespace {
 			tcp::endpoint local_ep = m_socket.local_endpoint(ec);
 
 			peer_log(m_outgoing ? peer_log_alert::outgoing : peer_log_alert::incoming
-				, m_outgoing ? "OUTGOING_CONNECTION" : "INCOMING_CONNECTION"
+				, peer_log_alert::connection
 				, "ep: %s type: %s seed: %d p: %p local: %s"
 				, print_endpoint(m_remote).c_str()
 				, socket_type_name(m_socket)
@@ -193,14 +193,14 @@ namespace {
 #ifndef BOOST_NO_EXCEPTIONS
 	catch (std::bad_alloc const&) {
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "EXCEPTION", "bad_alloc");
+		peer_log(peer_log_alert::info, peer_log_alert::exception, "bad_alloc");
 #endif
 		disconnect(make_error_code(boost::system::errc::not_enough_memory)
 			, operation_t::unknown);
 	}
 	catch (system_error const& e) {
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "EXCEPTION", "(%d %s) %s"
+		peer_log(peer_log_alert::info, peer_log_alert::exception, "(%d %s) %s"
 			, e.code().value()
 			, e.code().message().c_str()
 			, e.what());
@@ -210,7 +210,7 @@ namespace {
 	catch (std::exception const& e) {
 		TORRENT_UNUSED(e);
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "EXCEPTION", "%s", e.what());
+		peer_log(peer_log_alert::info, peer_log_alert::exception, "%s", e.what());
 #endif
 		disconnect(make_error_code(boost::system::errc::not_enough_memory)
 			, operation_t::sock_write);
@@ -235,7 +235,7 @@ namespace {
 	{
 		TORRENT_UNUSED(e);
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "PEER_ERROR", "ERROR: %s"
+		peer_log(peer_log_alert::info, peer_log_alert::peer_error, "ERROR: %s"
 			, e.what());
 #endif
 		disconnect(error_code(), operation_t::unknown, peer_error);
@@ -311,7 +311,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 				if (ec && should_log(peer_log_alert::outgoing))
 				{
-					peer_log(peer_log_alert::outgoing, "SET_DSCP", "value: %d e: %s"
+					peer_log(peer_log_alert::outgoing, peer_log_alert::set_dscp, "value: %d e: %s"
 						, value, ec.message().c_str());
 				}
 #endif
@@ -321,7 +321,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::info))
 		{
-			peer_log(peer_log_alert::info, "SET_PEER_CLASS", "a: %s"
+			peer_log(peer_log_alert::info, peer_log_alert::set_peer_class, "a: %s"
 				, print_address(m_remote.address()).c_str());
 		}
 #endif
@@ -337,7 +337,7 @@ namespace {
 				classes += m_ses.peer_classes().at(class_at(i))->label;
 				classes += ' ';
 			}
-			peer_log(peer_log_alert::info, "CLASS", "%s"
+			peer_log(peer_log_alert::info, peer_log_alert::peer_class, "%s"
 				, classes.c_str());
 		}
 #endif
@@ -345,6 +345,20 @@ namespace {
 		if (t && t->ready_for_connections())
 		{
 			init();
+		}
+
+		if (m_settings.get_int(settings_pack::peer_dscp) != 0)
+		{
+			int const value = m_settings.get_int(settings_pack::peer_dscp);
+			error_code ec;
+			aux::set_traffic_class(m_socket, value, ec);
+#ifndef TORRENT_DISABLE_LOGGING
+			if (ec && should_log(peer_log_alert::outgoing))
+			{
+				peer_log(peer_log_alert::outgoing, peer_log_alert::set_dscp, "value: %d e: %s"
+					, value, ec.message().c_str());
+			}
+#endif
 		}
 
 		// if this is an incoming connection, we're done here
@@ -355,7 +369,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (err && should_log(peer_log_alert::incoming))
 			{
-				peer_log(peer_log_alert::incoming, "SOCKET_BUFFER", "%s %s"
+				peer_log(peer_log_alert::incoming, peer_log_alert::socket_buffer, "%s %s"
 					, print_endpoint(m_remote).c_str()
 					, print_error(err).c_str());
 			}
@@ -367,7 +381,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::outgoing))
 		{
-			peer_log(peer_log_alert::outgoing, "OPEN", "protocol: %s"
+			peer_log(peer_log_alert::outgoing, peer_log_alert::open, "protocol: %s"
 				, (aux::is_v4(m_remote) ? "IPv4" : "IPv6"));
 		}
 #endif
@@ -384,7 +398,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::outgoing))
 		{
-			peer_log(peer_log_alert::outgoing, "BIND", "dst: %s ec: %s"
+			peer_log(peer_log_alert::outgoing, peer_log_alert::bind, "dst: %s ec: %s"
 				, print_endpoint(bound_ip).c_str()
 				, ec.message().c_str());
 		}
@@ -403,7 +417,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (err && should_log(peer_log_alert::outgoing))
 			{
-				peer_log(peer_log_alert::outgoing, "SOCKET_BUFFER", "%s %s"
+				peer_log(peer_log_alert::outgoing, peer_log_alert::socket_buffer, "%s %s"
 					, print_endpoint(m_remote).c_str()
 					, print_error(err).c_str());
 			}
@@ -413,7 +427,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::outgoing))
 		{
-			peer_log(peer_log_alert::outgoing, "ASYNC_CONNECT", "dst: %s"
+			peer_log(peer_log_alert::outgoing, peer_log_alert::async_connect, "dst: %s"
 				, print_endpoint(m_remote).c_str());
 		}
 #endif
@@ -434,7 +448,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::info))
 		{
-			peer_log(peer_log_alert::info, "LOCAL ENDPOINT", "e: %s"
+			peer_log(peer_log_alert::info, peer_log_alert::local_endpoint, "e: %s"
 				, print_endpoint(m_socket.local_endpoint(ec)).c_str());
 		}
 #endif
@@ -472,14 +486,14 @@ namespace {
 		if (m_have_piece.empty())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "UPDATE_INTEREST", "connections not initialized");
+			peer_log(peer_log_alert::info, peer_log_alert::update_interest, "connections not initialized");
 #endif
 			return;
 		}
 		if (!t->ready_for_connections())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "UPDATE_INTEREST", "not ready for connections");
+			peer_log(peer_log_alert::info, peer_log_alert::update_interest, "not ready for connections");
 #endif
 			return;
 		}
@@ -494,11 +508,11 @@ namespace {
 			{
 				if (m_have_piece[j]
 					&& t->piece_priority(j) > dont_download
-					&& !p.has_piece_passed(j))
+					&& !p.have_piece(j))
 				{
 					interested = true;
 #ifndef TORRENT_DISABLE_LOGGING
-					peer_log(peer_log_alert::info, "UPDATE_INTEREST", "interesting, piece: %d"
+					peer_log(peer_log_alert::info, peer_log_alert::update_interest, "interesting, piece: %d"
 						, static_cast<int>(j));
 #endif
 					break;
@@ -508,7 +522,7 @@ namespace {
 
 #ifndef TORRENT_DISABLE_LOGGING
 		if (!interested)
-			peer_log(peer_log_alert::info, "UPDATE_INTEREST", "not interesting");
+			peer_log(peer_log_alert::info, peer_log_alert::update_interest, "not interesting");
 #endif
 
 		if (!interested) send_not_interested();
@@ -526,14 +540,14 @@ namespace {
 	}
 
 	void peer_connection::peer_log(peer_log_alert::direction_t direction
-		, char const* event) const noexcept
+		, peer_log_alert::event_t const event) const noexcept
 	{
 		peer_log(direction, event, "");
 	}
 
 	TORRENT_FORMAT(4,5)
 	void peer_connection::peer_log(peer_log_alert::direction_t direction
-		, char const* event, char const* fmt, ...) const noexcept try
+		, peer_log_alert::event_t const event, char const* fmt, ...) const noexcept try
 	{
 		TORRENT_ASSERT(is_single_thread());
 
@@ -547,7 +561,7 @@ namespace {
 		if (t) h = t->get_handle();
 
 		m_ses.alerts().emplace_alert<peer_log_alert>(
-			h, m_remote, m_peer_id, direction, event, fmt, v);
+			h, remote_endpoint(), m_peer_id, direction, event, fmt, v);
 
 		va_end(v);
 
@@ -559,7 +573,7 @@ namespace {
 	void peer_connection::add_extension(std::shared_ptr<peer_plugin> ext)
 	{
 		TORRENT_ASSERT(is_single_thread());
-		m_extensions.push_back(ext);
+		m_extensions.push_back(std::move(ext));
 	}
 
 	peer_plugin const* peer_connection::find_plugin(string_view type)
@@ -582,7 +596,7 @@ namespace {
 		if (!t->valid_metadata())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "ALLOWED", "skipping allowed set because we don't have metadata");
+			peer_log(peer_log_alert::info, peer_log_alert::allowed, "skipping allowed set because we don't have metadata");
 #endif
 			return;
 		}
@@ -591,7 +605,7 @@ namespace {
 		if (t->super_seeding())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "ALLOWED", "skipping allowed set because of super seeding");
+			peer_log(peer_log_alert::info, peer_log_alert::allowed, "skipping allowed set because of super seeding");
 #endif
 			return;
 		}
@@ -600,7 +614,7 @@ namespace {
 		if (upload_only())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "ALLOWED", "skipping allowed set because peer is upload only");
+			peer_log(peer_log_alert::info, peer_log_alert::allowed, "skipping allowed set because peer is upload only");
 #endif
 			return;
 		}
@@ -746,7 +760,7 @@ namespace {
 		if (m_num_pieces == m_have_piece.size())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "INIT", "this is a seed p: %p"
+			peer_log(peer_log_alert::info, peer_log_alert::init, "this is a seed p: %p"
 				, static_cast<void*>(m_peer_info));
 #endif
 
@@ -851,7 +865,7 @@ namespace {
 #endif
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "CONNECTION CLOSED");
+		peer_log(peer_log_alert::info, peer_log_alert::connection_closed);
 #endif
 		TORRENT_ASSERT(m_request_queue.empty());
 		TORRENT_ASSERT(m_download_queue.empty());
@@ -936,7 +950,7 @@ namespace {
 		if (in_handshake()) return;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming, "RECEIVED", "piece: %d"
+		peer_log(peer_log_alert::incoming, peer_log_alert::received, "piece: %d"
 			, static_cast<int>(index));
 #endif
 
@@ -978,7 +992,7 @@ namespace {
 			&& has_piece(index))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::outgoing_message, "HAVE", "piece: %d SUPPRESSED"
+			peer_log(peer_log_alert::outgoing_message, peer_log_alert::have, "piece: %d SUPPRESSED"
 				, static_cast<int>(index));
 #endif
 			return;
@@ -987,7 +1001,7 @@ namespace {
 		if (disconnect_if_redundant()) return;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::outgoing_message, "HAVE", "piece: %d"
+		peer_log(peer_log_alert::outgoing_message, peer_log_alert::have, "piece: %d"
 			, static_cast<int>(index));
 #endif
 		write_have(index);
@@ -1151,6 +1165,19 @@ namespace {
 		t->received_synack(ipv6);
 	}
 
+	peer_endpoint_t peer_connection::remote_endpoint() const
+	{
+#if TORRENT_USE_I2P
+		if (auto s = std::get_if<i2p_stream>(&m_socket))
+		{
+			// TODO: store the sah256 hash of the destination in the
+			// i2p_peer struct, so we don't have to recompute it every time
+			return hasher256(base64decode_i2p(s->destination())).final();
+		}
+#endif
+		return m_remote;
+	}
+
 #if TORRENT_USE_I2P
 	std::string const& peer_connection::destination() const
 	{
@@ -1233,7 +1260,7 @@ namespace {
 		INVARIANT_CHECK;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "ATTACH", "attached to torrent");
+		peer_log(peer_log_alert::info, peer_log_alert::attach, "attached to torrent");
 #endif
 
 		TORRENT_ASSERT(!m_disconnecting);
@@ -1244,7 +1271,7 @@ namespace {
 		if (t && t->is_aborted())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "ATTACH", "the torrent has been aborted");
+			peer_log(peer_log_alert::info, peer_log_alert::attach, "the torrent has been aborted");
 #endif
 			t.reset();
 		}
@@ -1255,7 +1282,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (t && should_log(peer_log_alert::info))
 			{
-				peer_log(peer_log_alert::info, "ATTACH"
+				peer_log(peer_log_alert::info, peer_log_alert::attach
 					, "Delay loaded torrent: %s:"
 					, aux::to_hex(t->info_hash().get_best()).c_str());
 			}
@@ -1268,7 +1295,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::info))
 			{
-				peer_log(peer_log_alert::info, "ATTACH"
+				peer_log(peer_log_alert::info, peer_log_alert::attach
 					, "couldn't find a torrent with the given info_hash: %s torrents:"
 					, aux::to_hex(ih.get_best()).c_str());
 			}
@@ -1310,7 +1337,7 @@ namespace {
 			// torrents that have errors should always reject
 			// incoming peers
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "ATTACH", "rejected connection to paused torrent");
+			peer_log(peer_log_alert::info, peer_log_alert::attach, "rejected connection to paused torrent");
 #endif
 			disconnect(errors::torrent_paused, operation_t::bittorrent, peer_error);
 			return;
@@ -1324,7 +1351,7 @@ namespace {
 			// the torrent is an i2p torrent, the peer is a regular peer
 			// and we don't allow mixed mode. Disconnect the peer.
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "ATTACH", "rejected regular connection to i2p torrent");
+			peer_log(peer_log_alert::info, peer_log_alert::attach, "rejected regular connection to i2p torrent");
 #endif
 			disconnect(errors::peer_banned, operation_t::bittorrent, peer_error);
 			return;
@@ -1346,7 +1373,7 @@ namespace {
 		if (t && t->alerts().should_post<peer_connect_alert>())
 		{
 			t->alerts().emplace_alert<peer_connect_alert>(
-				t->get_handle(), remote(), pid(), socket_type_idx(m_socket), peer_connect_alert::direction_t::in);
+				t->get_handle(), remote_endpoint(), pid(), socket_type_idx(m_socket), peer_connect_alert::direction_t::in);
 		}
 
 		if (t->info_hash().has_v2() && (t->info_hash().get(protocol_version::V2) == ih.v1
@@ -1435,7 +1462,7 @@ namespace {
 		INVARIANT_CHECK;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "KEEPALIVE");
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::keepalive);
 #endif
 	}
 
@@ -1468,7 +1495,7 @@ namespace {
 		if (is_disconnecting()) return;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "CHOKE");
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::choke);
 #endif
 		if (m_peer_choked == false)
 			m_counters.inc_stats_counter(counters::num_peers_down_unchoked, -1);
@@ -1534,8 +1561,8 @@ namespace {
 		TORRENT_ASSERT(t);
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "REJECT_PIECE", "piece: %d s: %x l: %x"
-			, static_cast<int>(r.piece), r.start, r.length);
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::reject, "piece: %d s: %x l: %x"
+			, static_cast<int>(r.piece), std::uint32_t(r.start), std::uint32_t(r.length));
 #endif
 
 #ifndef TORRENT_DISABLE_EXTENSIONS
@@ -1549,15 +1576,15 @@ namespace {
 
 		int const block_size = t->block_size();
 		if (r.piece < piece_index_t{}
-			|| r.piece >= t->torrent_file().files().end_piece()
+			|| r.piece >= t->torrent_file().layout().end_piece()
 			|| r.start < 0
 			|| r.start >= t->torrent_file().piece_length()
 			|| (r.start % block_size) != 0
 			|| r.length != std::min(t->torrent_file().piece_size(r.piece) - r.start, block_size))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "REJECT_PIECE", "invalid reject message (%d, %d, %d)"
-				, int(r.piece), int(r.start), int(r.length));
+			peer_log(peer_log_alert::info, peer_log_alert::reject, "invalid reject message (%d, %d, %d)"
+				, int(r.piece), r.start, r.length);
 #endif
 			return;
 		}
@@ -1604,7 +1631,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		else
 		{
-			peer_log(peer_log_alert::info, "REJECT_PIECE", "piece not in request queue (%d, %d, %d)"
+			peer_log(peer_log_alert::info, peer_log_alert::reject, "piece not in request queue (%d, %d, %d)"
 				, int(r.piece), int(r.start), int(r.length));
 		}
 #endif
@@ -1644,7 +1671,7 @@ namespace {
 		INVARIANT_CHECK;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "SUGGEST_PIECE"
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::suggest_piece
 			, "piece: %d", static_cast<int>(index));
 #endif
 		auto t = m_torrent.lock();
@@ -1661,7 +1688,7 @@ namespace {
 		if (index < piece_index_t(0))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::incoming_message, "INVALID_SUGGEST_PIECE"
+			peer_log(peer_log_alert::incoming_message, peer_log_alert::invalid_suggest
 				, "%d", static_cast<int>(index));
 #endif
 			return;
@@ -1672,7 +1699,7 @@ namespace {
 			if (index >= m_have_piece.end_index())
 			{
 #ifndef TORRENT_DISABLE_LOGGING
-				peer_log(peer_log_alert::incoming_message, "INVALID_SUGGEST"
+				peer_log(peer_log_alert::incoming_message, peer_log_alert::invalid_suggest
 					, "%d s: %d", static_cast<int>(index), m_have_piece.size());
 #endif
 				return;
@@ -1694,7 +1721,7 @@ namespace {
 		m_suggested_pieces.insert(m_suggested_pieces.begin(), index);
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "SUGGEST_PIECE", "piece: %d added to set: %d"
+		peer_log(peer_log_alert::info, peer_log_alert::suggest_piece, "piece: %d added to set: %d"
 			, static_cast<int>(index), m_suggested_pieces.end_index());
 #endif
 	}
@@ -1719,7 +1746,7 @@ namespace {
 #endif
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "UNCHOKE");
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::unchoke);
 #endif
 		if (m_peer_choked)
 			m_counters.inc_stats_counter(counters::num_peers_down_unchoked);
@@ -1756,7 +1783,7 @@ namespace {
 #endif
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "INTERESTED");
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::interested);
 #endif
 		if (m_peer_interested == false)
 		{
@@ -1774,7 +1801,7 @@ namespace {
 		if (t->graceful_pause())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "UNCHOKE"
+			peer_log(peer_log_alert::info, peer_log_alert::unchoke
 				, "did not unchoke, graceful pause mode");
 #endif
 			return;
@@ -1791,7 +1818,7 @@ namespace {
 			// has this problem, sending another unchoke here will kick it
 			// to react to the fact that it's unchoked.
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "UNCHOKE", "sending redundant unchoke");
+			peer_log(peer_log_alert::info, peer_log_alert::unchoke, "sending redundant unchoke");
 #endif
 			write_unchoke();
 			return;
@@ -1806,7 +1833,7 @@ namespace {
 		if (ignore_unchoke_slots())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "UNCHOKE", "about to unchoke, peer ignores unchoke slots");
+			peer_log(peer_log_alert::info, peer_log_alert::unchoke, "about to unchoke, peer ignores unchoke slots");
 #endif
 			// if this peer is exempted from the choker
 			// just unchoke it immediately
@@ -1825,7 +1852,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		else if (should_log(peer_log_alert::info))
 		{
-			peer_log(peer_log_alert::info, "UNCHOKE", "did not unchoke, the number of uploads (%d) "
+			peer_log(peer_log_alert::info, peer_log_alert::unchoke, "did not unchoke, the number of uploads (%d) "
 				"is more than or equal to the available slots (%d), limit (%d)"
 				, int(m_counters[counters::num_peers_up_unchoked])
 				, int(m_counters[counters::num_unchoke_slots])
@@ -1851,7 +1878,7 @@ namespace {
 #endif
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "NOT_INTERESTED");
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::not_interested);
 #endif
 		if (m_peer_interested)
 		{
@@ -1928,7 +1955,7 @@ namespace {
 		}
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "HAVE", "piece: %d"
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::have, "piece: %d"
 			, static_cast<int>(index));
 #endif
 
@@ -1956,7 +1983,7 @@ namespace {
 		if (index >= m_have_piece.end_index() || index < piece_index_t(0))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "ERROR", "have-metadata have_piece: %d size: %d"
+			peer_log(peer_log_alert::info, peer_log_alert::invalid_have, "have-metadata have_piece: %d size: %d"
 				, static_cast<int>(index), m_have_piece.size());
 #endif
 			disconnect(errors::invalid_have, operation_t::bittorrent, peer_error);
@@ -1986,7 +2013,7 @@ namespace {
 		if (m_have_piece[index])
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::incoming, "HAVE"
+			peer_log(peer_log_alert::incoming, peer_log_alert::have
 				, "got redundant HAVE message for index: %d"
 				, static_cast<int>(index));
 #endif
@@ -2013,7 +2040,7 @@ namespace {
 		if (is_seed())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "SEED", "this is a seed. p: %p"
+			peer_log(peer_log_alert::info, peer_log_alert::seed, "this is a seed. p: %p"
 				, static_cast<void*>(m_peer_info));
 #endif
 
@@ -2036,7 +2063,7 @@ namespace {
 		// it's important to update whether we're interested in this peer before
 		// calling disconnect_if_redundant, otherwise we may disconnect even if
 		// we are interested
-		if (!t->has_piece_passed(index)
+		if (!t->have_piece(index)
 			&& !t->is_upload_only()
 			&& !is_interesting()
 			&& (!t->has_picker() || t->picker().piece_priority(index) != dont_download))
@@ -2081,7 +2108,7 @@ namespace {
 			|| index >= t->torrent_file().end_piece())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::incoming, "DONT_HAVE"
+			peer_log(peer_log_alert::incoming, peer_log_alert::dont_have
 				, "invalid piece: %d", static_cast<int>(index));
 #endif
 			return;
@@ -2097,7 +2124,7 @@ namespace {
 		if (is_disconnecting()) return;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "DONT_HAVE", "piece: %d"
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::dont_have, "piece: %d"
 			, static_cast<int>(index));
 #endif
 
@@ -2111,7 +2138,7 @@ namespace {
 		if (!m_have_piece[index])
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::incoming, "DONT_HAVE"
+			peer_log(peer_log_alert::incoming, peer_log_alert::dont_have
 				, "got redundant DONT_HAVE message for index: %d"
 				, static_cast<int>(index));
 #endif
@@ -2167,7 +2194,7 @@ namespace {
 			bitfield_str.resize(aux::numeric_cast<std::size_t>(bits.size()));
 			for (auto const i : bits.range())
 				bitfield_str[std::size_t(static_cast<int>(i))] = bits[i] ? '1' : '0';
-			peer_log(peer_log_alert::incoming_message, "BITFIELD"
+			peer_log(peer_log_alert::incoming_message, peer_log_alert::bitfield
 				, "%s", bitfield_str.c_str());
 		}
 #endif
@@ -2180,7 +2207,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::incoming_message))
 			{
-				peer_log(peer_log_alert::incoming_message, "BITFIELD"
+				peer_log(peer_log_alert::incoming_message, peer_log_alert::bitfield
 					, "invalid size: %d expected %d", bits.size()
 					, m_have_piece.size());
 			}
@@ -2207,7 +2234,7 @@ namespace {
 		{
 #ifndef TORRENT_DISABLE_LOGGING
 			if (m_num_pieces == bits.size())
-				peer_log(peer_log_alert::info, "SEED", "this is a seed. p: %p"
+				peer_log(peer_log_alert::info, peer_log_alert::seed, "this is a seed. p: %p"
 					, static_cast<void*>(m_peer_info));
 #endif
 			m_have_piece = bits;
@@ -2229,7 +2256,7 @@ namespace {
 		if (num_pieces == m_have_piece.size())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "SEED", "this is a seed. p: %p"
+			peer_log(peer_log_alert::info, peer_log_alert::seed, "this is a seed. p: %p"
 				, static_cast<void*>(m_peer_info));
 #endif
 
@@ -2294,7 +2321,7 @@ namespace {
 			&& can_disconnect(errors::upload_upload_connection))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "UPLOAD_ONLY", "the peer is upload-only and our torrent is also upload-only");
+			peer_log(peer_log_alert::info, peer_log_alert::upload_only, "the peer is upload-only and our torrent is also upload-only");
 #endif
 			disconnect(errors::upload_upload_connection, operation_t::bittorrent);
 			return true;
@@ -2307,7 +2334,7 @@ namespace {
 			&& can_disconnect(errors::uninteresting_upload_peer))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "UPLOAD_ONLY", "the peer is upload-only and we're not interested in it");
+			peer_log(peer_log_alert::info, peer_log_alert::upload_only, "the peer is upload-only and we're not interested in it");
 #endif
 			disconnect(errors::uninteresting_upload_peer, operation_t::bittorrent);
 			return true;
@@ -2350,8 +2377,8 @@ namespace {
 			= r.piece >= piece_index_t(0)
 			&& r.piece < t->torrent_file().end_piece();
 
-		peer_log(peer_log_alert::incoming_message, "REQUEST"
-			, "piece: %d s: %x l: %x", static_cast<int>(r.piece), r.start, r.length);
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::request
+			, "piece: %d s: %x l: %x", static_cast<int>(r.piece), std::uint32_t(r.start), std::uint32_t(r.length));
 #endif
 
 #ifndef TORRENT_DISABLE_SUPERSEEDING
@@ -2364,13 +2391,13 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::info))
 			{
-				peer_log(peer_log_alert::info, "INVALID_REQUEST", "piece not super-seeded "
+				peer_log(peer_log_alert::info, peer_log_alert::invalid_request, "piece not super-seeded "
 					"i: %d t: %d n: %d h: %d ss1: %d ss2: %d"
 					, m_peer_interested
 					, valid_piece_index
 						? t->torrent_file().piece_size(r.piece) : -1
 					, t->torrent_file().num_pieces()
-					, valid_piece_index ? t->has_piece_passed(r.piece) : 0
+					, valid_piece_index ? t->have_piece(r.piece) : 0
 					, static_cast<int>(m_superseed_piece[0])
 					, static_cast<int>(m_superseed_piece[1]));
 			}
@@ -2384,8 +2411,8 @@ namespace {
 				// incorrectly for bool temporaries. So, create a dummy instance
 				bool const peer_interested = bool(m_peer_interested);
 				t->alerts().emplace_alert<invalid_request_alert>(
-					t->get_handle(), m_remote, m_peer_id, r
-					, t->has_piece_passed(r.piece), peer_interested, true);
+					t->get_handle(), remote_endpoint(), m_peer_id, r
+					, t->user_have_piece(r.piece), peer_interested, true);
 			}
 			return;
 		}
@@ -2410,7 +2437,7 @@ namespace {
 			// if we don't have valid metadata yet,
 			// we shouldn't get a request
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "INVALID_REQUEST", "we don't have metadata yet");
+			peer_log(peer_log_alert::info, peer_log_alert::invalid_request, "we don't have metadata yet");
 #endif
 			write_reject_request(r);
 			return;
@@ -2424,7 +2451,7 @@ namespace {
 			// ignore requests if the client
 			// is making too many of them.
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "INVALID_REQUEST", "incoming request queue full %d"
+			peer_log(peer_log_alert::info, peer_log_alert::invalid_request, "incoming request queue full %d"
 				, int(m_requests.size()));
 #endif
 			write_reject_request(r);
@@ -2441,20 +2468,20 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::info))
 			{
-				peer_log(peer_log_alert::info, "INVALID_REQUEST", "peer is not interested "
+				peer_log(peer_log_alert::info, peer_log_alert::invalid_request, "peer is not interested "
 					" t: %d n: %d block_limit: %d"
 					, valid_piece_index
 						? t->torrent_file().piece_size(r.piece) : -1
 					, t->torrent_file().num_pieces()
 					, t->block_size());
-				peer_log(peer_log_alert::info, "INTERESTED", "artificial incoming INTERESTED message");
+				peer_log(peer_log_alert::info, peer_log_alert::interested, "artificial incoming INTERESTED message");
 			}
 #endif
 			if (t->alerts().should_post<invalid_request_alert>())
 			{
 				t->alerts().emplace_alert<invalid_request_alert>(
-					t->get_handle(), m_remote, m_peer_id, r
-					, t->has_piece_passed(r.piece)
+					t->get_handle(), remote_endpoint(), m_peer_id, r
+					, t->user_have_piece(r.piece)
 					, false, false);
 			}
 
@@ -2467,7 +2494,7 @@ namespace {
 		// is not choked
 		if (r.piece < piece_index_t(0)
 			|| r.piece >= t->torrent_file().end_piece()
-			|| (!t->has_piece_passed(r.piece)
+			|| (!t->user_have_piece(r.piece)
 #ifndef TORRENT_DISABLE_PREDICTIVE_PIECES
 				&& !t->is_predictive_piece(r.piece)
 #endif
@@ -2483,13 +2510,13 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::info))
 			{
-				peer_log(peer_log_alert::info, "INVALID_REQUEST"
+				peer_log(peer_log_alert::info, peer_log_alert::invalid_request
 					, "i: %d t: %d n: %d h: %d block_limit: %d"
 					, m_peer_interested
 					, valid_piece_index
 						? t->torrent_file().piece_size(r.piece) : -1
 					, ti.num_pieces()
-					, t->has_piece_passed(r.piece)
+					, t->user_have_piece(r.piece)
 					, t->block_size());
 			}
 #endif
@@ -2504,8 +2531,8 @@ namespace {
 				// incorrectly for bool temporaries. So, create a dummy instance
 				bool const peer_interested = bool(m_peer_interested);
 				t->alerts().emplace_alert<invalid_request_alert>(
-					t->get_handle(), m_remote, m_peer_id, r
-					, t->has_piece_passed(r.piece), peer_interested, false);
+					t->get_handle(), remote_endpoint(), m_peer_id, r
+					, t->user_have_piece(r.piece), peer_interested, false);
 			}
 
 			// every ten invalid request, remind the peer that it's choked
@@ -2522,7 +2549,7 @@ namespace {
 					return;
 				}
 #ifndef TORRENT_DISABLE_LOGGING
-				peer_log(peer_log_alert::outgoing_message, "CHOKE");
+				peer_log(peer_log_alert::outgoing_message, peer_log_alert::choke);
 #endif
 				write_choke();
 			}
@@ -2547,7 +2574,7 @@ namespace {
 		if (m_choked && fast_idx == -1)
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "REJECTING REQUEST", "peer choked and piece not in allowed fast set");
+			peer_log(peer_log_alert::info, peer_log_alert::reject, "peer choked and piece not in allowed fast set");
 #endif
 			m_counters.inc_stats_counter(counters::choked_piece_requests);
 			write_reject_request(r);
@@ -2581,7 +2608,7 @@ namespace {
 			if (t->alerts().should_post<incoming_request_alert>())
 			{
 				t->alerts().emplace_alert<incoming_request_alert>(r, t->get_handle()
-					, m_remote, m_peer_id);
+					, remote_endpoint(), m_peer_id);
 			}
 
 			m_last_incoming_request.set(m_connect, aux::time_now());
@@ -2644,7 +2671,7 @@ namespace {
 		if (!validate_piece_request(r))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "INVALID_PIECE", "piece: %d s: %d l: %d"
+			peer_log(peer_log_alert::info, peer_log_alert::invalid_piece, "piece: %d s: %d l: %d"
 				, static_cast<int>(r.piece), r.start, r.length);
 #endif
 			disconnect(errors::invalid_piece, operation_t::bittorrent, peer_error);
@@ -2687,10 +2714,10 @@ namespace {
 				if (t->alerts().should_post<unwanted_block_alert>())
 				{
 					t->alerts().emplace_alert<unwanted_block_alert>(t->get_handle()
-						, m_remote, m_peer_id, b.block_index, b.piece_index);
+						, remote_endpoint(), m_peer_id, b.block_index, b.piece_index);
 				}
 #ifndef TORRENT_DISABLE_LOGGING
-				peer_log(peer_log_alert::info, "INVALID_REQUEST"
+				peer_log(peer_log_alert::info, peer_log_alert::invalid_request
 					, "The block we just got was not in the request queue");
 #endif
 				TORRENT_ASSERT(m_download_queue.front().block == b);
@@ -2791,8 +2818,8 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::incoming_message))
 		{
-			peer_log(peer_log_alert::incoming_message, "PIECE", "piece: %d s: %x l: %x ds: %d qs: %d q: %d"
-				, static_cast<int>(p.piece), p.start, p.length, statistics().download_rate()
+			peer_log(peer_log_alert::incoming_message, peer_log_alert::piece, "piece: %d s: %x l: %x ds: %d qs: %d q: %d"
+				, static_cast<int>(p.piece), std::uint32_t(p.start), std::uint32_t(p.length), statistics().download_rate()
 				, int(m_desired_queue_size), int(m_download_queue.size()));
 		}
 #endif
@@ -2848,7 +2875,7 @@ namespace {
 					, block_finished.piece_index);
 			}
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "INVALID_REQUEST", "The block we just got was not in the request queue");
+			peer_log(peer_log_alert::info, peer_log_alert::invalid_request, "The block we just got was not in the request queue");
 #endif
 #if TORRENT_USE_ASSERTS
 			TORRENT_ASSERT_VAL(m_received_in_piece == p.length, m_received_in_piece);
@@ -2893,7 +2920,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::info))
 			{
-				peer_log(peer_log_alert::info, "REQUEST_TIME", "%d +- %d ms"
+				peer_log(peer_log_alert::info, peer_log_alert::request_time, "%d +- %d ms"
 					, m_request_time.mean(), m_request_time.avg_deviation());
 			}
 #endif
@@ -2924,8 +2951,8 @@ namespace {
 		}
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "FILE_ASYNC_WRITE", "piece: %d s: %x l: %x"
-			, static_cast<int>(p.piece), p.start, p.length);
+		peer_log(peer_log_alert::info, peer_log_alert::file_async_write, "piece: %d s: %x l: %x"
+			, static_cast<int>(p.piece), std::uint32_t(p.start), std::uint32_t(p.length));
 #endif
 		m_download_queue.erase(b);
 		if (m_download_queue.empty())
@@ -2950,7 +2977,7 @@ namespace {
 				m_counters.inc_stats_counter(counters::num_peers_down_disk);
 			m_channel_state[download_channel] |= peer_info::bw_disk;
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "DISK", "exceeded disk buffer watermark");
+			peer_log(peer_log_alert::info, peer_log_alert::disk_buffer, "exceeded disk buffer watermark");
 #endif
 		}
 
@@ -2972,7 +2999,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::info))
 		{
-			peer_log(peer_log_alert::info, "REQUEST_TIME", "%d +- %d ms"
+			peer_log(peer_log_alert::info, peer_log_alert::request_time, "%d +- %d ms"
 				, m_request_time.mean(), m_request_time.avg_deviation());
 		}
 #endif
@@ -3100,7 +3127,7 @@ namespace {
 		if (m_outstanding_bytes > 0) return;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "GRACEFUL_PAUSE", "NO MORE DOWNLOAD");
+		peer_log(peer_log_alert::info, peer_log_alert::graceful_pause, "NO MORE DOWNLOAD");
 #endif
 		disconnect(errors::torrent_paused, operation_t::bittorrent);
 	}
@@ -3112,8 +3139,8 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::info))
 		{
-			peer_log(peer_log_alert::info, "FILE_ASYNC_WRITE_COMPLETE", "piece: %d s: %x l: %x e: %s"
-				, static_cast<int>(p.piece), p.start, p.length, error.ec.message().c_str());
+			peer_log(peer_log_alert::info, peer_log_alert::file_async_write_complete, "piece: %d s: %x l: %x e: %s"
+				, static_cast<int>(p.piece), std::uint32_t(p.start), std::uint32_t(p.length), error.ec.message().c_str());
 		}
 #endif
 
@@ -3159,9 +3186,11 @@ namespace {
 			{
 				// if any other peer has a busy request to this block, we need
 				// to cancel it too
-				t->cancel_block(block_finished);
 				if (t->has_picker())
+				{
+					t->cancel_block(block_finished);
 					t->picker().write_failed(block_finished);
+				}
 
 				if (t->has_storage())
 				{
@@ -3245,8 +3274,8 @@ namespace {
 		if (is_disconnecting()) return;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "CANCEL"
-			, "piece: %d s: %x l: %x", static_cast<int>(r.piece), r.start, r.length);
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::cancel
+			, "piece: %d s: %x l: %x", static_cast<int>(r.piece), std::uint32_t(r.start), std::uint32_t(r.length));
 #endif
 
 		auto const i = std::find(m_requests.begin(), m_requests.end(), r);
@@ -3269,7 +3298,7 @@ namespace {
 			// disk and once the disk job comes back, discard it if it has
 			// been cancelled. Maybe even be able to cancel disk jobs?
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "INVALID_CANCEL", "got cancel not in the queue");
+			peer_log(peer_log_alert::info, peer_log_alert::invalid_cancel, "got cancel not in the queue");
 #endif
 		}
 	}
@@ -3284,7 +3313,7 @@ namespace {
 		INVARIANT_CHECK;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "DHT_PORT", "p: %d", listen_port);
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::dht_port, "p: %d", listen_port);
 #endif
 #ifndef TORRENT_DISABLE_DHT
 		m_ses.add_dht_node({m_remote.address(), std::uint16_t(listen_port)});
@@ -3310,7 +3339,7 @@ namespace {
 		TORRENT_ASSERT(m_in_constructor == false);
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "HAVE_ALL");
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::have_all);
 #endif
 
 #ifndef TORRENT_DISABLE_EXTENSIONS
@@ -3327,7 +3356,7 @@ namespace {
 		m_have_all = true;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "SEED", "this is a seed p: %p"
+		peer_log(peer_log_alert::info, peer_log_alert::seed, "this is a seed p: %p"
 			, static_cast<void*>(m_peer_info));
 #endif
 
@@ -3380,7 +3409,7 @@ namespace {
 		INVARIANT_CHECK;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "HAVE_NONE");
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::have_none);
 #endif
 
 		auto t = m_torrent.lock();
@@ -3429,7 +3458,7 @@ namespace {
 		TORRENT_ASSERT(t);
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming_message, "ALLOWED_FAST", "%d"
+		peer_log(peer_log_alert::incoming_message, peer_log_alert::allowed_fast, "%d"
 			, static_cast<int>(index));
 #endif
 
@@ -3444,7 +3473,7 @@ namespace {
 		if (index < piece_index_t(0))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::incoming_message, "INVALID_ALLOWED_FAST"
+			peer_log(peer_log_alert::incoming_message, peer_log_alert::invalid_allowed_fast
 				, "%d", static_cast<int>(index));
 #endif
 			return;
@@ -3455,7 +3484,7 @@ namespace {
 			if (index >= m_have_piece.end_index())
 			{
 #ifndef TORRENT_DISABLE_LOGGING
-				peer_log(peer_log_alert::incoming_message, "INVALID_ALLOWED_FAST"
+				peer_log(peer_log_alert::incoming_message, peer_log_alert::invalid_allowed_fast
 					, "%d s: %d", static_cast<int>(index), m_have_piece.size());
 #endif
 				return;
@@ -3475,7 +3504,7 @@ namespace {
 		// to download it, request it
 		if (index < m_have_piece.end_index()
 			&& m_have_piece[index]
-			&& !t->has_piece_passed(index)
+			&& !t->have_piece(index)
 			&& t->valid_metadata()
 			&& t->has_picker()
 			&& t->picker().piece_priority(index) > dont_download)
@@ -3561,7 +3590,7 @@ namespace {
 		if (t->upload_mode())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "PIECE_PICKER"
+			peer_log(peer_log_alert::info, peer_log_alert::piece_picker
 				, "not_picking: %d,%d upload_mode"
 				, static_cast<int>(block.piece_index), block.block_index);
 #endif
@@ -3570,7 +3599,7 @@ namespace {
 		if (m_disconnecting)
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "PIECE_PICKER"
+			peer_log(peer_log_alert::info, peer_log_alert::piece_picker
 				, "not_picking: %d,%d disconnecting"
 				, static_cast<int>(block.piece_index), block.block_index);
 #endif
@@ -3589,7 +3618,7 @@ namespace {
 				, [](pending_block const& i) { return i.busy; }))
 			{
 #ifndef TORRENT_DISABLE_LOGGING
-				peer_log(peer_log_alert::info, "PIECE_PICKER"
+				peer_log(peer_log_alert::info, peer_log_alert::piece_picker
 					, "not_picking: %d,%d already in download queue & busy"
 					, static_cast<int>(block.piece_index), block.block_index);
 #endif
@@ -3600,7 +3629,7 @@ namespace {
 				, [](pending_block const& i) { return i.busy; }))
 			{
 #ifndef TORRENT_DISABLE_LOGGING
-				peer_log(peer_log_alert::info, "PIECE_PICKER"
+				peer_log(peer_log_alert::info, peer_log_alert::piece_picker
 					, "not_picking: %d,%d already in request queue & busy"
 					, static_cast<int>(block.piece_index), block.block_index);
 #endif
@@ -3612,7 +3641,7 @@ namespace {
 			, picker_options()))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "PIECE_PICKER"
+			peer_log(peer_log_alert::info, peer_log_alert::piece_picker
 				, "not_picking: %d,%d failed to mark_as_downloading"
 				, static_cast<int>(block.piece_index), block.block_index);
 #endif
@@ -3652,7 +3681,7 @@ namespace {
 		TORRENT_ASSERT(t->valid_metadata());
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "CANCEL_ALL_REQUESTS");
+		peer_log(peer_log_alert::info, peer_log_alert::cancel_all_requests);
 #endif
 
 		while (!m_request_queue.empty())
@@ -3687,7 +3716,7 @@ namespace {
 			r.length = block_size;
 
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::outgoing_message, "CANCEL"
+			peer_log(peer_log_alert::outgoing_message, peer_log_alert::cancel
 				, "piece: %d s: %d l: %d b: %d"
 				, static_cast<int>(b.piece_index), block_offset, block_size, b.block_index);
 #endif
@@ -3710,6 +3739,7 @@ namespace {
 		TORRENT_ASSERT(block.piece_index != piece_block::invalid.piece_index);
 		TORRENT_ASSERT(block.piece_index < t->torrent_file().end_piece());
 		TORRENT_ASSERT(block.block_index < t->torrent_file().piece_size(block.piece_index));
+		TORRENT_ASSERT(t->has_picker());
 
 		// if all the peers that requested this block has been
 		// cancelled, then just ignore the cancel.
@@ -3756,7 +3786,7 @@ namespace {
 		r.length = block_size;
 
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::outgoing_message, "CANCEL"
+			peer_log(peer_log_alert::outgoing_message, peer_log_alert::cancel
 				, "piece: %d s: %d l: %d b: %d"
 				, static_cast<int>(block.piece_index), block_offset, block_size, block.block_index);
 #endif
@@ -3787,7 +3817,7 @@ namespace {
 		m_suggest_pieces.shrink_to_fit();
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::outgoing_message, "CHOKE");
+		peer_log(peer_log_alert::outgoing_message, peer_log_alert::choke);
 #endif
 		write_choke();
 		m_counters.inc_stats_counter(counters::num_peers_up_unchoked_all, -1);
@@ -3846,7 +3876,7 @@ namespace {
 		m_uploaded_at_last_unchoke = m_statistics.total_payload_upload();
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::outgoing_message, "UNCHOKE");
+		peer_log(peer_log_alert::outgoing_message, peer_log_alert::unchoke);
 #endif
 		return true;
 	}
@@ -3865,7 +3895,7 @@ namespace {
 		write_interested();
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::outgoing_message, "INTERESTED");
+		peer_log(peer_log_alert::outgoing_message, peer_log_alert::interested);
 #endif
 	}
 
@@ -3901,7 +3931,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::outgoing_message))
 		{
-			peer_log(peer_log_alert::outgoing_message, "NOT_INTERESTED");
+			peer_log(peer_log_alert::outgoing_message, peer_log_alert::not_interested);
 		}
 #endif
 	}
@@ -3914,7 +3944,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::outgoing_message))
 		{
-			peer_log(peer_log_alert::outgoing_message, "UPLOAD_ONLY", "%d"
+			peer_log(peer_log_alert::outgoing_message, peer_log_alert::upload_only, "%d"
 				, int(enabled));
 		}
 #endif
@@ -3960,7 +3990,7 @@ namespace {
 		{
 			auto t = m_torrent.lock();
 			TORRENT_ASSERT(t);
-			TORRENT_ASSERT(t->has_piece_passed(piece));
+			TORRENT_ASSERT(t->have_piece(piece));
 			TORRENT_ASSERT(piece < t->torrent_file().end_piece());
 		}
 #endif
@@ -3993,7 +4023,7 @@ namespace {
 		INVARIANT_CHECK;
 
 		auto t = m_torrent.lock();
-		TORRENT_ASSERT(t);
+		if (!t) return;
 
 		if (m_disconnecting) return;
 
@@ -4095,7 +4125,7 @@ namespace {
 				}
 
 #ifndef TORRENT_DISABLE_LOGGING
-				peer_log(peer_log_alert::info, "MERGING_REQUESTS"
+				peer_log(peer_log_alert::info, peer_log_alert::merging_requests
 					, "piece: %d start: %d length: %d", static_cast<int>(r.piece)
 					, r.start, r.length);
 #endif
@@ -4123,9 +4153,9 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::outgoing_message))
 			{
-				peer_log(peer_log_alert::outgoing_message, "REQUEST"
+				peer_log(peer_log_alert::outgoing_message, peer_log_alert::request
 					, "piece: %d s: %x l: %x ds: %dB/s dqs: %d rqs: %d blk: %s"
-					, static_cast<int>(r.piece), r.start, r.length, statistics().download_rate()
+					, static_cast<int>(r.piece), std::uint32_t(r.start), std::uint32_t(r.length), statistics().download_rate()
 					, int(m_desired_queue_size), int(m_download_queue.size())
 					, m_request_large_blocks?"large":"single");
 			}
@@ -4151,7 +4181,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::info))
 		{
-			peer_log(peer_log_alert::info, "CONNECTION FAILED"
+			peer_log(peer_log_alert::info, peer_log_alert::connection_failed
 				, "%s %s", print_endpoint(m_remote).c_str(), print_error(e).c_str());
 		}
 #endif
@@ -4243,7 +4273,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (close_reason != close_reason_t::none)
 		{
-			peer_log(peer_log_alert::info, "CLOSE_REASON", "%d", int(close_reason));
+			peer_log(peer_log_alert::info, peer_log_alert::close_reason, "%d", int(close_reason));
 		}
 #endif
 
@@ -4255,9 +4285,9 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::info)) try
 		{
-			static aux::array<char const*, 3, disconnect_severity_t> const str{{{
-				"CONNECTION_CLOSED", "CONNECTION_FAILED", "PEER_ERROR"}}};
-			peer_log(peer_log_alert::info, str[error], "op: %d %s"
+			static aux::array<peer_log_alert::event_t, 3, disconnect_severity_t> const event{{{
+				peer_log_alert::connection_closed, peer_log_alert::connection_failed, peer_log_alert::peer_error}}};
+			peer_log(peer_log_alert::info, event[error], "op: %d %s"
 				, static_cast<int>(op), print_error(ec).c_str());
 
 			if (ec == boost::asio::error::eof
@@ -4265,12 +4295,12 @@ namespace {
 				&& !is_connecting()
 				&& aux::time_now() - connected_time() < seconds(15))
 			{
-				peer_log(peer_log_alert::info, "SHORT_LIVED_DISCONNECT", "");
+				peer_log(peer_log_alert::info, peer_log_alert::short_lived_disconnect, "");
 			}
 		}
 		catch (std::exception const& err)
 		{
-			peer_log(peer_log_alert::info, "PEER_ERROR" ,"op: %d ERROR: unknown error (failed with exception) %s"
+			peer_log(peer_log_alert::info, peer_log_alert::peer_error ,"op: %d ERROR: unknown error (failed with exception) %s"
 				, static_cast<int>(op), err.what());
 		}
 #endif
@@ -4625,9 +4655,8 @@ namespace {
 		if (!(p.flags & peer_info::i2p_socket))
 #endif
 		{
-			p.ip = remote();
 			error_code ec;
-			p.local_endpoint = get_socket().local_endpoint(ec);
+			p.set_endpoints(get_socket().local_endpoint(ec), remote());
 		}
 
 		if (m_snubbed) p.flags |= peer_info::snubbed;
@@ -4700,7 +4729,7 @@ namespace {
 			m_superseed_piece[1] = piece_index_t(-1);
 
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "SUPER_SEEDING", "ending");
+			peer_log(peer_log_alert::info, peer_log_alert::super_seeding, "ending");
 #endif
 			auto t = m_torrent.lock();
 			TORRENT_ASSERT(t);
@@ -4716,7 +4745,7 @@ namespace {
 		TORRENT_ASSERT(!has_piece(new_piece));
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::outgoing_message, "HAVE", "piece: %d (super seed)"
+		peer_log(peer_log_alert::outgoing_message, peer_log_alert::have, "piece: %d (super seed)"
 			, static_cast<int>(new_piece));
 #endif
 		write_have(new_piece);
@@ -4736,7 +4765,7 @@ namespace {
 	void peer_connection::max_out_request_queue(int s)
 	{
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "MAX_OUT_QUEUE_SIZE", "%d -> %d"
+		peer_log(peer_log_alert::info, peer_log_alert::max_out_queue_size, "%d -> %d"
 			, m_max_out_request_queue, s);
 #endif
 		m_max_out_request_queue = aux::clamp_assign<std::uint16_t>(s);
@@ -4792,7 +4821,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (previous_queue_size != m_desired_queue_size)
 		{
-			peer_log(peer_log_alert::info, "UPDATE_QUEUE_SIZE"
+			peer_log(peer_log_alert::info, peer_log_alert::update_queue_size
 				, "dqs: %d max: %d dl: %d qt: %d snubbed: %d slow-start: %d"
 				, int(m_desired_queue_size), int(m_max_out_request_queue)
 				, download_rate, queue_time, int(m_snubbed), int(m_slow_start));
@@ -4914,7 +4943,7 @@ namespace {
 				&& can_disconnect(errors::timed_out))
 			{
 #ifndef TORRENT_DISABLE_LOGGING
-				peer_log(peer_log_alert::info, "CONNECT_FAILED", "waited %d seconds"
+				peer_log(peer_log_alert::info, peer_log_alert::connect_failed, "waited %d seconds"
 					, int(total_seconds(d)));
 #endif
 				connect_failed(errors::timed_out);
@@ -4938,7 +4967,7 @@ namespace {
 			&& can_disconnect(errors::timed_out_inactivity))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "LAST_ACTIVITY", "%d seconds ago"
+			peer_log(peer_log_alert::info, peer_log_alert::last_activity, "%d seconds ago"
 				, int(total_seconds(d)));
 #endif
 			disconnect(errors::timed_out_inactivity, operation_t::bittorrent);
@@ -4956,7 +4985,7 @@ namespace {
 			&& d > seconds(timeout))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "NO_HANDSHAKE", "waited %d seconds"
+			peer_log(peer_log_alert::info, peer_log_alert::no_handshake, "waited %d seconds"
 				, int(total_seconds(d)));
 #endif
 			disconnect(errors::timed_out_no_handshake, operation_t::bittorrent);
@@ -4982,7 +5011,7 @@ namespace {
 			&& can_disconnect(errors::timed_out_no_request))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "NO_REQUEST", "waited %d seconds"
+			peer_log(peer_log_alert::info, peer_log_alert::no_request, "waited %d seconds"
 				, int(total_seconds(d)));
 #endif
 			disconnect(errors::timed_out_no_request, operation_t::bittorrent);
@@ -5018,7 +5047,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::info))
 			{
-				peer_log(peer_log_alert::info, "MUTUAL_NO_INTEREST", "t1: %d t2: %d"
+				peer_log(peer_log_alert::info, peer_log_alert::mutual_no_interest, "t1: %d t2: %d"
 					, int(total_seconds(d1)), int(total_seconds(d2)));
 			}
 #endif
@@ -5052,7 +5081,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::info))
 			{
-				peer_log(peer_log_alert::info, "SLOW_START", "exit slow start: "
+				peer_log(peer_log_alert::info, peer_log_alert::slow_start, "exit slow start: "
 					"prev-dl: %d dl: %d"
 					, int(m_downloaded_last_second)
 					, m_statistics.last_payload_downloaded());
@@ -5078,7 +5107,7 @@ namespace {
 
 		update_desired_queue_size();
 
-		if (m_desired_queue_size == m_max_out_request_queue
+		if (m_desired_queue_size >= m_settings.get_int(settings_pack::max_out_request_queue)
 			&& t->alerts().should_post<performance_alert>())
 		{
 			t->alerts().emplace_alert<performance_alert>(t->get_handle()
@@ -5098,7 +5127,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::info))
 			{
-				peer_log(peer_log_alert::info, "PIECE_REQUEST_TIMED_OUT"
+				peer_log(peer_log_alert::info, peer_log_alert::piece_request_timed_out
 					, "%d time: %d to: %d"
 					, int(m_download_queue.size()), int(total_seconds(now - m_last_piece.get(m_connect)))
 					, piece_timeout);
@@ -5239,7 +5268,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::outgoing))
 		{
-			peer_log(peer_log_alert::outgoing, "SEND_BUFFER_WATERMARK"
+			peer_log(peer_log_alert::outgoing, peer_log_alert::send_buffer_watermark
 				, "current watermark: %d max: %d min: %d factor: %d uploaded: %d B/s"
 				, buffer_size_watermark
 				, m_ses.settings().get_int(settings_pack::send_buffer_watermark)
@@ -5253,7 +5282,7 @@ namespace {
 		{
 			// can this happen here?
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "TORRENT_ABORTED", "");
+			peer_log(peer_log_alert::info, peer_log_alert::torrent_aborted, "");
 #endif
 			for (peer_request const& r : m_requests)
 				write_reject_request(r);
@@ -5293,7 +5322,7 @@ namespace {
 				++m_outstanding_piece_verification;
 
 #ifndef TORRENT_DISABLE_LOGGING
-				peer_log(peer_log_alert::info, "SEED_MODE_FILE_ASYNC_HASH"
+				peer_log(peer_log_alert::info, peer_log_alert::seed_mode_file_async_hash
 					, "piece: %d", static_cast<int>(r.piece));
 #endif
 				// this means we're in seed mode and we haven't yet
@@ -5303,7 +5332,7 @@ namespace {
 					flags |= disk_interface::v1_hash;
 				aux::vector<sha256_hash> hashes;
 				if (t->info_hash().has_v2())
-					hashes.resize(t->torrent_file().orig_files().blocks_in_piece2(r.piece));
+					hashes.resize(t->torrent_file().layout().blocks_in_piece2(r.piece));
 
 				span<sha256_hash> v2_hashes(hashes);
 				m_disk_thread.async_hash(t->storage(), r.piece, v2_hashes, flags
@@ -5315,7 +5344,7 @@ namespace {
 				continue;
 			}
 
-			if (!t->has_piece_passed(r.piece) && !seed_mode)
+			if (!t->have_piece(r.piece) && !seed_mode)
 			{
 #ifndef TORRENT_DISABLE_PREDICTIVE_PIECES
 				// we don't have this piece yet, but we anticipate to have
@@ -5325,17 +5354,17 @@ namespace {
 				if (t->is_predictive_piece(r.piece)) continue;
 #endif
 #ifndef TORRENT_DISABLE_LOGGING
-				peer_log(peer_log_alert::info, "PIECE_FAILED"
+				peer_log(peer_log_alert::info, peer_log_alert::piece_failed
 					, "piece: %d s: %x l: %x piece failed hash check"
-					, static_cast<int>(r.piece), r.start , r.length);
+					, static_cast<int>(r.piece), std::uint32_t(r.start), std::uint32_t(r.length));
 #endif
 				write_reject_request(r);
 			}
 			else
 			{
 #ifndef TORRENT_DISABLE_LOGGING
-				peer_log(peer_log_alert::info, "FILE_ASYNC_READ"
-					, "piece: %d s: %x l: %x", static_cast<int>(r.piece), r.start, r.length);
+				peer_log(peer_log_alert::info, peer_log_alert::file_async_read
+					, "piece: %d s: %x l: %x", static_cast<int>(r.piece), std::uint32_t(r.start), std::uint32_t(r.length));
 #endif
 				m_reading_bytes += r.length;
 #ifndef TORRENT_DISABLE_SHARE_MODE
@@ -5419,7 +5448,7 @@ namespace {
 		{
 			hash_failed[protocol_version::V2] = false;
 
-			int const blocks_in_piece = t->torrent_file().files().blocks_in_piece2(piece);
+			int const blocks_in_piece = t->torrent_file().layout().blocks_in_piece2(piece);
 
 			TORRENT_ASSERT(blocks_in_piece == int(block_hashes.size()));
 
@@ -5454,7 +5483,7 @@ namespace {
 		if (hash_failed[protocol_version::V1] || hash_failed[protocol_version::V2])
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "SEED_MODE_FILE_HASH"
+			peer_log(peer_log_alert::info, peer_log_alert::seed_mode_file_hash
 				, "piece: %d failed", static_cast<int>(piece));
 #endif
 
@@ -5469,7 +5498,7 @@ namespace {
 			}
 
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::info, "SEED_MODE_FILE_HASH"
+			peer_log(peer_log_alert::info, peer_log_alert::seed_mode_file_hash
 				, "piece: %d passed", static_cast<int>(piece));
 #endif
 			if (t->seed_mode() && t->all_verified())
@@ -5508,7 +5537,7 @@ namespace {
 		case set_block_hash_result::success:
 		{
 			t->need_picker();
-			int const blocks_per_piece = t->torrent_file().files().blocks_per_piece();
+			int const blocks_per_piece = t->torrent_file().layout().blocks_per_piece();
 			for (piece_index_t verified_piece = int(r.piece) + result.first_verified_block / blocks_per_piece
 				, end = int(verified_piece) + (result.num_verified + blocks_per_piece - 1) / blocks_per_piece
 				; verified_piece < end; ++verified_piece)
@@ -5545,9 +5574,9 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::info))
 		{
-			peer_log(peer_log_alert::info, "FILE_ASYNC_READ_COMPLETE"
+			peer_log(peer_log_alert::info, peer_log_alert::file_async_read_complete
 				, "piece: %d s: %x l: %x b: %p e: %s rtt: %d us"
-				, static_cast<int>(r.piece), r.start, r.length
+				, static_cast<int>(r.piece), std::uint32_t(r.start), std::uint32_t(r.length)
 				, static_cast<void*>(buffer.data())
 				, error.ec.message().c_str(), disk_rtt);
 		}
@@ -5600,8 +5629,8 @@ namespace {
 
 #ifndef TORRENT_DISABLE_LOGGING
 		peer_log(peer_log_alert::outgoing_message
-			, "PIECE", "piece: %d s: %x l: %x"
-			, static_cast<int>(r.piece), r.start, r.length);
+			, peer_log_alert::piece, "piece: %d s: %x l: %x"
+			, static_cast<int>(r.piece), std::uint32_t(r.start), std::uint32_t(r.length));
 #endif
 
 		m_counters.blend_stats_counter(counters::request_latency, disk_rtt, 5);
@@ -5622,7 +5651,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		peer_log(channel == upload_channel
 			? peer_log_alert::outgoing : peer_log_alert::incoming
-			, "ASSIGN_BANDWIDTH", "bytes: %d", amount);
+			, peer_log_alert::assign_bandwidth, "bytes: %d", amount);
 #endif
 
 		TORRENT_ASSERT(amount > 0 || is_disconnecting());
@@ -5730,7 +5759,7 @@ namespace {
 			if (should_log(dir))
 			{
 				peer_log(dir,
-					"REQUEST_BANDWIDTH", "bytes: %d quota: %d wanted_transfer: %d "
+					peer_log_alert::request_bandwidth, "bytes: %d quota: %d wanted_transfer: %d "
 					"prio: %d num_channels: %d", bytes, m_quota[channel]
 					, wanted_transfer(channel), priority, c);
 			}
@@ -5759,7 +5788,7 @@ namespace {
 		if (m_channel_state[upload_channel] & peer_info::bw_network)
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::outgoing, "CORKED_WRITE", "bytes: %d"
+			peer_log(peer_log_alert::outgoing, peer_log_alert::corked_write, "bytes: %d"
 				, m_send_buffer.size());
 #endif
 			return;
@@ -5799,7 +5828,7 @@ namespace {
 				m_counters.inc_stats_counter(counters::num_peers_up_disk);
 			m_channel_state[upload_channel] |= peer_info::bw_disk;
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::outgoing, "WAITING_FOR_DISK", "outstanding: %d"
+			peer_log(peer_log_alert::outgoing, peer_log_alert::waiting_for_disk, "outstanding: %d"
 				, m_reading_bytes);
 #endif
 
@@ -5840,7 +5869,7 @@ namespace {
 			{
 				if (m_send_buffer.empty())
 				{
-					peer_log(peer_log_alert::outgoing, "SEND_BUFFER_DEPLETED"
+					peer_log(peer_log_alert::outgoing, peer_log_alert::send_buffer_depleted
 						, "quota: %d buf: %d connecting: %s disconnecting: %s "
 						"pending_disk: %d piece-requests: %d"
 						, m_quota[upload_channel]
@@ -5850,7 +5879,7 @@ namespace {
 				}
 				else
 				{
-					peer_log(peer_log_alert::outgoing, "CANNOT_WRITE"
+					peer_log(peer_log_alert::outgoing, peer_log_alert::cannot_write
 						, "quota: %d buf: %d connecting: %s disconnecting: %s "
 						"pending_disk: %d"
 						, m_quota[upload_channel]
@@ -5871,7 +5900,7 @@ namespace {
 
 		TORRENT_ASSERT(!(m_channel_state[upload_channel] & peer_info::bw_network));
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::outgoing, "ASYNC_WRITE", "bytes: %d", amount_to_send);
+		peer_log(peer_log_alert::outgoing, peer_log_alert::async_write, "bytes: %d", amount_to_send);
 #endif
 		auto const vec = m_send_buffer.build_iovec(amount_to_send);
 		ADD_OUTSTANDING_ASYNC("peer_connection::on_send_data");
@@ -5905,7 +5934,7 @@ namespace {
 		std::shared_ptr<peer_connection> me(self());
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "DISK", "dropped below disk buffer watermark");
+		peer_log(peer_log_alert::info, peer_log_alert::disk_buffer, "dropped below disk buffer watermark");
 #endif
 		m_counters.inc_stats_counter(counters::num_peers_down_disk, -1);
 		m_channel_state[download_channel] &= ~peer_info::bw_disk;
@@ -5942,7 +5971,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::incoming))
 			{
-				peer_log(peer_log_alert::incoming, "CANNOT_READ", "quota: %d  "
+				peer_log(peer_log_alert::incoming, peer_log_alert::cannot_read, "quota: %d  "
 					"can-write-to-disk: %s queue-limit: %d disconnecting: %s "
 					" connecting: %s"
 					, m_quota[download_channel]
@@ -5969,7 +5998,7 @@ namespace {
 		TORRENT_ASSERT(!(m_channel_state[download_channel] & peer_info::bw_network));
 		m_channel_state[download_channel] |= peer_info::bw_network;
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming, "ASYNC_READ"
+		peer_log(peer_log_alert::incoming, peer_log_alert::async_read
 			, "max: %d bytes", max_receive);
 #endif
 
@@ -5992,7 +6021,7 @@ namespace {
 	piece_block_progress peer_connection::downloading_piece_progress() const
 	{
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "ERROR"
+		peer_log(peer_log_alert::info, peer_log_alert::peer_error
 			, "downloading_piece_progress() dispatched to the base class!");
 #endif
 		return {};
@@ -6044,7 +6073,7 @@ namespace {
 		trancieve_ip_packet(bytes_transferred, aux::is_v6(m_remote));
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::incoming, "READ"
+		peer_log(peer_log_alert::incoming, peer_log_alert::read
 			, "%d bytes", bytes_transferred);
 #endif
 	}
@@ -6058,7 +6087,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::incoming))
 		{
-			peer_log(peer_log_alert::incoming, "ON_RECEIVE_DATA"
+			peer_log(peer_log_alert::incoming, peer_log_alert::on_receive_data
 				, "bytes: %d %s"
 				, int(bytes_transferred), print_error(error).c_str());
 		}
@@ -6080,7 +6109,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::info))
 			{
-				peer_log(peer_log_alert::info, "ERROR"
+				peer_log(peer_log_alert::info, peer_log_alert::peer_error
 					, "in peer_connection::on_receive_data_impl %s"
 					, print_error(error).c_str());
 			}
@@ -6132,7 +6161,7 @@ namespace {
 			}
 
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::incoming, "AVAILABLE"
+			peer_log(peer_log_alert::incoming, peer_log_alert::available
 				, "%d bytes", buffer_size);
 #endif
 
@@ -6152,7 +6181,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 				if (should_log(peer_log_alert::incoming))
 				{
-					peer_log(peer_log_alert::incoming, "SYNC_READ", "max: %d ret: %d e: %s"
+					peer_log(peer_log_alert::incoming, peer_log_alert::sync_read, "max: %d ret: %d e: %s"
 						, buffer_size, int(bytes), ec ? ec.message().c_str() : "");
 				}
 #endif
@@ -6202,7 +6231,7 @@ namespace {
 				= m_settings.get_int(settings_pack::max_peer_recv_buffer_size);
 			m_recv_buffer.grow(buffer_size_limit);
 #ifndef TORRENT_DISABLE_LOGGING
-			peer_log(peer_log_alert::incoming, "GROW_BUFFER", "%d bytes"
+			peer_log(peer_log_alert::incoming, peer_log_alert::grow_buffer, "%d bytes"
 				, m_recv_buffer.capacity());
 #endif
 		}
@@ -6336,7 +6365,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::outgoing))
 		{
-			peer_log(peer_log_alert::outgoing, "COMPLETED"
+			peer_log(peer_log_alert::outgoing, peer_log_alert::connection_established
 				, "ep: %s", print_endpoint(m_remote).c_str());
 		}
 #endif
@@ -6344,7 +6373,7 @@ namespace {
 		// set the socket to non-blocking, so that we can
 		// read the entire buffer on each read event we get
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "SET_NON_BLOCKING");
+		peer_log(peer_log_alert::info, peer_log_alert::set_non_blocking);
 #endif
 		m_socket.non_blocking(true, ec);
 		if (ec)
@@ -6362,19 +6391,6 @@ namespace {
 		{
 			disconnect(errors::self_connection, operation_t::bittorrent, failure);
 			return;
-		}
-
-		if (m_settings.get_int(settings_pack::peer_dscp) != 0)
-		{
-			int const value = m_settings.get_int(settings_pack::peer_dscp);
-			aux::set_traffic_class(m_socket, value, ec);
-#ifndef TORRENT_DISABLE_LOGGING
-			if (ec && should_log(peer_log_alert::outgoing))
-			{
-				peer_log(peer_log_alert::outgoing, "SET_DSCP", "value: %d e: %s"
-					, value, ec.message().c_str());
-			}
-#endif
 		}
 
 #ifndef TORRENT_DISABLE_EXTENSIONS
@@ -6419,7 +6435,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log(peer_log_alert::info))
 		{
-			peer_log(peer_log_alert::info, "ON_SEND_DATA", "bytes: %d %s"
+			peer_log(peer_log_alert::info, peer_log_alert::on_send_data, "bytes: %d %s"
 				, int(bytes_transferred), print_error(error).c_str());
 		}
 #endif
@@ -6458,7 +6474,7 @@ namespace {
 			m_send_barrier -= int(bytes_transferred);
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::outgoing, "WROTE"
+		peer_log(peer_log_alert::outgoing, peer_log_alert::wrote
 			, "%d bytes", int(bytes_transferred));
 #endif
 
@@ -6467,7 +6483,7 @@ namespace {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log(peer_log_alert::info))
 			{
-				peer_log(peer_log_alert::info, "ERROR"
+				peer_log(peer_log_alert::info, peer_log_alert::peer_error
 					, "%s in peer_connection::on_send_data", error.message().c_str());
 			}
 #endif
@@ -6801,7 +6817,7 @@ namespace {
 	{
 		m_holepunch_mode = true;
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::info, "HOLEPUNCH_MODE", "[ on ]");
+		peer_log(peer_log_alert::info, peer_log_alert::holepunch_mode, "[ on ]");
 #endif
 	}
 
@@ -6823,7 +6839,7 @@ namespace {
 		if (m_channel_state[upload_channel] & peer_info::bw_network) return;
 
 #ifndef TORRENT_DISABLE_LOGGING
-		peer_log(peer_log_alert::outgoing_message, "KEEPALIVE");
+		peer_log(peer_log_alert::outgoing_message, peer_log_alert::keepalive);
 #endif
 
 		write_keepalive();

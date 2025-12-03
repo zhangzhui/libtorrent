@@ -13,6 +13,7 @@ Copyright (c) 2019, ghbplayer
 Copyright (c) 2020, Paul-Louis Ageneau
 Copyright (c) 2020, Viktor Elofsson
 Copyright (c) 2021, AdvenT
+Copyright (c) 2025, Vladimir Golovnev (glassez)
 Copyright (c) 2021, Mark Scott
 All rights reserved.
 
@@ -249,7 +250,12 @@ namespace libtorrent::aux {
 
 		// TODO: make this a raw pointer. perhaps keep the shared_ptr
 		// around further down the object to maintain an owner
+#if TORRENT_ABI_VERSION < 4
 		std::shared_ptr<torrent_info> m_torrent_file;
+#else
+		std::shared_ptr<torrent_info const> m_torrent_file;
+#endif
+		renamed_files m_renamed_files;
 
 		// This is the sum of all non-pad file sizes. In the next major version
 		// this is stored in file_storage and no longer need to be kept here.
@@ -504,6 +510,7 @@ namespace libtorrent::aux {
 		void maybe_connect_web_seeds();
 
 		std::string name() const;
+		aux::allocation_slot name_idx(aux::stack_allocator& a);
 
 		stat statistics() const { return m_stat; }
 		std::optional<std::int64_t> bytes_left() const;
@@ -573,6 +580,8 @@ namespace libtorrent::aux {
 			m_need_save_resume_data |= flag;
 			state_updated();
 		}
+
+		add_torrent_params get_resume_data(resume_data_flags_t flags) const;
 
 		bool is_auto_managed() const { return m_auto_managed; }
 		void auto_managed(bool a);
@@ -836,6 +845,7 @@ namespace libtorrent::aux {
 #endif
 
 		// returns true if we have downloaded the given piece
+		// but not necessarily flushed it to disk
 		bool have_piece(piece_index_t index) const
 		{
 			if (!valid_metadata()) return false;
@@ -850,15 +860,6 @@ namespace libtorrent::aux {
 			if (index < piece_index_t{0} || index >= m_torrent_file->end_piece()) return false;
 			if (!has_picker()) return m_have_all;
 			return m_picker->have_piece(index);
-		}
-
-		// returns true if we have downloaded the given piece
-		bool has_piece_passed(piece_index_t index) const
-		{
-			if (!valid_metadata()) return false;
-			if (index < piece_index_t(0) || index >= torrent_file().end_piece()) return false;
-			if (!has_picker()) return m_have_all;
-			return m_picker->has_piece_passed(index);
 		}
 
 #ifndef TORRENT_DISABLE_PREDICTIVE_PIECES
@@ -883,21 +884,14 @@ namespace libtorrent::aux {
 
 	public:
 
+		// the number of pieces that have passed
+		// hash check, but aren't necessarily
+		// flushed to disk yet
 		int num_have() const
 		{
 			// pretend we have every piece when in seed mode
 			if (m_seed_mode) return m_torrent_file->num_pieces();
 			if (has_picker()) return m_picker->have().num_pieces;
-			if (m_have_all) return m_torrent_file->num_pieces();
-			return 0;
-		}
-
-		// the number of pieces that have passed
-		// hash check, but aren't necessarily
-		// flushed to disk yet
-		int num_passed() const
-		{
-			if (has_picker()) return m_picker->num_passed();
 			if (m_have_all) return m_torrent_file->num_pieces();
 			return 0;
 		}
@@ -936,8 +930,11 @@ namespace libtorrent::aux {
 		void completed();
 
 #if TORRENT_USE_I2P
-		void on_i2p_resolve(error_code const& ec, char const* dest);
+		void on_i2p_resolve(error_code const& ec, char const* dest, peer_source_flags_t const source);
+		void add_i2p_peer(sha256_hash const& dest, peer_source_flags_t source);
 		bool is_i2p() const { return m_i2p; }
+#else
+		bool is_i2p() const { return false; }
 #endif
 
 		// this is the asio callback that is called when a name
@@ -1093,7 +1090,9 @@ namespace libtorrent::aux {
 
 		std::shared_ptr<const torrent_info> get_torrent_file() const;
 
+#if TORRENT_ABI_VERSION < 4
 		std::shared_ptr<torrent_info> get_torrent_copy_with_hashes() const;
+#endif
 
 		std::vector<std::vector<sha256_hash>> get_piece_layers() const;
 
@@ -1115,8 +1114,8 @@ namespace libtorrent::aux {
 
 		void write_resume_data(resume_data_flags_t const flags, add_torrent_params& ret) const;
 
-		void seen_complete() { m_last_seen_complete = ::time(nullptr); }
-		int time_since_complete() const { return int(::time(nullptr) - m_last_seen_complete); }
+		void seen_complete() { m_last_seen_complete = aux::posix_time(); }
+		int time_since_complete() const { return int(aux::posix_time() - m_last_seen_complete); }
 		time_t last_seen_complete() const { return m_last_seen_complete; }
 
 		template <typename Fun, typename... Args>
@@ -1402,6 +1401,7 @@ namespace libtorrent::aux {
 #endif
 
 		std::string m_save_path;
+		aux::cached_slot m_name_idx;
 
 #ifndef TORRENT_DISABLE_PREDICTIVE_PIECES
 		// this is a list of all pieces that we have announced
@@ -1438,7 +1438,7 @@ namespace libtorrent::aux {
 
 		// used if there is any resume data. Some of the information from the
 		// add_torrent_params struct are needed later in the torrent object's life
-		// cycle, and not in the constructor. So we need to save if away here
+		// cycle, and not in the constructor. So we need to save it here
 		std::unique_ptr<add_torrent_params> m_add_torrent_params;
 
 		// if the torrent is started without metadata, it may
@@ -1460,9 +1460,16 @@ namespace libtorrent::aux {
 		// in this swarm
 		std::time_t m_swarm_last_seen_complete = 0;
 
-		// keep a copy if the info-hash here, so it can be accessed from multiple
+		// keep a copy of the info-hash here, so it can be accessed from multiple
 		// threads, and be cheap to access from the client
 		info_hash_t m_info_hash;
+
+		// these are copied from the original .torrent file, and really just
+		// here to allow re-creating the torrent file again (by
+		// save_resume_data())
+		std::string m_comment;
+		std::string m_created_by;
+		std::time_t m_creation_date;
 
 	public:
 		// these are the lists this torrent belongs to. For more
@@ -1679,10 +1686,12 @@ namespace libtorrent::aux {
 		// quarantine
 		bool m_pending_active_change:1;
 
+#if TORRENT_ABI_VERSION < 4
 		// this is set to true if all piece layers were successfully loaded and
 		// validated. Only for v2 torrents
 		// TODO: this member can probably be removed
 		bool m_v2_piece_layers_validated:1;
+#endif
 
 // ----
 

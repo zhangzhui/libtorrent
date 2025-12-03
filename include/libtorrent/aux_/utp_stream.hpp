@@ -23,7 +23,6 @@ see LICENSE file.
 #include "libtorrent/aux_/sliding_average.hpp"
 #include "libtorrent/address.hpp"
 #include "libtorrent/aux_/invariant_check.hpp"
-#include "libtorrent/aux_/storage_utils.hpp" // for iovec_t
 
 #include <functional>
 
@@ -34,6 +33,8 @@ see LICENSE file.
 #endif
 
 namespace libtorrent::aux {
+
+	using iovec_t = span<char>;
 
 #ifndef TORRENT_UTP_LOG_ENABLE
 	#define TORRENT_UTP_LOG 0
@@ -727,6 +728,10 @@ private:
 	packet_ptr acquire_packet(int const allocate);
 	void release_packet(packet_ptr p);
 
+	// insert the given packet at `m_seq_nr` in `m_outbuf`
+	// and release any packet that was there already
+	void insert_packet(packet_ptr p);
+
 	void set_state(state_t s);
 	state_t state() const { return static_cast<state_t>(m_state); }
 
@@ -1028,6 +1033,9 @@ private:
 	// packet for this connection with a correct ack_nr, confirming that the
 	// other end is not spoofing its source IP
 	bool m_confirmed:1;
+
+	// packets that need to be resent. Points to packets in m_outbuf
+	std::vector<packet*> m_needs_resend;
 };
 
 }

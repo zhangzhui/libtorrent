@@ -231,6 +231,7 @@ namespace aux { struct torrent; }
 		// ``get_torrents()`` returns a vector of torrent_handles to all the
 		// torrents currently in the session.
 		torrent_handle find_torrent(sha1_hash const& info_hash) const;
+		torrent_handle find_torrent(sha256_hash const& info_hash) const;
 		std::vector<torrent_handle> get_torrents() const;
 
 		// You add torrents through the add_torrent() function where you give an
@@ -240,6 +241,12 @@ namespace aux { struct torrent; }
 		// efficiently, consider using async_add_torrent() which returns
 		// immediately, without waiting for the torrent to add. Notification of
 		// the torrent being added is sent as add_torrent_alert.
+		//
+		// The ``save_path`` field in add_torrent_params must be set to a valid
+		// path where the files for the torrent will be saved. Even when using a
+		// custom storage, this needs to be set to something. If the save_path
+		// is empty, the call to add_torrent() will throw a system_error
+		// exception.
 		//
 		// The overload that does not take an error_code throws an exception on
 		// error and is not available when building without exception support.
@@ -484,6 +491,7 @@ namespace aux { struct torrent; }
 		// specified info-hash, advertising the specified port. If the port is
 		// left at its default, 0, the port will be implied by the DHT message's
 		// source port (which may improve connectivity through a NAT).
+		// ``dht_announce()`` is not affected by the ``announce_port`` override setting.
 		//
 		// Both these functions are exposed for advanced custom use of the DHT.
 		// All torrents eligible to be announce to the DHT will be automatically,

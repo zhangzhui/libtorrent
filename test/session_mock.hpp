@@ -20,6 +20,9 @@ see LICENSE file.
 #include "libtorrent/aux_/torrent_peer_allocator.hpp"
 #include "libtorrent/ip_filter.hpp"
 #include "libtorrent/peer_class.hpp"
+#if TORRENT_USE_I2P
+#include "libtorrent/i2p_stream.hpp"
+#endif
 
 #if TORRENT_USE_SSL
 #include "libtorrent/aux_/ssl.hpp"
@@ -157,6 +160,11 @@ struct session_mock : aux::session_interface
 		return empty;
 	}
 	char const* i2p_session() const override { return nullptr; }
+	i2p_connection& i2p_conn() override
+	{
+		static i2p_connection dummy(_io_context);
+		return dummy;
+	}
 #endif
 
 #ifndef TORRENT_DISABLE_DHT
@@ -203,7 +211,7 @@ struct session_mock : aux::session_interface
 			alert* a = *i;
 			time_duration d = a->timestamp() - start_time;
 			std::uint32_t millis = std::uint32_t(duration_cast<milliseconds>(d).count());
-			std::printf("%4d.%03d: %-25s %s\n", millis / 1000, millis % 1000
+			std::printf("%4u.%03u: %-25s %s\n", millis / 1000, millis % 1000
 				, a->what()
 				, a->message().c_str());
 		}

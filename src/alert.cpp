@@ -37,7 +37,12 @@ see LICENSE file.
 #include "libtorrent/session_stats.hpp"
 #include "libtorrent/socket_type.hpp"
 #include "libtorrent/peer_info.hpp"
+#include "libtorrent/span.hpp"
 #include "libtorrent/aux_/ip_helpers.hpp" // for is_v4
+
+#ifndef TORRENT_DISABLE_ALERT_MSG
+#include "libtorrent/info_hash.hpp"
+#endif
 
 #if TORRENT_ABI_VERSION == 1
 #include "libtorrent/write_resume_data.hpp"
@@ -54,66 +59,72 @@ namespace libtorrent {
 		: handle(h)
 		, m_alloc(alloc)
 	{
+#if TORRENT_ABI_VERSION < 4
 		auto t = h.native_handle();
 		if (t)
-		{
-			std::string name_str = t->name();
-			if (!name_str.empty())
-			{
-				m_name_idx = alloc.copy_string(name_str);
-			}
-			else
-			{
-				if (t->info_hash().has_v2())
-					m_name_idx = alloc.copy_string(aux::to_hex(t->info_hash().v2));
-				else
-					m_name_idx = alloc.copy_string(aux::to_hex(t->info_hash().v1));
-			}
-		}
-		else
-		{
-			m_name_idx = alloc.copy_string("");
-		}
+			m_name_idx = t->name_idx(alloc);
+#endif
 
 #if TORRENT_ABI_VERSION == 1
 		name = m_alloc.get().ptr(m_name_idx);
 #endif
 	}
 
+#if TORRENT_ABI_VERSION < 4
 	char const* torrent_alert::torrent_name() const
 	{
 		return m_alloc.get().ptr(m_name_idx);
 	}
+#endif
 
 	std::string torrent_alert::message() const
 	{
 #ifdef TORRENT_DISABLE_ALERT_MSG
 		return {};
 #else
-		if (!handle.is_valid()) return " - ";
-		return torrent_name();
+		info_hash_t const ih = handle.info_hashes();
+		if (ih.has_v2())
+			return aux::to_hex(span<char const>(ih.v2).first(3));
+		if (ih.has_v1())
+			return aux::to_hex(span<char const>(ih.v1).first(3));
+		return "------";
 #endif
 	}
 
 	peer_alert::peer_alert(aux::stack_allocator& alloc
 		, torrent_handle const& h
-		, tcp::endpoint const& i
+		, peer_endpoint_t ep_
 		, peer_id const& pi)
 		: torrent_alert(alloc, h)
-		, endpoint(i)
+		, ep(std::move(ep_))
 		, pid(pi)
+	{
+#if TORRENT_ABI_VERSION < 4
+		if (auto ip_ep = std::get_if<peer_alert::ip_endpoint>(&ep)) {
+			endpoint = *ip_ep;
 #if TORRENT_ABI_VERSION == 1
-		, ip(i)
+			ip = *ip_ep;
 #endif
-	{}
+		}
+#endif
+	}
 
 	std::string peer_alert::message() const
 	{
 #ifdef TORRENT_DISABLE_ALERT_MSG
 		return {};
 #else
-		return torrent_alert::message() + " peer [ " + print_endpoint(endpoint)
-			+ " client: " + aux::identify_client_impl(pid) + " ]";
+		std::string ret = torrent_alert::message();
+		ret += " peer ";
+
+		if (auto p = std::get_if<peer_alert::ip_endpoint>(&ep)) {
+			ret += print_endpoint(*p);
+		}
+		else if (auto hash = std::get_if<peer_alert::i2p_endpoint>(&ep)) {
+			ret += aux::to_hex(span<char const>(*hash).first(4));
+		}
+
+		return ret;
 #endif
 	}
 
@@ -543,9 +554,9 @@ namespace libtorrent {
 	}
 
 	peer_ban_alert::peer_ban_alert(aux::stack_allocator& alloc
-		, torrent_handle h, tcp::endpoint const& ep
+		, torrent_handle h, peer_endpoint_t const& ep_
 		, peer_id const& peer_id)
-		: peer_alert(alloc, h, ep, peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 	{}
 
 	std::string peer_ban_alert::message() const
@@ -558,9 +569,9 @@ namespace libtorrent {
 	}
 
 	peer_unsnubbed_alert::peer_unsnubbed_alert(aux::stack_allocator& alloc
-		, torrent_handle h, tcp::endpoint const& ep
+		, torrent_handle h, peer_endpoint_t const& ep_
 		, peer_id const& peer_id)
-		: peer_alert(alloc, h, ep, peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 	{}
 
 	std::string peer_unsnubbed_alert::message() const
@@ -573,9 +584,9 @@ namespace libtorrent {
 	}
 
 	peer_snubbed_alert::peer_snubbed_alert(aux::stack_allocator& alloc
-		, torrent_handle h, tcp::endpoint const& ep
+		, torrent_handle h, peer_endpoint_t const& ep_
 		, peer_id const& peer_id)
-		: peer_alert(alloc, h, ep, peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 	{}
 
 	std::string peer_snubbed_alert::message() const
@@ -588,10 +599,10 @@ namespace libtorrent {
 	}
 
 	invalid_request_alert::invalid_request_alert(aux::stack_allocator& alloc
-		, torrent_handle const& h, tcp::endpoint const& ep
+		, torrent_handle h, peer_endpoint_t const& ep_
 		, peer_id const& peer_id, peer_request const& r
 		, bool _have, bool _peer_interested, bool _withheld)
-		: peer_alert(alloc, h, ep, peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 		, request(r)
 		, we_have(_have)
 		, peer_interested(_peer_interested)
@@ -651,9 +662,9 @@ namespace libtorrent {
 	}
 
 	request_dropped_alert::request_dropped_alert(aux::stack_allocator& alloc, torrent_handle h
-		, tcp::endpoint const& ep, peer_id const& peer_id, int block_num
+		, peer_endpoint_t const& ep_, peer_id const& peer_id, int block_num
 		, piece_index_t piece_num)
-		: peer_alert(alloc, h, ep, peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 		, block_index(block_num)
 		, piece_index(piece_num)
 	{
@@ -673,9 +684,9 @@ namespace libtorrent {
 	}
 
 	block_timeout_alert::block_timeout_alert(aux::stack_allocator& alloc, torrent_handle h
-		, tcp::endpoint const& ep, peer_id const& peer_id, int block_num
+		, peer_endpoint_t const& ep_, peer_id const& peer_id, int block_num
 		, piece_index_t piece_num)
-		: peer_alert(alloc, h, ep, peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 		, block_index(block_num)
 		, piece_index(piece_num)
 	{
@@ -695,9 +706,9 @@ namespace libtorrent {
 	}
 
 	block_finished_alert::block_finished_alert(aux::stack_allocator& alloc, torrent_handle h
-		, tcp::endpoint const& ep, peer_id const& peer_id, int block_num
+		, peer_endpoint_t const& ep_, peer_id const& peer_id, int block_num
 		, piece_index_t piece_num)
-		: peer_alert(alloc, h, ep, peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 		, block_index(block_num)
 		, piece_index(piece_num)
 	{
@@ -717,9 +728,9 @@ namespace libtorrent {
 	}
 
 	block_downloading_alert::block_downloading_alert(aux::stack_allocator& alloc, torrent_handle h
-		, tcp::endpoint const& ep
+		, peer_endpoint_t const& ep_
 		, peer_id const& peer_id, int block_num, piece_index_t piece_num)
-		: peer_alert(alloc, h, ep, peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 		, block_index(block_num)
 		, piece_index(piece_num)
 #if TORRENT_ABI_VERSION == 1
@@ -742,9 +753,9 @@ namespace libtorrent {
 	}
 
 	unwanted_block_alert::unwanted_block_alert(aux::stack_allocator& alloc, torrent_handle h
-		, tcp::endpoint const& ep
+		, peer_endpoint_t const& ep_
 		, peer_id const& peer_id, int block_num, piece_index_t piece_num)
-		: peer_alert(alloc, h, ep, peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 		, block_index(block_num)
 		, piece_index(piece_num)
 	{
@@ -1359,8 +1370,8 @@ namespace {
 	}
 
 	peer_blocked_alert::peer_blocked_alert(aux::stack_allocator& alloc
-		, torrent_handle const& h, tcp::endpoint const& ep, int r)
-		: peer_alert(alloc, h, ep, peer_id(nullptr))
+		, torrent_handle const& h, peer_endpoint_t const& ep_, int r)
+		: peer_alert(alloc, h, ep_, peer_id(nullptr))
 		, reason(r)
 	{}
 
@@ -1519,7 +1530,7 @@ namespace {
 #endif // TORRENT_ABI_VERSION
 
 	lsd_peer_alert::lsd_peer_alert(aux::stack_allocator& alloc, torrent_handle const& h
-		, tcp::endpoint const& i)
+		, peer_endpoint_t const& i)
 		: peer_alert(alloc, h, i, peer_id(nullptr))
 	{}
 
@@ -1684,8 +1695,8 @@ namespace {
 	}
 
 	peer_connect_alert::peer_connect_alert(aux::stack_allocator& alloc, torrent_handle h
-		, tcp::endpoint const& ep, peer_id const& peer_id, socket_type_t const type, direction_t const dir)
-		: peer_alert(alloc, h, ep, peer_id)
+		, peer_endpoint_t const& ep_, peer_id const& peer_id, socket_type_t const type, direction_t const dir)
+		: peer_alert(alloc, h, ep_, peer_id)
 		, direction(dir)
 		, socket_type(type)
 	{}
@@ -1849,9 +1860,9 @@ namespace {
 #endif
 
 	peer_error_alert::peer_error_alert(aux::stack_allocator& alloc, torrent_handle const& h
-		, tcp::endpoint const& ep, peer_id const& peer_id, operation_t const op_
+		, peer_endpoint_t const& ep_, peer_id const& peer_id, operation_t const op_
 		, error_code const& e)
-		: peer_alert(alloc, h, ep, peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 		, op(op_)
 		, error(e)
 #if TORRENT_ABI_VERSION == 1
@@ -1875,10 +1886,10 @@ namespace {
 	}
 
 	peer_disconnected_alert::peer_disconnected_alert(aux::stack_allocator& alloc
-		, torrent_handle const& h, tcp::endpoint const& ep
+		, torrent_handle const& h, peer_endpoint_t const& ep_
 		, peer_id const& peer_id, operation_t op_, socket_type_t const type, error_code const& e
 		, close_reason_t r)
-		: peer_alert(alloc, h, ep, peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 		, socket_type(type)
 		, op(op_)
 		, error(e)
@@ -2129,10 +2140,10 @@ namespace {
 
 	peer_log_alert::peer_log_alert(aux::stack_allocator& alloc
 		, torrent_handle const& h
-		, tcp::endpoint const& i, peer_id const& pi
+		, peer_endpoint_t const& ep_, peer_id const& pi
 		, peer_log_alert::direction_t dir
-		, char const* event, char const* fmt, va_list v)
-		: peer_alert(alloc, h, i, pi)
+		, event_t const event, char const* fmt, va_list v)
+		: peer_alert(alloc, h, ep_, pi)
 		, event_type(event)
 		, direction(dir)
 		, m_str_idx(alloc.format_string(fmt, v))
@@ -2157,15 +2168,169 @@ namespace {
 #else
 		static aux::array<char const*, 5, direction_t> const mode{
 		{ "<==", "==>", "<<<", ">>>", "***" }};
-		return peer_alert::message() + " [" + print_endpoint(endpoint) + "] "
-			+ mode[direction] + " " + event_type + " [ " + log_message() + " ]";
+		static aux::array<char const*, 145, event_t> const event_name{{
+			"TRACKER_RESPONSE",
+			"ALLOWED",
+			"SEED",
+			"CANCEL_ALL_REQUESTS",
+			"SHORT_LIVED_DISCONNECT",
+			"GRACEFUL_PAUSE",
+			"REQUEST_TIME",
+			"CONNECTION",
+			"SET_PEER_CLASS",
+			"PEER_CLASS",
+			"LOCAL_ENDPOINT",
+			"UPDATE_INTEREST",
+			"INIT",
+			"RECEIVED",
+			"ATTACH",
+			"CONSTRUCT",
+			"ENCRYPTION",
+			"EXTENSIONS",
+			"UPLOAD_ONLY",
+			"SHARE_MODE",
+			"SEND_BARRIER",
+			"PIECE_PICKER",
+			"DUPLICATE_PEER",
+			"DUPLICATE_PEER_RESOLUTION",
+			"SUPER_SEEDING",
+			"MERGING_REQUESTS",
+			"PREDICTIVE_HAVE",
+			"BANNING_PEER",
+			"CHOKING_PEER",
+			"TORRENT",
+			"OPTIMISTIC_UNCHOKE",
+			"MAX_OUT_QUEUE_SIZE",
+			"UPDATE_QUEUE_SIZE",
+			"LAST_ACTIVITY",
+			"MUTUAL_NO_INTEREST",
+			"SLOW_START",
+			"SEND_BUFFER_WATERMARK",
+			"TORRENT_ABORTED",
+			"PIECE_FAILED",
+			"REQUEST_BANDWIDTH",
+			"ASSIGN_BANDWIDTH",
+			"WAITING_FOR_DISK",
+			"CLOSE_REASON",
+
+			// protocol errors
+			"PEER_ERROR",
+			"NO_HANDSHAKE",
+			"NO_REQUEST",
+			"PIECE_REQUEST_TIMED_OUT",
+			"INVALID_CANCEL",
+			"INVALID_REQUEST",
+			"INVALID_PIECE",
+			"INVALID_SUGGEST",
+			"INVALID_HAVE",
+			"INVALID_ALLOWED_FAST",
+			"EXCEPTION",
+
+			// NAT hole punching
+			"HOLEPUNCH",
+			"HOLEPUNCH_MODE",
+
+			// socket buffers
+			"SEND_BUFFER_DEPLETED",
+			"AVAILABLE",
+			"GROW_BUFFER",
+
+			// socket I/O
+			"ASYNC_WRITE",
+			"ASYNC_READ",
+			"SYNC_READ",
+			"CANNOT_WRITE",
+			"CANNOT_READ",
+			"ON_RECEIVE_DATA",
+			"ON_SEND_DATA",
+			"WROTE",
+			"READ",
+			"CORKED_WRITE",
+
+			// file I/O
+			"FILE_ASYNC_WRITE",
+			"FILE_ASYNC_WRITE_COMPLETE",
+			"FILE_ASYNC_READ",
+			"FILE_ASYNC_READ_COMPLETE",
+			"SEED_MODE_FILE_ASYNC_HASH",
+			"SEED_MODE_FILE_HASH",
+			"DISK_BUFFER",
+			"ON_FILES_CHECKED",
+
+			// socket level
+			"OPEN",
+			"BIND",
+			"SOCKET_BUFFER",
+			"SET_NON_BLOCKING",
+			"SET_DSCP",
+			"ASYNC_CONNECT",
+			"CONNECTION_FAILED",
+			"CONNECTION_CLOSED",
+			"CLOSING_CONNECTION",
+			"CONNECT_FAILED",
+			"ON_CONNECTED",
+			"CONNECTION_ESTABLISHED",
+
+			// metadata transfer
+			"UT_METADATA",
+			"ON_METADATA",
+
+			// peer exchange
+			"PEX",
+			"PEX_DIFF",
+			"PEX_FULL",
+			"I2P_PEX",
+			"I2P_PEX_DIFF",
+			"I2P_PEX_FULL",
+
+			// web seed
+			"WEB_SEED",
+			"SAVE_RESTART_DATA",
+			"RESTART_DATA",
+			"LOCATION",
+			"MISSING_FILE",
+			"RECEIVE_BYTES",
+			"STATUS",
+			"INVALID_HTTP_RESPONSE",
+			"CHUNKED_ENCODING",
+			"INCOMING_PAYLOAD",
+			"INCOMING_ZEROES",
+			"POP_REQUEST",
+			"HANDLE_PADFILE",
+
+			// messages
+			"ALLOWED_FAST",
+			"HAVE_NONE",
+			"HAVE_ALL",
+			"HAVE",
+			"DONT_HAVE",
+			"DHT_PORT",
+			"CANCEL",
+			"REJECT",
+			"INTERESTED",
+			"NOT_INTERESTED",
+			"KEEPALIVE",
+			"CHOKE",
+			"UNCHOKE",
+			"SUGGEST_PIECE",
+			"BITFIELD",
+			"REQUEST",
+			"HANDSHAKE",
+			"HASH_REQUEST",
+			"HASHES",
+			"HASH_REJECT",
+			"EXTENSION_MESSAGE",
+			"EXTENDED_HANDSHAKE",
+			"PIECE"
+		}};
+		return peer_alert::message() + " "
+			+ mode[direction] + " " + event_name[event_type] + " [ " + log_message() + " ]";
 #endif
 	}
 
 	lsd_error_alert::lsd_error_alert(aux::stack_allocator&, error_code const& ec
 		, address const& local)
-		: alert()
-		, local_address(local)
+		: local_address(local)
 		, error(ec)
 	{}
 
@@ -2213,6 +2378,7 @@ namespace {
 		, m_counters_idx(alloc.allocate(sizeof(std::int64_t)
 			* counters::num_counters + sizeof(std::int64_t) - 1))
 	{
+		if (!m_counters_idx.is_valid()) return;
 		auto* ptr = align_pointer<std::int64_t>(alloc.ptr(m_counters_idx));
 		for (int i = 0; i < counters::num_counters; ++i, ++ptr)
 			*ptr = cnt[i];
@@ -2253,8 +2419,7 @@ namespace {
 		, std::vector<dht_routing_bucket> table
 		, std::vector<dht_lookup> requests
 			, sha1_hash id, udp::endpoint ep)
-		: alert()
-		, active_requests(std::move(requests))
+		: active_requests(std::move(requests))
 		, routing_table(std::move(table))
 		, nid(id)
 		, local_endpoint(ep)
@@ -2349,8 +2514,8 @@ namespace {
 
 	incoming_request_alert::incoming_request_alert(aux::stack_allocator& alloc
 		, peer_request r, torrent_handle h
-		, tcp::endpoint const& ep, peer_id const& peer_id)
-		: peer_alert(alloc, h, ep, peer_id)
+		, peer_endpoint_t const& ep_, peer_id const& peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 		, req(r)
 	{}
 
@@ -2458,6 +2623,13 @@ namespace {
 		m_v4_peers_idx = alloc.allocate(m_v4_num_peers * 6);
 		m_v6_peers_idx = alloc.allocate(m_v6_num_peers * 18);
 
+		if ((!m_v4_peers_idx.is_valid() && m_v4_num_peers > 0) || (!m_v6_peers_idx.is_valid() && m_v6_num_peers > 0))
+		{
+			m_v4_num_peers = 0;
+			m_v6_num_peers = 0;
+			return;
+		}
+
 		char* v4_ptr = alloc.ptr(m_v4_peers_idx);
 		char* v6_ptr = alloc.ptr(m_v6_peers_idx);
 		for (auto const& endp : peers)
@@ -2549,7 +2721,7 @@ namespace {
 
 	bdecode_node dht_direct_response_alert::response() const
 	{
-		if (m_response_size == 0) return bdecode_node();
+		if (m_response_size == 0) return {};
 		char const* start = m_alloc.get().ptr(m_response_idx);
 		char const* end = start + m_response_size;
 		error_code ec;
@@ -2560,9 +2732,9 @@ namespace {
 	}
 
 	picker_log_alert::picker_log_alert(aux::stack_allocator& alloc, torrent_handle const& h
-		, tcp::endpoint const& ep, peer_id const& peer_id, picker_flags_t const flags
+		, peer_endpoint_t const& ep_, peer_id const& peer_id, picker_flags_t const flags
 		, span<piece_block const> blocks)
-		: peer_alert(alloc, h, ep, peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 		, picker_flags(flags)
 		, m_array_idx(alloc.copy_buffer({reinterpret_cast<char const*>(blocks.data())
 			, blocks.size() * int(sizeof(piece_block))}))
@@ -2636,7 +2808,7 @@ namespace {
 		, error_code e, string_view error_str)
 		: error(e)
 		, m_alloc(alloc)
-		, m_msg_idx(alloc.copy_buffer(error_str))
+		, m_msg_idx(alloc.copy_string(error_str))
 	{}
 
 	std::string session_error_alert::message() const
@@ -2681,21 +2853,29 @@ namespace {
 		aux::allocation_slot const v4_nodes_idx = alloc.allocate(v4_num_nodes * (20 + 6));
 		aux::allocation_slot const v6_nodes_idx = alloc.allocate(v6_num_nodes * (20 + 18));
 
-		char* v4_ptr = alloc.ptr(v4_nodes_idx);
-		char* v6_ptr = alloc.ptr(v6_nodes_idx);
-		for (auto const& n : nodes)
+		if ((v4_nodes_idx.is_valid() || v4_num_nodes == 0) && (v6_nodes_idx.is_valid() || v6_num_nodes == 0))
 		{
-			udp::endpoint const& endp = n.second;
-			if (aux::is_v4(endp))
+			char* v4_ptr = alloc.ptr(v4_nodes_idx);
+			char* v6_ptr = alloc.ptr(v6_nodes_idx);
+			for (auto const& n : nodes)
 			{
-				aux::write_string(n.first.to_string(), v4_ptr);
-				aux::write_endpoint(endp, v4_ptr);
+				udp::endpoint const& endp = n.second;
+				if (aux::is_v4(endp))
+				{
+					aux::write_string(n.first.to_string(), v4_ptr);
+					aux::write_endpoint(endp, v4_ptr);
+				}
+				else
+				{
+					aux::write_string(n.first.to_string(), v6_ptr);
+					aux::write_endpoint(endp, v6_ptr);
+				}
 			}
-			else
-			{
-				aux::write_string(n.first.to_string(), v6_ptr);
-				aux::write_endpoint(endp, v6_ptr);
-			}
+		}
+		else
+		{
+			v4_num_nodes = 0;
+			v6_num_nodes = 0;
 		}
 
 		return nodes_slot{v4_num_nodes, v4_nodes_idx, v6_num_nodes, v6_nodes_idx};
@@ -2805,6 +2985,12 @@ namespace {
 	{
 		m_samples_idx = alloc.allocate(m_num_samples * 20);
 
+		if (!m_samples_idx.is_valid())
+		{
+			m_num_samples = 0;
+			return;
+		}
+
 		char *ptr = alloc.ptr(m_samples_idx);
 		std::memcpy(ptr, samples.data(), samples.size() * 20);
 
@@ -2854,9 +3040,9 @@ namespace {
 	}
 
 	block_uploaded_alert::block_uploaded_alert(aux::stack_allocator& alloc, torrent_handle h
-		, tcp::endpoint const& ep, peer_id const& peer_id, int block_num
+		, peer_endpoint_t const& ep_, peer_id const& peer_id, int block_num
 		, piece_index_t piece_num)
-		: peer_alert(alloc, h, ep, peer_id)
+		: peer_alert(alloc, h, ep_, peer_id)
 		, block_index(block_num)
 		, piece_index(piece_num)
 	{

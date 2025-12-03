@@ -53,6 +53,7 @@ set(libtorrent_include_files
 	io_service.hpp
 	ip_filter.hpp
 	libtorrent.hpp
+	load_torrent.hpp
 	magnet_uri.hpp
 	mmap_disk_io.hpp
 	natpmp.hpp
@@ -131,11 +132,11 @@ set(libtorrent_extensions_include_files
 	smart_ban.hpp
 	ut_metadata.hpp
 	ut_pex.hpp
+	i2p_pex.hpp
 )
 
 set(libtorrent_aux_include_files
 	alert_manager.hpp
-	aligned_storage.hpp
 	alloca.hpp
 	allocating_handler.hpp
 	apply_pad_files.hpp
@@ -231,8 +232,10 @@ set(libtorrent_aux_include_files
 	puff.hpp
 	random.hpp
 	range.hpp
+	readwrite.hpp
 	receive_buffer.hpp
 	request_blocks.hpp
+	resolve_duplicate_filenames.hpp
 	resolve_links.hpp
 	resolver.hpp
 	resolver_interface.hpp
@@ -390,6 +393,7 @@ set(sources
 	read_resume_data.cpp
 	receive_buffer.cpp
 	request_blocks.cpp
+	resolve_duplicate_filenames.cpp
 	resolve_links.cpp
 	resolver.cpp
 	rtc_signaling.cpp
@@ -443,6 +447,7 @@ set(sources
 # -- extensions --
 	smart_ban.cpp
 	ut_pex.cpp
+	i2p_pex.cpp
 	ut_metadata.cpp
 )
 
@@ -591,6 +596,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES Clang)
 		-Wno-return-std-move-in-c++11
 		-Wno-unsafe-buffer-usage
 		-Wno-unknown-warning-option
+		-Wno-switch-default
 	)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES GNU)
 	target_compile_options(torrent-rasterbar PRIVATE
@@ -633,7 +639,7 @@ if (WIN32)
 			debug dbghelp crypt32
 	)
 
-	add_definitions(-D_WIN32_WINNT=0x0601) # target Windows 7 or later
+	add_definitions(-D_WIN32_WINNT=0x0A00) # target Windows 10 or later
 
 	target_compile_definitions(torrent-rasterbar
 		PUBLIC WIN32_LEAN_AND_MEAN # prevent winsock1 to be included
@@ -670,7 +676,7 @@ if (APPLE)
 endif()
 
 # check if we need to link with libatomic (not needed on MSVC)
-if (NOT Windows)
+if (NOT MSVC)
 	# TODO: migrate to CheckSourceCompiles in CMake >= 3.19
 	include(CheckCXXSourceCompiles)
 
@@ -838,8 +844,7 @@ if (webtorrent)
 		target_compile_options(datachannel-static PRIVATE
 			-Wno-pedantic
 			-Wno-unused-parameter
-			-Wno-unused-variable
-			-Wno-format-nonliteral)
+			-Wno-unused-variable)
 	endif()
 endif()
 

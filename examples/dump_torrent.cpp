@@ -133,12 +133,12 @@ int main(int argc, char const* argv[]) try
 		, atp.ti->num_pieces()
 		, atp.ti->piece_length()
 		, ih.str().c_str()
-		, atp.ti->comment().c_str()
-		, atp.ti->creator().c_str()
+		, atp.comment.c_str()
+		, atp.created_by.c_str()
 		, make_magnet_uri(atp).c_str()
 		, atp.name.c_str()
 		, atp.ti->num_files());
-	lt::file_storage const& st = atp.ti->files();
+	lt::file_storage const& st = atp.ti->layout();
 	for (auto const i : st.file_range())
 	{
 		auto const first = st.map_file(i, 0, 0).piece;
@@ -149,7 +149,7 @@ int main(int argc, char const* argv[]) try
 		if (!st.root(i).is_all_zeros())
 			file_root << st.root(i);
 		std::printf(" %8" PRIx64 " %11" PRId64 " %c%c%c%c [ %5d, %5d ] %7u %s %s %s%s\n"
-			, st.file_offset(i)
+			, std::uint64_t(st.file_offset(i))
 			, st.file_size(i)
 			, ((flags & lt::file_storage::flag_pad_file)?'p':'-')
 			, ((flags & lt::file_storage::flag_executable)?'x':'-')

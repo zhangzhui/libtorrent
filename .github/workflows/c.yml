@@ -13,6 +13,10 @@ concurrency:
    group: ${{ github.ref }}-${{ github.workflow }}-${{ github.event_name }}
    cancel-in-progress: true
 
+env:
+   HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+   HOMEBREW_NO_AUTO_UPDATE: 1
+
 jobs:
 
   test:
@@ -21,10 +25,10 @@ jobs:
 
     strategy:
       matrix:
-        os: [ubuntu-20.04, macos-latest, windows-2019 ]
+        os: [ubuntu-24.04, macos-latest, windows-2022 ]
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
       with:
         submodules: true
 
@@ -49,7 +53,7 @@ jobs:
       if: runner.os == 'Windows'
       shell: cmd
       run: |
-        git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.72.0 https://github.com/boostorg/boost.git
+        git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.78.0 https://github.com/boostorg/boost.git
         cd boost
         bootstrap.bat
 
@@ -59,11 +63,6 @@ jobs:
       run: |
         cd boost
         .\b2 headers
-
-    - name: install openssl (64 bit) (windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: choco install openssl --limitoutput
 
     - name: build (windows)
       if: runner.os == 'Windows'

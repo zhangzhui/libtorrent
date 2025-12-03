@@ -363,6 +363,10 @@ namespace aux {
 			//
 			// Changing these after the DHT has been started may not have any
 			// effect until the DHT is restarted.
+			// Here are some other bootstrap nodes that may work:
+			// ``router.bittorrent.com:6881``,
+			// ``dht.transmissionbt.com:6881``
+			// ``router.bt.ouinet.work:6881``,
 			dht_bootstrap_nodes,
 
 			// This is the STUN server used by WebTorrent to enable ICE NAT
@@ -995,6 +999,14 @@ namespace aux {
 			// between the client and the proxy, the IP address specified in the
 			// protocol may not be valid from the proxy's point of view.
 			socks5_udp_send_local_ep,
+
+			// When using HTTP proxy (in proxy_type), libtorrent will connect
+			// to peers and trackers using the `CONNECT` proxy command. In this
+			// command it's possible to reveal the hostname of the server we're
+			// connecting to. When this option is true, the hostname will be
+			// sent. This feature can be useful if the proxy is used to
+			// man-in-the-middle connections.
+			proxy_send_host_in_connect,
 
 			max_bool_setting_internal
 		};
@@ -1927,8 +1939,10 @@ namespace aux {
 			max_web_seed_connections,
 
 			// the number of seconds before the internal host name resolver
-			// considers a cache value timed out, negative values are interpreted
-			// as zero.
+			// considers a cache value out of date, and removes it. Negative
+			// values are interpreted as zero. The host name cache also caches
+			// failed DNS lookups, but only for 1/8th of the time of this
+			// timeout.
 			resolver_cache_timeout,
 
 			// specify the not-sent low watermark for socket send buffers. This
@@ -2014,8 +2028,7 @@ namespace aux {
 			// ``max_piece_count`` is the maximum allowed number of pieces in
 			// metadata received via magnet links. Loading large torrents (with
 			// more pieces than the default limit) may also require passing in
-			// a higher limit to read_resume_data() and
-			// torrent_info::parse_info_section(), if those are used.
+			// a higher limit to read_resume_data() and load_torrent_file().
 			max_piece_count,
 
 			// when receiving metadata (torrent file) from peers, this is the
@@ -2049,6 +2062,24 @@ namespace aux {
 			i2p_outbound_quantity,
 			i2p_inbound_length,
 			i2p_outbound_length,
+
+			// ``announce_port`` is the port passed along as the ``port`` parameter
+			// to remote trackers such as HTTP or DHT. This setting does not affect
+			// the effective listening port nor local service discovery announcements.
+			// If left as zero (default), the listening port value is used.
+			//
+			// .. note::
+			//    This setting is only meant for very special cases where a
+			//    seed's listening port differs from the external port. As an
+			//    example, if a local proxy is used and that the proxy supports
+			//    reverse tunnels through NAT-PMP, the tracker must connect to
+			//    the external NAT-PMP port (configured using ``announce_port``)
+			//    instead of the actual local listening port.
+			announce_port,
+
+			// Configures the variance for I2P inbound and outbound tunnel lengths [-7..7]
+			i2p_inbound_length_variance,
+			i2p_outbound_length_variance,
 
 			// this is the minimum allowed announce interval for a WebSocket
 			// tracker used by WebTorrent to signal WebRTC connections. This is

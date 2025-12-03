@@ -9,6 +9,7 @@ Copyright (c) 2017, 2020, AllSeeingEyeTolledEweSew
 Copyright (c) 2017, Falcosc
 Copyright (c) 2019, Andrei Kurushin
 Copyright (c) 2019, ghbplayer
+Copyright (c) 2025, Vladimir Golovnev (glassez)
 Copyright (c) 2021, Mark Scott
 All rights reserved.
 
@@ -722,14 +723,19 @@ namespace aux {
 			| if_download_progress
 			| if_counters_changed;
 
-		// ``save_resume_data()`` asks libtorrent to generate fast-resume data for
-		// this torrent. The fast resume data (stored in an add_torrent_params
-		// object) can be used to resume a torrent in the next session without
-		// having to check all files for which pieces have been downloaded. It
-		// can also be used to save a .torrent file for a torrent_handle.
+		// ``save_resume_data()`` and ``get_resume_data()`` asks libtorrent to
+		// generate fast-resume data for this torrent. The fast resume data
+		// (stored in an add_torrent_params object) can be used to resume a
+		// torrent in the next session without having to check all files for
+		// which pieces have been downloaded. It can also be used to save a
+		// .torrent file for a torrent_handle.
 		//
-		// This operation is asynchronous, ``save_resume_data`` will return
-		// immediately. The resume data is delivered when it's done through a
+		// ```get_resume_data()`` is synchronous and will block the calling
+		// thread until the resume data is ready and returned from the
+		// libtorrent main thread.
+		///
+		// ``save_resume_data()`` is asynchronous. It will return immediately
+		// and deliver the resume data is when it's done through a
 		// save_resume_data_alert.
 		//
 		// The operation will fail, and post a save_resume_data_failed_alert
@@ -819,6 +825,7 @@ namespace aux {
 		//	report that they don't need to save resume data again, and skipped by
 		//	the initial loop, and thwart the counter otherwise.
 		void save_resume_data(resume_data_flags_t flags = {}) const;
+		add_torrent_params get_resume_data(resume_data_flags_t flags = {}) const;
 
 		// This function returns true if anything that is stored in the resume
 		// data has changed since the last time resume data was saved.
@@ -923,6 +930,17 @@ namespace aux {
 		// call save_resume_data() and write_torrent_file() the
 		// add_torrent_params object passed back in the alert.
 		//
+		// Note that a torrent added from a magnet link may not have the full
+		// merkle trees for all files, and hence not have the complete piece
+		// layers. In that state, you cannot create a .torrent file from the
+		// torrent_info returned. Once the torrent completes downloading all
+		// files, becoming a seed, you can make a .torrent file from it.
+		//
+		// If any files in the torrent have been renamed, using
+		// torrent_handle::rename_file(), the new names will not be reflected
+		// in the returned torrent_info object.
+		std::shared_ptr<const torrent_info> torrent_file() const;
+#if TORRENT_ABI_VERSION < 4
 		// torrent_file_with_hashes() returns a *copy* of the internal
 		// torrent_info and piece layer hashes (if it's a v2 torrent). The piece
 		// layers will only be included if they are available. If this torrent
@@ -933,15 +951,9 @@ namespace aux {
 		// The torrent_file_with_hashes() is here for backwards compatibility
 		// when constructing a create_torrent object from a torrent_info that's
 		// in a session. Prefer save_resume_data() + write_torrent_file().
-		//
-		// Note that a torrent added from a magnet link may not have the full
-		// merkle trees for all files, and hence not have the complete piece
-		// layers. In that state, you cannot create a .torrent file even from
-		// the torrent_info returned from torrent_file_with_hashes(). Once the
-		// torrent completes downloading all files, becoming a seed, you can
-		// make a .torrent file from it.
-		std::shared_ptr<const torrent_info> torrent_file() const;
+		TORRENT_DEPRECATED
 		std::shared_ptr<torrent_info> torrent_file_with_hashes() const;
+#endif
 
 		// returns the piece layers for all files in the torrent. If this is a
 		// v1 torrent (and doesn't have any piece layers) it returns an empty

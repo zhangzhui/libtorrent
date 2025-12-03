@@ -48,6 +48,7 @@ namespace libtorrent { namespace {
 		// don't send out peers that we haven't successfully connected to
 		if (p.is_connecting()) return false;
 		if (p.in_handshake()) return false;
+		if (p.type() != connection_type::bittorrent) return false;
 		return true;
 	}
 
@@ -60,8 +61,7 @@ namespace libtorrent { namespace {
 		// delay the rebuilding
 		explicit ut_pex_plugin(aux::torrent& t)
 			: m_torrent(t)
-			, m_last_msg(min_time())
-			, m_peers_in_message(0) {}
+			, m_last_msg(min_time()) {}
 
 		// explicitly disallow assignment, to silence msvc warning
 		ut_pex_plugin& operator=(ut_pex_plugin const&) = delete;
@@ -126,10 +126,7 @@ namespace libtorrent { namespace {
 					// don't write too big of a package
 					if (num_added >= max_peer_entries) break;
 
-					// only send proper bittorrent peers
-					if (peer->type() != connection_type::bittorrent)
-						continue;
-
+					TORRENT_ASSERT(peer->type() == connection_type::bittorrent);
 					auto const* const p = static_cast<aux::bt_peer_connection const*>(peer);
 
 					// if the peer has told us which port its listening on,
@@ -200,7 +197,7 @@ namespace libtorrent { namespace {
 		std::set<tcp::endpoint> m_old_peers;
 		time_point m_last_msg;
 		std::vector<char> m_ut_pex_msg;
-		int m_peers_in_message;
+		int m_peers_in_message = 0;
 	};
 
 	struct ut_pex_peer_plugin final
@@ -211,8 +208,6 @@ namespace libtorrent { namespace {
 			, m_pc(pc)
 			, m_tp(tp)
 			, m_last_msg(min_time())
-			, m_message_index(0)
-			, m_first_time(true)
 		{
 			const int num_pex_timers = sizeof(m_last_pex) / sizeof(m_last_pex[0]);
 			for (int i = 0; i < num_pex_timers; ++i)
@@ -391,7 +386,7 @@ namespace libtorrent { namespace {
 				}
 			}
 #ifndef TORRENT_DISABLE_LOGGING
-			m_pc.peer_log(peer_log_alert::incoming_message, "PEX", "dropped: %d added: %d"
+			m_pc.peer_log(peer_log_alert::incoming_message, peer_log_alert::pex, "dropped: %d added: %d"
 				, num_dropped, num_added);
 #endif
 
@@ -412,7 +407,7 @@ namespace libtorrent { namespace {
 			if (now - seconds(60) < m_last_msg)
 			{
 #ifndef TORRENT_DISABLE_LOGGING
-//				m_pc.peer_log(peer_log_alert::info, "PEX", "waiting: %d seconds to next msg"
+//				m_pc.peer_log(peer_log_alert::info, peer_log_alert::pex, "waiting: %d seconds to next msg"
 //					, int(total_seconds(seconds(60) - (now - m_last_msg))));
 #endif
 				return;
@@ -437,7 +432,7 @@ namespace libtorrent { namespace {
 		{
 			if (m_torrent.flags() & torrent_flags::disable_pex) return;
 
-			// if there's no change in out peer set, don't send anything
+			// if there's no change in our peer set, don't send anything
 			if (m_tp.peers_in_msg() == 0) return;
 
 			std::vector<char> const& pex_msg = m_tp.get_ut_pex_msg();
@@ -473,7 +468,7 @@ namespace libtorrent { namespace {
 				if (e) num_added += e.string_length() / 18;
 				e = m.dict_find_string("dropped6");
 				if (e) num_dropped += e.string_length() / 18;
-				m_pc.peer_log(peer_log_alert::outgoing_message, "PEX_DIFF", "dropped: %d added: %d msg_size: %d"
+				m_pc.peer_log(peer_log_alert::outgoing_message, peer_log_alert::pex_diff, "dropped: %d added: %d msg_size: %d"
 					, num_dropped, num_added, int(pex_msg.size()));
 			}
 #endif
@@ -505,10 +500,7 @@ namespace libtorrent { namespace {
 				// don't write too big of a package
 				if (num_added >= max_peer_entries) break;
 
-				// only send proper bittorrent peers
-				if (peer->type() != connection_type::bittorrent)
-					continue;
-
+				TORRENT_ASSERT(peer->type() == connection_type::bittorrent);
 				auto const* const p = static_cast<aux::bt_peer_connection const*>(peer);
 
 				// no supported flags to set yet
@@ -566,7 +558,7 @@ namespace libtorrent { namespace {
 			m_pc.stats_counters().inc_stats_counter(counters::num_outgoing_pex);
 
 #ifndef TORRENT_DISABLE_LOGGING
-			m_pc.peer_log(peer_log_alert::outgoing_message, "PEX_FULL"
+			m_pc.peer_log(peer_log_alert::outgoing_message, peer_log_alert::pex_full
 				, "added: %d msg_size: %d", num_added, int(pex_msg.size()));
 #endif
 		}
@@ -585,13 +577,13 @@ namespace libtorrent { namespace {
 		time_point m_last_pex[6];
 
 		time_point m_last_msg;
-		int m_message_index;
+		int m_message_index = 0;
 
 		// this is initialized to true, and set to
 		// false after the first pex message has been sent.
-		// it is used to know if a diff message or a) ful
+		// it is used to know if a diff message or a full
 		// message should be sent.
-		bool m_first_time;
+		bool m_first_time = true;
 	};
 
 	std::shared_ptr<peer_plugin> ut_pex_plugin::new_connection(peer_connection_handle const& pc)
@@ -610,7 +602,7 @@ namespace libtorrent {
 	std::shared_ptr<torrent_plugin> create_ut_pex_plugin(torrent_handle const& th, client_data_t)
 	{
 		aux::torrent* t = th.native_handle().get();
-		if (t->torrent_file().priv() || (t->torrent_file().is_i2p()
+		if (t->torrent_file().priv() || (t->is_i2p()
 			&& !t->settings().get_bool(settings_pack::allow_i2p_mixed)))
 		{
 			return {};

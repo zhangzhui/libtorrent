@@ -205,6 +205,8 @@ PYTHON_FILES= \
   setup.py                  \
   setup.py.cmake.in         \
   simple_client.py          \
+  libtorrent/__init__.pyi   \
+  libtorrent/py.typed       \
   src/alert.cpp             \
   src/boost_python.hpp      \
   src/bytes.hpp             \
@@ -386,6 +388,7 @@ SOURCES = \
   read_resume_data.cpp            \
   receive_buffer.cpp              \
   request_blocks.cpp              \
+  resolve_duplicate_filenames.cpp \
   resolve_links.cpp               \
   resolver.cpp                    \
   session.cpp                     \
@@ -425,6 +428,7 @@ SOURCES = \
   upnp.cpp                        \
   ut_metadata.cpp                 \
   ut_pex.cpp                      \
+  i2p_pex.cpp                     \
   utf8.cpp                        \
   utp_socket_manager.cpp          \
   utp_stream.cpp                  \
@@ -526,7 +530,6 @@ HEADERS = \
   write_resume_data.hpp        \
   \
   aux_/alert_manager.hpp            \
-  aux_/aligned_storage.hpp          \
   aux_/alloca.hpp                   \
   aux_/allocating_handler.hpp       \
   aux_/announce_entry.hpp           \
@@ -631,8 +634,10 @@ HEADERS = \
   aux_/puff.hpp                     \
   aux_/random.hpp                   \
   aux_/range.hpp                    \
+  aux_/readwrite.hpp                \
   aux_/receive_buffer.hpp           \
   aux_/request_blocks.hpp           \
+  aux_/resolve_duplicate_filenames.hpp \
   aux_/resolve_links.hpp            \
   aux_/resolver.hpp                 \
   aux_/resolver_interface.hpp       \
@@ -700,6 +705,7 @@ HEADERS = \
   extensions/smart_ban.hpp          \
   extensions/ut_metadata.hpp        \
   extensions/ut_pex.hpp             \
+  extensions/i2p_pex.hpp            \
   \
   kademlia/announce_flags.hpp       \
   kademlia/dht_observer.hpp         \
@@ -1036,6 +1042,7 @@ TEST_TORRENTS = \
   invalid_file_size.torrent \
   invalid_filename.torrent \
   invalid_filename2.torrent \
+  invalid_directory_name.torrent \
   invalid_info.torrent \
   invalid_name.torrent \
   invalid_name2.torrent \
@@ -1084,9 +1091,11 @@ TEST_TORRENTS = \
   whitespace_url.torrent \
   v2.torrent \
   v2_empty_file.torrent \
+  v2_empty_filename.torrent \
   v2_multipiece_file.torrent \
   v2_only.torrent \
   v2_invalid_filename.torrent \
+  v2_invalid_filename2.torrent \
   v2_mismatching_metadata.torrent \
   v2_no_power2_piece.torrent \
   v2_invalid_file.torrent \

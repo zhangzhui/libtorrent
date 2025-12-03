@@ -181,7 +181,7 @@ TORRENT_TEST(suggest)
 			if (auto pl = alert_cast<peer_log_alert>(a))
 			{
 				if (pl->direction == peer_log_alert::outgoing_message
-					&& pl->event_type == std::string("SUGGEST"))
+					&& pl->event_type == peer_log_alert::suggest_piece)
 				{
 					++num_suggests;
 				}
@@ -870,7 +870,7 @@ TORRENT_TEST(pex)
 	if (ec) std::printf("failed to create directory: \"%s\": %s\n"
 		, path.c_str(), ec.message().c_str());
 	std::ofstream file(lt::combine_path(path, "temporary").c_str());
-	auto ti = ::create_torrent(&file, "temporary", 0x4000, 50, false);
+	lt::add_torrent_params p = ::create_torrent(&file, "temporary", 0x4000, 50, false);
 	file.close();
 
 	int const num_nodes = 3;
@@ -896,7 +896,6 @@ TORRENT_TEST(pex)
 			std::make_shared<lt::session>(pack, *io_service.back());
 		nodes.push_back(ses);
 
-		lt::add_torrent_params p;
 		p.flags &= ~lt::torrent_flags::paused;
 		p.flags &= ~lt::torrent_flags::auto_managed;
 
@@ -905,7 +904,6 @@ TORRENT_TEST(pex)
 		// It's important that node 1 and 2 want to stay connected, otherwise
 		// node 1 won't be able to gossip about 2 to 0.
 		p.save_path = save_path(swarm_id, i > 1 ? 0 : 1);
-		p.ti = ti;
 		ses->async_add_torrent(p);
 
 		ses->set_alert_notify([&, i]() {
@@ -963,8 +961,11 @@ TORRENT_TEST(pex)
 						// if node 0 was connected to 50.0.0.3, we're done
 						if (lt::peer_connect_alert* ca = lt::alert_cast<lt::peer_connect_alert>(a))
 						{
-							if (ca->endpoint.address() == addr("50.0.0.3"))
-								done = true;
+							if (auto i = std::get_if<peer_alert::ip_endpoint>(&ca->ep))
+							{
+								if (i->address() == addr("50.0.0.3"))
+									done = true;
+							}
 						}
 						if (lt::incoming_connection_alert* ca = lt::alert_cast<lt::incoming_connection_alert>(a))
 						{

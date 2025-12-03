@@ -103,6 +103,23 @@ TORRENT_TEST(async_add_torrent_deprecated_magnet)
 }
 #endif
 
+TORRENT_TEST(async_add_torrent_no_save_path)
+{
+	settings_pack p = settings();
+	p.set_int(settings_pack::alert_mask, ~0);
+	lt::session ses(p);
+
+	add_torrent_params atp;
+	atp.info_hashes.v1.assign("abababababababababab");
+	atp.save_path = "";
+	TEST_THROW(ses.add_torrent(atp));
+	TEST_THROW(ses.async_add_torrent(atp));
+
+	lt::error_code ec;
+	ses.add_torrent(atp, ec);
+	TORRENT_ASSERT(ec == error_code(lt::errors::invalid_save_path));
+}
+
 TORRENT_TEST(async_add_torrent_duplicate_error)
 {
 	settings_pack p = settings();
@@ -190,14 +207,15 @@ TORRENT_TEST(async_add_torrent_duplicate_back_to_back)
 	TEST_CHECK(!(st.flags & torrent_flags::auto_managed));
 }
 
+#if TORRENT_ABI_VERSION < 4
 TORRENT_TEST(load_empty_file)
 {
 	settings_pack p = settings();
 	p.set_int(settings_pack::alert_mask, ~0);
 	lt::session ses(p);
 
-	add_torrent_params atp;
 	error_code ignore_errors;
+	add_torrent_params atp;
 	atp.ti = std::make_shared<torrent_info>("", std::ref(ignore_errors), from_span);
 	atp.save_path = ".";
 	error_code ec;
@@ -206,6 +224,7 @@ TORRENT_TEST(load_empty_file)
 	TEST_CHECK(!h.is_valid());
 	TEST_CHECK(ec == error_code(errors::no_metadata));
 }
+#endif
 
 TORRENT_TEST(session_stats)
 {
@@ -235,9 +254,8 @@ TORRENT_TEST(paused_session)
 	lt::session s(settings());
 	s.pause();
 
-	lt::add_torrent_params ps;
 	std::ofstream file("temporary");
-	ps.ti = ::create_torrent(&file, "temporary", 16 * 1024, 13, false);
+	lt::add_torrent_params ps = ::create_torrent(&file, "temporary", 16 * 1024, 13, false);
 	ps.flags = lt::torrent_flags::paused;
 	ps.save_path = ".";
 

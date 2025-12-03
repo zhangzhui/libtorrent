@@ -8,6 +8,10 @@ see LICENSE file.
 */
 
 #include "libtorrent/session.hpp" // for default_disk_io_constructor
+#include "libtorrent/disabled_disk_io.hpp"
+#include "libtorrent/mmap_disk_io.hpp"
+#include "libtorrent/posix_disk_io.hpp"
+
 #include "libtorrent/disk_interface.hpp"
 #include "libtorrent/settings_pack.hpp"
 #include "libtorrent/file_storage.hpp"
@@ -122,6 +126,7 @@ struct test_case
 	int read_multiplier;
 	int file_pool_size;
 	disk_test_mode_t flags;
+	std::string disk_backend;
 };
 
 int run_test(test_case const& t)
@@ -150,9 +155,29 @@ int run_test(test_case const& t)
 	lt::settings_pack pack;
 	pack.set_int(lt::settings_pack::aio_threads, t.num_threads);
 	pack.set_int(lt::settings_pack::file_pool_size, t.file_pool_size);
+	pack.set_int(lt::settings_pack::max_queued_disk_bytes, t.queue_size * lt::default_block_size);
 
-	std::unique_ptr<lt::disk_interface> disk_io
-		= lt::default_disk_io_constructor(ioc, pack, cnt);
+	std::unique_ptr<lt::disk_interface> disk_io;
+
+#if TORRENT_HAVE_MMAP || TORRENT_HAVE_MAP_VIEW_OF_FILE
+	if (t.disk_backend == "mmap"_sv)
+		disk_io = lt::mmap_disk_io_constructor(ioc, pack, cnt);
+	else
+#endif
+	{
+		if (t.disk_backend  == "posix"_sv)
+			disk_io = lt::posix_disk_io_constructor(ioc, pack, cnt);
+		else if (t.disk_backend  == "disabled"_sv)
+			disk_io = lt::disabled_disk_io_constructor(ioc, pack, cnt);
+		else
+		{
+			if (t.disk_backend != "default")
+			{
+				std::fprintf(stderr, "unknown disk-io subsystem: \"%s\". Using default.\n", t.disk_backend.c_str());
+			}
+			disk_io = lt::default_disk_io_constructor(ioc, pack, cnt);
+		}
+	}
 
 	std::cerr << "RUNNING: -f " << t.num_files
 		<< " -q " << t.queue_size
@@ -164,6 +189,7 @@ int run_test(test_case const& t)
 		<< ((t.flags & test_mode::read_random_order) ? " random-read" : "")
 		<< ((t.flags & test_mode::flush_files) ? " flush" : "")
 		<< ((t.flags & test_mode::clear_pieces) ? " clear" : "")
+		<< " -d " << t.disk_backend
 		<< "\n";
 
 	try
@@ -175,7 +201,8 @@ int run_test(test_case const& t)
 
 		lt::aux::vector<lt::download_priority_t, lt::file_index_t> prios;
 		std::string save_path = "./scratch-area";
-		lt::storage_params params(fs, nullptr
+		lt::renamed_files rf;
+		lt::storage_params params(fs, rf
 			, save_path
 			, (t.flags & test_mode::sparse) ? lt::storage_mode_sparse : lt::storage_mode_allocate
 			, prios
@@ -205,12 +232,21 @@ int run_test(test_case const& t)
 		std::vector<char> write_buffer(lt::default_block_size);
 
 		int outstanding = 0;
+		std::set<int> in_flight;
 
 		lt::add_torrent_params atp;
 
-		disk_io->async_check_files(tor, &atp, lt::aux::vector<std::string, lt::file_index_t>{}
-			, [&](lt::status_t, lt::storage_error const&) { --outstanding; });
+		int job_idx = 0;
+		in_flight.insert(job_idx);
 		++outstanding;
+		disk_io->async_check_files(tor, &atp, lt::aux::vector<std::string, lt::file_index_t>{}
+			, [&, job_idx](lt::status_t, lt::storage_error const&) {
+				TORRENT_ASSERT(in_flight.count(job_idx));
+				in_flight.erase(job_idx);
+				TORRENT_ASSERT(outstanding > 0);
+				--outstanding;
+			});
+		++job_idx;
 		disk_io->submit_jobs();
 
 		while (outstanding > 0)
@@ -225,6 +261,14 @@ int run_test(test_case const& t)
 			|| !blocks_to_read.empty()
 			|| outstanding > 0)
 		{
+			if ((job_counter & 0x1fff) == 0)
+			{
+				printf("o: %d w: %d r: %d\r"
+					, outstanding
+					, int(blocks_to_write.size())
+					, int(blocks_to_read.size()));
+				fflush(stdout);
+			}
 			for (int i = 0; i < t.read_multiplier; ++i)
 			{
 				if (!blocks_to_read.empty() && outstanding < t.queue_size)
@@ -232,8 +276,13 @@ int run_test(test_case const& t)
 					auto const req = blocks_to_read.back();
 					blocks_to_read.erase(blocks_to_read.end() - 1);
 
-					disk_io->async_read(tor, req, [&, req](lt::disk_buffer_holder h, lt::storage_error const& ec)
+					in_flight.insert(job_idx);
+					++outstanding;
+					disk_io->async_read(tor, req, [&, req, job_idx](lt::disk_buffer_holder h, lt::storage_error const& ec)
 					{
+						TORRENT_ASSERT(in_flight.count(job_idx));
+						in_flight.erase(job_idx);
+						TORRENT_ASSERT(outstanding > 0);
 						--outstanding;
 						++job_counter;
 						if (ec)
@@ -251,8 +300,7 @@ int run_test(test_case const& t)
 							throw std::runtime_error("read buffer mismatch!");
 						}
 					});
-
-					++outstanding;
+					++job_idx;
 				}
 			}
 
@@ -263,9 +311,14 @@ int run_test(test_case const& t)
 
 				generate_block_fill(req, {write_buffer.data(), lt::default_block_size});
 
+				in_flight.insert(job_idx);
+				++outstanding;
 				disk_io->async_write(tor, req, write_buffer.data()
-					, {}, [&](lt::storage_error const& ec)
+					, {}, [&, job_idx](lt::storage_error const& ec)
 					{
+						TORRENT_ASSERT(in_flight.count(job_idx));
+						in_flight.erase(job_idx);
+						TORRENT_ASSERT(outstanding > 0);
 						--outstanding;
 						++job_counter;
 						if (ec)
@@ -276,6 +329,7 @@ int run_test(test_case const& t)
 							throw std::runtime_error("async_write failed");
 						}
 					});
+				++job_idx;
 				if (t.flags & test_mode::read_random_order)
 				{
 					std::uniform_int_distribution<> d(0, blocks_to_read.end_index());
@@ -292,28 +346,37 @@ int run_test(test_case const& t)
 					std::uniform_int_distribution<> d(0, blocks_to_read.end_index());
 					blocks_to_read.insert(blocks_to_read.begin() + d(random_engine), req);
 				}
-
-				++outstanding;
 			}
 
 			if ((t.flags & test_mode::flush_files) && (job_counter % 500) == 499)
 			{
-				disk_io->async_release_files(tor, [&]()
+				in_flight.insert(job_idx);
+				++outstanding;
+				disk_io->async_release_files(tor, [&, job_idx]()
 				{
+					TORRENT_ASSERT(in_flight.count(job_idx));
+					in_flight.erase(job_idx);
+					TORRENT_ASSERT(outstanding > 0);
 					--outstanding;
 					++job_counter;
 				});
+				++job_idx;
 			}
 
 			if ((t.flags & test_mode::clear_pieces) && (job_counter % 300) == 299)
 			{
 				lt::piece_index_t const p = blocks_to_write.front().piece;
-				disk_io->async_clear_piece(tor, p, [&](lt::piece_index_t)
+				in_flight.insert(job_idx);
+				++outstanding;
+				disk_io->async_clear_piece(tor, p, [&, job_idx](lt::piece_index_t)
 					{
+					TORRENT_ASSERT(in_flight.count(job_idx));
+					in_flight.erase(job_idx);
+					TORRENT_ASSERT(outstanding > 0);
 					--outstanding;
 					++job_counter;
 					});
-				++outstanding;
+				++job_idx;
 				// TODO: technically all blocks for this piece should be added
 				// to blocks_to_write again here
 			}
@@ -397,18 +460,18 @@ int main(int argc, char const* argv[])
 		namespace tm = test_mode;
 
 		test_case tests[] = {
-			// files, queue, threads, read-mult, pool, flags
-			{20, 32, 16, 3, 10, tm::sparse | tm::even_file_sizes},
-			{20, 32, 16, 3, 10, tm::sparse},
-			{20, 32, 16, 3, 10, tm::sparse | tm::read_random_order},
-			{20, 32, 16, 3, 10, tm::sparse | tm::read_random_order | tm::even_file_sizes},
-			{20, 32, 16, 3, 10, tm::flush_files | tm::sparse | tm::read_random_order | tm::even_file_sizes},
+			// files, queue, threads, read-mult, pool, flags, disk_backend
+			{20, 32, 16, 3, 10, tm::sparse | tm::even_file_sizes, "default"},
+			{20, 32, 16, 3, 10, tm::sparse, "default"},
+			{20, 32, 16, 3, 10, tm::sparse | tm::read_random_order, "default"},
+			{20, 32, 16, 3, 10, tm::sparse | tm::read_random_order | tm::even_file_sizes, "default"},
+			{20, 32, 16, 3, 10, tm::flush_files | tm::sparse | tm::read_random_order | tm::even_file_sizes, "default"},
 
 			// test with small pool size
-			{10, 32, 16, 3, 1, tm::sparse | tm::read_random_order},
+			{10, 32, 16, 3, 1, tm::sparse | tm::read_random_order, "default"},
 
 			// test with many threads pool size
-			{10, 32, 64, 3, 9, tm::sparse | tm::read_random_order},
+			{10, 32, 64, 3, 9, tm::sparse | tm::read_random_order, "default"},
 		};
 
 		int ret = 0;
@@ -421,7 +484,7 @@ int main(int argc, char const* argv[])
 	// strip program name
 	argc -= 1;
 	argv += 1;
-	test_case tc{20, 32, 16, 3, 10, test_mode::sparse};
+	test_case tc{20, 32, 16, 3, 10, test_mode::sparse, "default"};
 	while (argc > 0)
 	{
 		lt::string_view opt(argv[0]);
@@ -450,6 +513,8 @@ int main(int argc, char const* argv[])
 				tc.read_multiplier = std::atoi(argv[1]);
 			else if (opt == "-p")
 				tc.file_pool_size = std::atoi(argv[1]);
+			else if (opt == "-d")
+				tc.disk_backend = argv[1];
 			else
 			{
 				std::cerr << "unknown option \"" << opt << "\"\n";

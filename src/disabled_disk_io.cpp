@@ -42,7 +42,7 @@ struct TORRENT_EXTRA_EXPORT disabled_disk_io final
 	storage_holder new_torrent(storage_params const&
 		, std::shared_ptr<void> const&) override
 	{
-		return storage_holder(storage_index_t(0), *this);
+		return {storage_index_t(0), *this};
 	}
 
 	void remove_torrent(storage_index_t) override {}
@@ -156,6 +156,9 @@ struct TORRENT_EXTRA_EXPORT disabled_disk_io final
 	// since we just have a single zeroed buffer, we don't need to free anything
 	// here. The buffer is owned by the disabled_disk_io object itself
 	void free_disk_buffer(char*) override {}
+#if TORRENT_DEBUG_BUFFER_POOL
+	void rename_buffer(char*, char const*) override {}
+#endif
 
 	std::vector<open_file_state> get_status(storage_index_t) const override
 	{ return {}; }

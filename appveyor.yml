@@ -43,16 +43,16 @@ install:
   - if not defined ssl_include ( set ssl_include=c:\ )
   - if not defined ssl_root_dir ( set ssl_root_dir=c:\ )
   - cd %ROOT_DIRECTORY%
-  - set BOOST_ROOT=c:\Libraries\boost_1_77_0
+  - set BOOST_ROOT=c:\Libraries\boost_1_83_0
   - set BOOST_BUILD_PATH=%BOOST_ROOT%\tools\build
   - echo %BOOST_ROOT%
   - echo %BOOST_BUILD_PATH%
   - set PATH=%PATH%;%BOOST_BUILD_PATH%
-  - ps: '"using msvc ;`nusing python : 3.7 : c:\\Python37-x64 : c:\\Python37-x64\\include : c:\\Python37-x64\\libs ;`n" | Set-Content $env:HOMEDRIVE\$env:HOMEPATH\user-config.jam'
+  - ps: '"using msvc ;`nusing python : 3.8 : c:\\Python38-x64 : c:\\Python38-x64\\include : c:\\Python38-x64\\libs ;`n" | Set-Content $env:HOMEDRIVE\$env:HOMEPATH\user-config.jam'
   - type %HOMEDRIVE%%HOMEPATH%\user-config.jam
   - cd %ROOT_DIRECTORY%
-  - set PATH=c:\Python37-x64;%PATH%
-  - set PYTHON_INTERPRETER=c:\Python37-x64\python.exe
+  - set PATH=c:\Python38-x64;%PATH%
+  - set PYTHON_INTERPRETER=c:\Python38-x64\python.exe
   - python --version
   - python -m pip install websockets
   - echo %ROOT_DIRECTORY%
@@ -83,7 +83,7 @@ build_script:
     b2.exe --hash openssl-lib=%ssl_lib% openssl-include=%ssl_include% warnings=all %compiler% address-model=%model% picker-debugging=on invariant-checks=full variant=%variant% link=shared crypto=%crypto% webtorrent=%webtorrent% asserts=on export-extra=on windows-api=%api% windows-version=win10 libtorrent-link=shared stage_module stage_dependencies
     )
   - if defined python_dist (
-    c:\Python37-x64\python.exe setup.py bdist --format=msi
+    c:\Python38-x64\python.exe setup.py bdist --format=msi
     )
 
   # minimal support for cmake build
@@ -100,6 +100,7 @@ build_script:
 
 test_script:
   - cd %ROOT_DIRECTORY%\test
+  - set PATH=%PATH%;c:\OpenSSL-v111-Win64\bin
   - if defined tests (
     appveyor-retry b2.exe -l500 --hash openssl-lib=%ssl_lib% openssl-include=%ssl_include% warnings=all warnings-as-errors=on %compiler% address-model=%model% picker-debugging=on invariant-checks=full variant=%variant% link=shared crypto=%crypto% webtorrent=%webtorrent% asserts=on export-extra=on windows-api=%api% windows-version=win10 deterministic-tests
     )

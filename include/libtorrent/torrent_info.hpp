@@ -50,22 +50,30 @@ namespace aux {
 
 	// internal, exposed for the unit test
 	TORRENT_EXTRA_EXPORT void sanitize_append_path_element(std::string& path
-		, string_view element);
+		, string_view element, bool force_element = false);
 	TORRENT_EXTRA_EXPORT bool verify_encoding(std::string& target);
 
+#if TORRENT_ABI_VERSION < 4
 	struct internal_drained_state
 	{
 		aux::vector<lt::announce_entry> urls;
 		std::vector<web_seed_entry> web_seeds;
 		std::vector<std::pair<std::string, int>> nodes;
 	};
+#endif
 }
 
 	// hidden
+#if TORRENT_ABI_VERSION < 4
 	class from_span_t {};
+#endif
+	class from_info_section_t {};
 
 	// used to disambiguate a bencoded buffer and a filename
+#if TORRENT_ABI_VERSION < 4
 	extern TORRENT_EXPORT from_span_t from_span;
+#endif
+	extern TORRENT_EXPORT from_info_section_t from_info_section;
 
 	// this object holds configuration options for limits to use when loading
 	// torrents. They are meant to prevent loading potentially malicious torrents
@@ -93,13 +101,14 @@ namespace aux {
 
 	using torrent_info_flags_t = flags::bitfield_flag<std::uint8_t, struct torrent_info_flags_tag>;
 
-TORRENT_VERSION_NAMESPACE_3
+TORRENT_VERSION_NAMESPACE_4
 
 	// the torrent_info class holds the information found in a .torrent file.
 	class TORRENT_EXPORT torrent_info
 	{
 	public:
 
+#if TORRENT_ABI_VERSION < 4
 		// The constructor that takes an info-hash will initialize the info-hash
 		// to the given value, but leave all other fields empty. This is used
 		// internally when downloading torrents without the metadata. The
@@ -135,39 +144,54 @@ TORRENT_VERSION_NAMESPACE_3
 		// string literals. There is an object in the libtorrent namespace of this
 		// type called ``from_span``.
 #ifndef BOOST_NO_EXCEPTIONS
+		TORRENT_DEPRECATED
 		explicit torrent_info(bdecode_node const& torrent_file);
-		torrent_info(char const* buffer, int size)
-			: torrent_info(span<char const>{buffer, size}, from_span) {}
+		TORRENT_DEPRECATED
+		torrent_info(char const* buffer, int size);
+		TORRENT_DEPRECATED
 		explicit torrent_info(span<char const> buffer, from_span_t);
+		TORRENT_DEPRECATED
 		explicit torrent_info(std::string const& filename);
+		TORRENT_DEPRECATED
 		torrent_info(std::string const& filename, load_torrent_limits const& cfg);
+		TORRENT_DEPRECATED
 		torrent_info(span<char const> buffer, load_torrent_limits const& cfg, from_span_t);
+		TORRENT_DEPRECATED
 		torrent_info(bdecode_node const& torrent_file, load_torrent_limits const& cfg);
 #endif // BOOST_NO_EXCEPTIONS
-		torrent_info(torrent_info const& t);
-		explicit torrent_info(info_hash_t const& info_hash);
+		TORRENT_DEPRECATED
 		torrent_info(bdecode_node const& torrent_file, error_code& ec);
-		torrent_info(char const* buffer, int size, error_code& ec)
-			: torrent_info(span<char const>{buffer, size}, ec, from_span) {}
+		TORRENT_DEPRECATED
+		torrent_info(char const* buffer, int size, error_code& ec);
+		TORRENT_DEPRECATED
 		torrent_info(span<char const> buffer, error_code& ec, from_span_t);
+		TORRENT_DEPRECATED
 		torrent_info(std::string const& filename, error_code& ec);
+#endif
+
+		explicit torrent_info(info_hash_t const& info_hash);
+
+		torrent_info(torrent_info const& t);
 
 #if TORRENT_ABI_VERSION == 1
 #ifndef BOOST_NO_EXCEPTIONS
 		TORRENT_DEPRECATED
-		torrent_info(char const* buffer, int size, int)
-			: torrent_info(span<char const>{buffer, size}, from_span) {}
+		torrent_info(char const* buffer, int size, int);
 #endif
 		TORRENT_DEPRECATED
-		torrent_info(bdecode_node const& torrent_file, error_code& ec, int)
-			: torrent_info(torrent_file, ec) {}
+		torrent_info(bdecode_node const& torrent_file, error_code& ec, int);
 		TORRENT_DEPRECATED
-		torrent_info(std::string const& filename, error_code& ec, int)
-			: torrent_info(filename, ec) {}
+		torrent_info(std::string const& filename, error_code& ec, int);
 		TORRENT_DEPRECATED
-		torrent_info(char const* buffer, int size, error_code& ec, int)
-			: torrent_info(span<char const>{buffer, size}, ec, from_span) {}
+		torrent_info(char const* buffer, int size, error_code& ec, int);
 #endif // TORRENT_ABI_VERSION
+
+		// Construct a torrent_info object from the parsed info-section
+		// pointed to by `info_section`. The info-section buffer will be copied
+		// into torrent_info.
+		torrent_info(bdecode_node const& info_section, error_code& ec
+			, load_torrent_limits const& cfg
+			, from_info_section_t);
 
 		// frees all storage associated with this torrent_info object
 		~torrent_info();
@@ -177,29 +201,42 @@ TORRENT_VERSION_NAMESPACE_3
 		torrent_info& operator=(torrent_info&&);
 
 		// The file_storage object contains the information on how to map the
-		// pieces to files. It is separated from the torrent_info object because
-		// when creating torrents a storage object needs to be created without
-		// having a torrent file. When renaming files in a storage, the storage
-		// needs to make its own copy of the file_storage in order to make its
-		// mapping differ from the one in the torrent file.
+		// pieces to files. It is separated from the torrent_info object as the
+		// disk I/O subsystem only needs access to file names and sizes.
+		// The file_storage object is immutable, renamed files are recorded
+		// separately. ``layout()`` returns the original filenames, as found in
+		// the .torrent file. Files may be renamed to de-duplicate names, or to
+		// correct invalid filenames.
 		//
+		// For more information on the file_storage object, see the separate
+		// document on how to create torrents.
+		file_storage const& layout() const;
+
+		// internal
+		// used internally for backwards compatibility with remap_files()
+		file_storage const& files_impl() const
+		{
+#if TORRENT_ABI_VERSION < 4
+			return m_modified_files ? *m_modified_files : m_files;
+#else
+			return m_files;
+#endif
+		}
+
+#if TORRENT_ABI_VERSION < 4
 		// ``orig_files()`` returns the original (unmodified) file storage for
 		// this torrent. This is used by the web server connection, which needs
 		// to request files with the original names. Filename may be changed using
 		// ``torrent_info::rename_file()``.
 		//
-		// For more information on the file_storage object, see the separate
-		// document on how to create torrents.
-		file_storage const& files() const { return m_files; }
+		TORRENT_DEPRECATED
 		file_storage const& orig_files() const;
+		TORRENT_DEPRECATED
+		file_storage const& files() const;
 
 		// Renames the file with the specified index to the new name. The new
 		// filename is reflected by the ``file_storage`` returned by ``files()``
 		// but not by the one returned by ``orig_files()``.
-		//
-		// If you want to rename the base name of the torrent (for a multi file
-		// torrent), you can copy the ``file_storage`` (see files() and
-		// orig_files() ), change the name, and then use `remap_files()`_.
 		//
 		// The ``new_filename`` can both be a relative path, in which case the
 		// file name is relative to the ``save_path`` of the torrent. If the
@@ -207,6 +244,7 @@ TORRENT_VERSION_NAMESPACE_3
 		// == true``), then the file is detached from the ``save_path`` of the
 		// torrent. In this case the file is not moved when move_storage() is
 		// invoked.
+		TORRENT_DEPRECATED
 		void rename_file(file_index_t index, std::string const& new_filename);
 
 		// .. warning::
@@ -223,9 +261,9 @@ TORRENT_VERSION_NAMESPACE_3
 		//
 		// The new specified ``file_storage`` must have the exact same size as
 		// the current one.
+		TORRENT_DEPRECATED
 		void remap_files(file_storage const& f);
 
-#if TORRENT_ABI_VERSION < 4
 		// ``add_tracker()`` adds a tracker to the announce-list. The ``tier``
 		// determines the order in which the trackers are to be tried.
 		// The ``trackers()`` function will return a sorted vector of
@@ -247,10 +285,10 @@ TORRENT_VERSION_NAMESPACE_3
 		std::vector<announce_entry> const& trackers() const { return m_urls; }
 		TORRENT_DEPRECATED
 		void clear_trackers();
-#endif
 
 		// internal
 		std::vector<announce_entry> const& internal_trackers() const { return m_urls; }
+#endif
 
 		// These two functions are related to `BEP 38`_ (mutable torrents). The
 		// vectors returned from these correspond to the "similar" and
@@ -302,13 +340,13 @@ TORRENT_VERSION_NAMESPACE_3
 		void add_http_seed(std::string const& url
 			, std::string const& extern_auth = std::string()
 			, web_seed_entry::headers_t const& extra_headers = web_seed_entry::headers_t());
-#endif
 
 		// internal
 		aux::internal_drained_state _internal_drain() {
 			return aux::internal_drained_state{std::move(m_urls), std::move(m_web_seeds), std::move(m_nodes)};
 		}
 		std::vector<web_seed_entry> const& internal_web_seeds() const { return m_web_seeds; }
+#endif
 
 		// ``total_size()`` returns the total number of bytes the torrent-file
 		// represents. Note that this is the number of pieces times the piece
@@ -378,21 +416,21 @@ TORRENT_VERSION_NAMESPACE_3
 		// (``file_entry``) using the ``file_storage::at`` function, which takes
 		// an index and an iterator.
 		TORRENT_DEPRECATED
-		file_iterator begin_files() const { return m_files.begin_deprecated(); }
+		file_iterator begin_files() const { return files_impl().begin_deprecated(); }
 		TORRENT_DEPRECATED
-		file_iterator end_files() const { return m_files.end_deprecated(); }
-		reverse_file_iterator rbegin_files() const { return m_files.rbegin_deprecated(); }
+		file_iterator end_files() const { return files_impl().end_deprecated(); }
+		reverse_file_iterator rbegin_files() const { return files_impl().rbegin_deprecated(); }
 		TORRENT_DEPRECATED
-		reverse_file_iterator rend_files() const { return m_files.rend_deprecated(); }
+		reverse_file_iterator rend_files() const { return files_impl().rend_deprecated(); }
 
 		TORRENT_DEPRECATED
 		file_iterator file_at_offset(std::int64_t offset) const
-		{ return m_files.file_at_offset_deprecated(offset); }
+		{ return files_impl().file_at_offset_deprecated(offset); }
 
 #include "libtorrent/aux_/disable_deprecation_warnings_push.hpp"
 
 		TORRENT_DEPRECATED
-		file_entry file_at(int index) const { return m_files.at_deprecated(index); }
+		file_entry file_at(int index) const { return files_impl().at_deprecated(index); }
 
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 
@@ -401,7 +439,7 @@ TORRENT_VERSION_NAMESPACE_3
 		// If you need index-access to files you can use the ``num_files()`` along
 		// with the ``file_path()``, ``file_size()``-family of functions to access
 		// files using indices.
-		int num_files() const { return m_files.num_files(); }
+		int num_files() const { return files_impl().num_files(); }
 
 		// This function will map a piece index, a byte offset within that piece
 		// and a size (in bytes) into the corresponding files with offsets where
@@ -410,7 +448,7 @@ TORRENT_VERSION_NAMESPACE_3
 			, std::int64_t offset, int size) const
 		{
 			TORRENT_ASSERT(is_loaded());
-			return m_files.map_block(piece, offset, size);
+			return files_impl().map_block(piece, offset, size);
 		}
 
 		// This function will map a range in a specific file into a range in the
@@ -424,7 +462,7 @@ TORRENT_VERSION_NAMESPACE_3
 		peer_request map_file(file_index_t const file, std::int64_t offset, int size) const
 		{
 			TORRENT_ASSERT(is_loaded());
-			return m_files.map_file(file, offset, size);
+			return files_impl().map_file(file, offset, size);
 		}
 
 #if TORRENT_ABI_VERSION == 1
@@ -456,11 +494,15 @@ TORRENT_VERSION_NAMESPACE_3
 		// or not it has a tracker whose URL domain name ends with ".i2p". i2p
 		// torrents disable the DHT and local peer discovery as well as talking
 		// to peers over anything other than the i2p network.
+		// This is not reliably set for torrents created via resume data or
+		// magnet links. Prefer using torrent::is_i2p() instead.
 		bool is_i2p() const { return bool(m_flags & i2p); }
 
+#if TORRENT_ABI_VERSION < 4
 		// internal
-		bool v2_piece_hashes_verified() const { return bool(m_flags & v2_has_piece_hashes); }
+		bool v2_piece_hashes_verified() const { return bool(m_flags & deprecated_v2_has_piece_hashes); }
 		void set_piece_layers(aux::vector<aux::vector<char>, file_index_t> pl);
+#endif
 
 		// returns the piece size of file with ``index``. This will be the same as piece_length(),
 		// except for the last piece, which may be shorter.
@@ -511,36 +553,47 @@ TORRENT_VERSION_NAMESPACE_3
 
 		// ``name()`` returns the name of the torrent.
 		// name contains UTF-8 encoded string.
-		const std::string& name() const { return m_files.name(); }
+		const std::string& name() const { return files_impl().name(); }
 
+#if TORRENT_ABI_VERSION < 4
 		// ``creation_date()`` returns the creation date of the torrent as time_t
 		// (`posix time`_). If there's no time stamp in the torrent file, 0 is
 		// returned.
 		// .. _`posix time`: http://www.opengroup.org/onlinepubs/009695399/functions/time.html
+		TORRENT_DEPRECATED
 		std::time_t creation_date() const
 		{ return m_creation_date; }
 
 		// ``creator()`` returns the creator string in the torrent. If there is
 		// no creator string it will return an empty string.
+		TORRENT_DEPRECATED
 		const std::string& creator() const
 		{ return m_created_by; }
 
 		// ``comment()`` returns the comment associated with the torrent. If
 		// there's no comment, it will return an empty string.
 		// comment contains UTF-8 encoded string.
+		TORRENT_DEPRECATED
 		const std::string& comment() const
 		{ return m_comment; }
 
 		// If this torrent contains any DHT nodes, they are put in this vector in
 		// their original form (host name and port number).
+		TORRENT_DEPRECATED
 		std::vector<std::pair<std::string, int>> const& nodes() const
 		{ return m_nodes; }
 
 		// This is used when creating torrent. Use this to add a known DHT node.
 		// It may be used, by the client, to bootstrap into the DHT network.
+		TORRENT_DEPRECATED
 		void add_node(std::pair<std::string, int> const& node)
 		{ m_nodes.push_back(node); }
+#endif
 
+#if TORRENT_ABI_VERSION < 4
+		// This function is deprecated. Instead use the constructor that takes a
+		// from_info_section_t.
+		//
 		// populates the torrent_info by providing just the info-dict buffer.
 		// This is used when loading a torrent from a magnet link for instance,
 		// where we only have the info-dict. The bdecode_node ``e`` points to a
@@ -551,7 +604,9 @@ TORRENT_VERSION_NAMESPACE_3
 		// the limit. To load large torrents, this limit may also need to be
 		// raised in settings_pack::max_piece_count and in calls to
 		// read_resume_data().
+		TORRENT_DEPRECATED
 		bool parse_info_section(bdecode_node const& info, error_code& ec, int max_pieces);
+#endif
 
 #if TORRENT_ABI_VERSION < 3
 		TORRENT_DEPRECATED
@@ -575,13 +630,14 @@ TORRENT_VERSION_NAMESPACE_3
 
 		// ``metadata()`` returns a the raw info section of the torrent file. The size
 		// of the metadata is returned by ``metadata_size()``.
-		// Even though the bytes returned by ``metadata()`` are not ``const``,
-		// they must not be modified.
 		TORRENT_DEPRECATED
 		int metadata_size() const { return m_info_section_size; }
 		TORRENT_DEPRECATED
-		boost::shared_array<char> metadata() const;
+		boost::shared_array<char const> metadata() const;
 #endif
+
+#if TORRENT_ABI_VERSION < 4
+		// deprecated: use add_torrent_params instead, which has merkle_trees
 
 		// return the bytes of the piece layer hashes for the specified file. If
 		// the file doesn't have a piece layer, an empty span is returned.
@@ -590,18 +646,33 @@ TORRENT_VERSION_NAMESPACE_3
 		// the files "root hash" is the hash of the file and is not saved
 		// separately in the "piece layers" field, but this function still
 		// returns the root hash of the file in that case.
+		TORRENT_DEPRECATED
 		span<char const> piece_layer(file_index_t) const;
 
 		// clears the piece layers from the torrent_info. This is done by the
 		// session when a torrent is added, to avoid storing it twice. The piece
 		// layer (or other hashes part of the merkle tree) are stored in the
 		// internal torrent object.
+		TORRENT_DEPRECATED
 		void free_piece_layers();
 
 		// internal
 		void internal_set_creator(string_view);
-		void internal_set_creation_date(std::time_t);
 		void internal_set_comment(string_view);
+		void internal_set_creation_date(std::time_t);
+#endif
+
+		// internal
+		void internal_set_collections(std::vector<std::string> c)
+		{
+			m_owned_collections = std::move(c);
+		}
+
+		// internal
+		void internal_set_similar(std::vector<sha1_hash> s)
+		{
+			m_owned_similar_torrents = std::move(s);
+		}
 
 #if TORRENT_ABI_VERSION <= 2
 		// support for BEP 30 merkle torrents has been removed
@@ -624,41 +695,41 @@ TORRENT_VERSION_NAMESPACE_3
 		bool is_merkle_torrent() const { return !m_merkle_tree.empty(); }
 #endif
 
-	private:
-
-		// populate the piece layers from the metadata
-		bool parse_piece_layers(bdecode_node const& e, error_code& ec);
-
+#if TORRENT_ABI_VERSION < 4
+		// internal
 		bool parse_torrent_file(bdecode_node const& torrent_file, error_code& ec
 			, load_torrent_limits const&);
+#endif
 
-		bool resolve_duplicate_filenames(int max_duplicate_filenames, error_code& ec);
+	private:
 
-		// the slow path, in case we detect/suspect a name collision
-		bool resolve_duplicate_filenames_slow(int max_duplicate_filenames
-			, error_code& ec);
+		void parse_info_section_impl(bdecode_node const& info, error_code& ec, int max_pieces);
 
 #if TORRENT_USE_INVARIANT_CHECKS
 		friend struct ::lt::invariant_access;
 		void check_invariant() const;
 #endif
 
+#if TORRENT_ABI_VERSION < 4
 		void copy_on_write();
+#endif
 
 		file_storage m_files;
 
-		// if m_files is modified, it is first copied into
-		// m_orig_files so that the original name and
-		// filenames are preserved.
+#if TORRENT_ABI_VERSION < 4
+		// if files are renamed or remapped, we make a copy of m_files and
+		// modify the copy. The file_storage object is supposed to be immutable,
+		// so we do this to stay backwards compatible.
 		// the original filenames are required to build URLs for web seeds for
 		// instance
-		aux::copy_ptr<const file_storage> m_orig_files;
+		aux::copy_ptr<file_storage> m_modified_files;
 
 		// the URLs to the trackers
 		aux::vector<announce_entry> m_urls;
 		std::vector<web_seed_entry> m_web_seeds;
 		// dht nodes to add to the routing table/bootstrap from
 		std::vector<std::pair<std::string, int>> m_nodes;
+#endif
 
 		// the info-hashes (20 bytes each) in the "similar" key. These are offsets
 		// into the info dict buffer.
@@ -686,18 +757,18 @@ TORRENT_VERSION_NAMESPACE_3
 		aux::vector<sha1_hash> m_merkle_tree;
 #endif
 
+#if TORRENT_ABI_VERSION < 4
 		// v2 merkle tree for each file
 		// the actual hash buffers are always divisible by 32 (sha256_hash::size())
 		aux::vector<aux::vector<char>, file_index_t> m_piece_layers;
+#endif
 
 		// this is a copy of the info section from the torrent.
 		// it use maintained in this flat format in order to
 		// make it available through the metadata extension
-		// TODO: change the type to std::shared_ptr<char const> in C++17
-		// it is used as if immutable, it cannot be const for technical reasons
-		// right now.
-		boost::shared_array<char> m_info_section;
+		boost::shared_array<char const> m_info_section;
 
+#if TORRENT_ABI_VERSION < 4
 		// if a comment is found in the torrent file
 		// this will be set to that comment
 		std::string m_comment;
@@ -706,14 +777,15 @@ TORRENT_VERSION_NAMESPACE_3
 		// to create the torrent file
 		std::string m_created_by;
 
-		// the info section parsed. points into m_info_section
-		// parsed lazily
-		mutable bdecode_node m_info_dict;
-
 		// if a creation date is found in the torrent file
 		// this will be set to that, otherwise it'll be
 		// 1970, Jan 1
 		std::time_t m_creation_date = 0;
+#endif
+
+		// the info section parsed. points into m_info_section
+		// parsed lazily
+		mutable bdecode_node m_info_dict;
 
 		// the hash(es) that identify this torrent
 		info_hash_t m_info_hash;
@@ -746,13 +818,19 @@ TORRENT_VERSION_NAMESPACE_3
 		// dictionary
 		static inline constexpr torrent_info_flags_t ssl_torrent = 3_bit;
 
+#if TORRENT_ABI_VERSION < 4
 		// v2 piece hashes were loaded from the torrent file and verified
+		static inline constexpr torrent_info_flags_t deprecated_v2_has_piece_hashes = 4_bit;
+
+		// hidden
+		TORRENT_DEPRECATED
 		static inline constexpr torrent_info_flags_t v2_has_piece_hashes = 4_bit;
+#endif
 
 		torrent_info_flags_t m_flags{};
 	};
 
-TORRENT_VERSION_NAMESPACE_3_END
+TORRENT_VERSION_NAMESPACE_4_END
 
 }
 

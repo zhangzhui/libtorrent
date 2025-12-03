@@ -23,7 +23,6 @@ see LICENSE file.
 #include "libtorrent/aux_/invariant_check.hpp"
 #include "libtorrent/performance_counters.hpp"
 #include "libtorrent/io_context.hpp"
-#include "libtorrent/aux_/storage_utils.hpp" // for iovec_t
 #include <cstdint>
 #include <limits>
 
@@ -180,6 +179,30 @@ packet_ptr utp_socket_impl::acquire_packet(int const allocate)
 void utp_socket_impl::release_packet(packet_ptr p)
 {
 	m_sm.release_packet(std::move(p));
+}
+
+void utp_socket_impl::insert_packet(packet_ptr p)
+{
+	// If we're stalled we'll need to resend
+	if (m_stalled)
+	{
+		p->need_resend = true;
+		m_needs_resend.push_back(p.get());
+	}
+
+	packet_ptr old = m_outbuf.insert(m_seq_nr, std::move(p));
+	if (old)
+	{
+		TORRENT_ASSERT(reinterpret_cast<utp_header*>(old->buf)->seq_nr == m_seq_nr);
+		if (old->need_resend)
+		{
+			auto entry = std::find(m_needs_resend.begin(), m_needs_resend.end(), &*old);
+			// old should always exist in m_needs_resend, but we check just in case
+			if (entry != m_needs_resend.end()) m_needs_resend.erase(entry);
+		}
+		else m_bytes_in_flight -= old->size - old->header_size;
+		release_packet(std::move(old));
+	}
 }
 
 void utp_socket_impl::abort()
@@ -1000,6 +1023,7 @@ void utp_socket_impl::send_syn()
 			m_sm.subscribe_writable(this);
 		}
 		p->need_resend = true;
+		m_needs_resend.push_back(p.get());
 	}
 	else if (ec)
 	{
@@ -1440,13 +1464,10 @@ bool utp_socket_impl::send_pkt(int const flags)
 
 	// first see if we need to resend any packets
 
-	// TODO: this loop is not very efficient. It could be fixed by having
-	// a separate list of sequence numbers that need resending
-	for (int i = (m_acked_seq_nr + 1) & ACK_MASK; i != m_seq_nr; i = (i + 1) & ACK_MASK)
+	while (!m_needs_resend.empty())
 	{
-		packet* p = m_outbuf.at(aux::numeric_cast<packet_buffer::index_type>(i));
-		if (!p) continue;
-		if (!p->need_resend) continue;
+		packet *p = m_needs_resend.front();
+		TORRENT_ASSERT(p->need_resend);
 		if (!resend_packet(p))
 		{
 			// we couldn't resend the packet. It probably doesn't
@@ -1461,7 +1482,7 @@ bool utp_socket_impl::send_pkt(int const flags)
 		}
 
 		// don't fast-resend this packet
-		if (m_fast_resend_seq_nr == i)
+		if (m_fast_resend_seq_nr == reinterpret_cast<utp_header*>(p->buf)->seq_nr)
 			m_fast_resend_seq_nr = (m_fast_resend_seq_nr + 1) & ACK_MASK;
 	}
 
@@ -1479,7 +1500,7 @@ bool utp_socket_impl::send_pkt(int const flags)
 	// for non MTU-probes, use the conservative packet size
 	int const effective_mtu = mtu_probe ? m_mtu : m_mtu_floor;
 
-	auto const close_reason = static_cast<std::uint32_t>(m_close_reason);
+	auto close_reason = static_cast<std::uint32_t>(m_close_reason);
 
 	int sack = 0;
 	if (m_inbuf.size())
@@ -1581,7 +1602,7 @@ bool utp_socket_impl::send_pkt(int const flags)
 
 		int const packet_size = header_size + payload_size;
 		p->size = std::uint16_t(packet_size);
-		p->header_size = std::uint16_t(packet_size - payload_size);
+		p->header_size = std::uint16_t(header_size);
 		p->num_transmissions = 0;
 #if TORRENT_USE_ASSERTS
 		p->num_fast_resend = 0;
@@ -1638,6 +1659,10 @@ bool utp_socket_impl::send_pkt(int const flags)
 		else
 			sack = 0;
 
+		// we should not add or update a close reason extension header on a
+		// nagle packet. It's a bit tricky to get all the cases right.
+		close_reason = 0;
+
 		std::int32_t const size_left = std::min({
 			p->allocated - p->size
 			, m_write_buffer_size
@@ -1681,6 +1706,7 @@ bool utp_socket_impl::send_pkt(int const flags)
 		*ptr++ = utp_no_extension;
 		*ptr++ = 4;
 		aux::write_uint32(close_reason, ptr);
+		TORRENT_ASSERT(ptr <= p->buf + p->header_size);
 	}
 
 	if (m_bytes_in_flight > 0
@@ -1838,10 +1864,6 @@ bool utp_socket_impl::send_pkt(int const flags)
 		TORRENT_ASSERT(p->mtu_probe == (m_seq_nr == m_mtu_seq)
 			|| m_seq_nr == 0);
 
-		// If we're stalled we'll need to resend
-		if (m_stalled)
-			p->need_resend = true;
-
 		// If this packet is undersized then note the sequenece number so we
 		// never have more than one undersized packet in flight at once
 		if (int(p->size) < std::min(int(p->allocated), effective_mtu))
@@ -1850,13 +1872,7 @@ bool utp_socket_impl::send_pkt(int const flags)
 		// release the buffer, we're saving it in the circular
 		// buffer of outgoing packets
 		int const new_in_flight = p->size - p->header_size;
-		packet_ptr old = m_outbuf.insert(m_seq_nr, std::move(p));
-		if (old)
-		{
-//			TORRENT_ASSERT(reinterpret_cast<utp_header*>(old->buf)->seq_nr == m_seq_nr);
-			if (!old->need_resend) m_bytes_in_flight -= old->size - old->header_size;
-			release_packet(std::move(old));
-		}
+		insert_packet(std::move(p));
 		TORRENT_ASSERT(h->seq_nr == m_seq_nr);
 		// we shouldn't be sending payload at sequence numbers past the FIN
 		TORRENT_ASSERT(state() != state_t::fin_sent);
@@ -1867,14 +1883,7 @@ bool utp_socket_impl::send_pkt(int const flags)
 	else if (flags & pkt_fin)
 	{
 		TORRENT_ASSERT(payload_size == 0);
-		// If we're stalled we'll need to resend
-		if (m_stalled) p->need_resend = true;
-		packet_ptr old = m_outbuf.insert(m_seq_nr, std::move(p));
-		if (old)
-		{
-			if (!old->need_resend) m_bytes_in_flight -= old->size - old->header_size;
-			release_packet(std::move(old));
-		}
+		insert_packet(std::move(p));
 	}
 	else
 	{
@@ -1969,6 +1978,7 @@ bool utp_socket_impl::resend_packet(packet* p, bool fast_resend)
 #if TORRENT_USE_ASSERTS
 	if (fast_resend) ++p->num_fast_resend;
 #endif
+	bool const need_resend = p->need_resend;
 	p->need_resend = false;
 	auto* h = reinterpret_cast<utp_header*>(p->buf);
 	// update packet header
@@ -2021,20 +2031,31 @@ bool utp_socket_impl::resend_packet(packet* p, bool fast_resend)
 		m_stalled = true;
 		m_sm.subscribe_writable(this);
 		p->need_resend = true;
+		if (!need_resend)
+			m_needs_resend.push_back(p);
 		m_bytes_in_flight -= p->size - p->header_size;
-	}
-	else if (ec)
-	{
-		m_error = ec;
-		set_state(state_t::error_wait);
-		test_socket_state();
-		return false;
 	}
 	else
 	{
-		m_sm.inc_stats_counter(counters::utp_packets_out);
-		++m_out_packets;
-		++p->num_transmissions;
+		if (need_resend)
+		{
+			auto entry = std::find(m_needs_resend.begin(), m_needs_resend.end(), p);
+			if (entry != m_needs_resend.end()) m_needs_resend.erase(entry);
+		}
+
+		if (ec)
+		{
+			m_error = ec;
+			set_state(state_t::error_wait);
+			test_socket_state();
+			return false;
+		}
+		else
+		{
+			m_sm.inc_stats_counter(counters::utp_packets_out);
+			++m_out_packets;
+			++p->num_transmissions;
+		}
 	}
 
 	return !m_stalled;
@@ -2141,9 +2162,14 @@ std::uint32_t utp_socket_impl::ack_packet(packet_ptr p, time_point const receive
 
 	// verify that the packet we're removing was in fact sent
 	// with the sequence number we expect
-//	TORRENT_ASSERT(reinterpret_cast<utp_header*>(p->buf)->seq_nr == seq_nr);
+	TORRENT_ASSERT(reinterpret_cast<utp_header*>(p->buf)->seq_nr == seq_nr);
 
-	if (!p->need_resend)
+	if (p->need_resend)
+	{
+		auto entry = std::find(m_needs_resend.begin(), m_needs_resend.end(), p.get());
+		if (entry != m_needs_resend.end()) m_needs_resend.erase(entry);
+	}
+	else
 	{
 		TORRENT_ASSERT(m_bytes_in_flight >= p->size - p->header_size);
 		m_bytes_in_flight -= p->size - p->header_size;
@@ -3436,6 +3462,7 @@ void utp_socket_impl::tick(time_point const now)
 			if (!p) continue;
 			if (p->need_resend) continue;
 			p->need_resend = true;
+			if (i != m_acked_seq_nr && i != m_seq_nr) m_needs_resend.push_back(p);
 			TORRENT_ASSERT(m_bytes_in_flight >= p->size - p->header_size);
 			m_bytes_in_flight -= p->size - p->header_size;
 			UTP_LOGV("%8p: Packet %d lost (timeout).\n", static_cast<void*>(this), i);

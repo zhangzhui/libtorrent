@@ -51,7 +51,7 @@ namespace {
 
 	std::string to_string(bitfield const& b)
 	{
-		return std::string(b.data(), std::size_t(b.num_bytes()));
+		return {b.data(), std::size_t(b.num_bytes())};
 	}
 }
 
@@ -286,7 +286,7 @@ namespace {
 
 		if (!atp.merkle_trees.empty())
 		{
-			file_storage const& fs = atp.ti->files();
+			file_storage const& fs = atp.ti->layout();
 			auto& trees = atp.merkle_trees;
 			if (int(trees.size()) != fs.num_files())
 				aux::throw_ex<system_error>(errors::torrent_missing_piece_layer);

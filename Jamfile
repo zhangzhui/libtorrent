@@ -36,18 +36,12 @@ else
 	local boost-include-path =
 		<include>/usr/local/opt/boost/include
 		<include>/opt/homebrew/include
-	;
+		;
 
-	# the names are decorated in MacPorts.
-	lib boost_system : : <target-os>darwin <name>boost_system-mt $(boost-lib-search-path)
-		: : $(boost-include-path) ;
+	lib system_boost_json : : <name>boost_json $(boost-lib-search-path) : : $(boost-include-path) ;
 
-	lib boost_system : : <name>boost_system ;
-
-	lib system_boost_json : : <target-os>darwin <name>boost_json $(boost-lib-search-path)
-		: : $(boost-include-path) ;
-
-	lib system_boost_json : : <name>boost_json ;
+	# boost_system is a header-only library now, but we still need to find the boost headers
+	alias boost_system : : : : $(boost-include-path) ;
 }
 
 alias shipped_boost_json : : <define>BOOST_JSON_HEADER_ONLY : : <include>./deps/json/include <define>BOOST_JSON_HEADER_ONLY ;
@@ -69,6 +63,17 @@ rule linking ( properties * )
 			|| <asio-debugging>on in $(properties) )
 	{
 		result += <library>dbghelp ;
+	}
+
+	if <target-os>windows in $(properties)
+	{
+		switch [ feature.get-values <windows-version> : $(properties) ]
+		{
+			case xp : result += <define>_WIN32_WINNT=0x0501 ;
+			case vista : result += <define>_WIN32_WINNT=0x0600 ;
+			case win7 : result += <define>_WIN32_WINNT=0x0601 ;
+			case win10 : result += <define>_WIN32_WINNT=0x0A00 ;
+		}
 	}
 
 	# gcrypt libraries, if enabled
@@ -180,7 +185,7 @@ rule linking ( properties * )
 	else if [ version.version-less $(jam-version) : 1990 0 ]
 	{
 		# the visibility feature was introduced in boost-1.69. This was close to
-		# when the verisoning scheme changed from year to (low) version numbers.
+		# when the versioning scheme changed from year to (low) version numbers.
 		# in boost-1.70
 		result += <visibility>hidden ;
 	}
@@ -292,6 +297,7 @@ rule warnings ( properties * )
 		result += <cxxflags>-Wno-alloca ;
 		result += <cxxflags>-Wno-global-constructors ;
 		result += <cxxflags>-Wno-poison-system-directories ;
+		result += <cxxflags>-Wno-missing-include-dirs ;
 # this warns on any global static object, which are used for error_category
 # objects
 		result += <cxxflags>-Wno-exit-time-destructors ;
@@ -308,6 +314,13 @@ rule warnings ( properties * )
 # these warnings should all be addressed. Either by transitioning to span and
 # array, or by suppressing the warning for specific code
 		result += <cxxflags>-Wno-unsafe-buffer-usage ;
+
+# different versions of clang disagree on how to warn about switch statements
+# you either get:
+# error: 'switch' missing 'default' label [-Werror,-Wswitch-default]
+# or:
+# error: default label in switch which covers all enumeration values [-Werror,-Wcovered-switch-default]
+		result += <cxxflags>-Wno-switch-default ;
 	}
 
 	if <toolset>gcc in $(properties)
@@ -316,8 +329,11 @@ rule warnings ( properties * )
 		result += <cflags>-Wextra ;
 		result += <cflags>-Wpedantic ;
 		result += <cflags>-Wvla ;
-		result += <cflags>-Wno-format-zero-length ;
-		result += <cxxflags>-Wno-noexcept-type ;
+		result += <cflags>-Wno-error=format-zero-length ;
+		result += <cxxflags>-Wno-error=noexcept-type ;
+		# these warnings seem to have a lot of false positives
+		result += <cxxflags>-Wno-error=stringop-overflow ;
+		result += <cxxflags>-Wno-error=array-bounds ;
 	}
 
 	if <toolset>msvc in $(properties)
@@ -379,7 +395,6 @@ rule building ( properties * )
 			result += <cxxflags>/permissive- ;
 		}
 	}
-
 
 	if <toolset>gcc in $(properties) && <target-os>windows in $(properties)
 	{
@@ -599,11 +614,7 @@ feature.compose <asserts>on : <define>TORRENT_USE_ASSERTS=1 ;
 feature.compose <asserts>production : <define>TORRENT_USE_ASSERTS=1 <define>TORRENT_PRODUCTION_ASSERTS=1 ;
 feature.compose <asserts>system : <define>TORRENT_USE_ASSERTS=1 <define>TORRENT_USE_SYSTEM_ASSERTS=1 ;
 
-feature windows-version : win7 win10 vista xp : composite propagated ;
-feature.compose <windows-version>vista : <define>_WIN32_WINNT=0x0600 ;
-feature.compose <windows-version>win7 : <define>_WIN32_WINNT=0x0601 ;
-feature.compose <windows-version>win10 : <define>_WIN32_WINNT=0x0A00 ;
-feature.compose <windows-version>xp : <define>_WIN32_WINNT=0x0501 ;
+feature windows-version : win10 vista xp win7 : composite propagated ;
 
 feature extensions : on off : composite propagated link-incompatible ;
 feature.compose <extensions>off : <define>TORRENT_DISABLE_EXTENSIONS ;
@@ -718,6 +729,13 @@ feature.compose <export-extra>on : <define>TORRENT_EXPORT_EXTRA ;
 
 feature debug-disk-thread : off on : composite propagated ;
 feature.compose <debug-disk-thread>on : <define>DEBUG_DISK_THREAD=1 ;
+
+feature debug-disk-pool : off on : composite propagated ;
+feature.compose <debug-disk-pool>on : <define>TORRENT_DEBUG_BUFFER_POOL=1 ;
+
+feature msvc-version-macro : off on : composite propagated link-incompatible ;
+# ask the compiler to correctly set __cplusplus version
+feature.compose <msvc-version-macro>on : <cxxflags>/Zc\:__cplusplus ;
 
 lib advapi32 : : <name>advapi32 ;
 lib user32 : : <name>user32 ;
@@ -843,6 +861,7 @@ SOURCES =
 	write_resume_data
 	receive_buffer
 	resolve_links
+	resolve_duplicate_filenames
 	session
 	session_params
 	session_handle
@@ -915,6 +934,7 @@ SOURCES =
 
 # -- extensions --
 	ut_pex
+	i2p_pex
 	ut_metadata
 	smart_ban
 	;
@@ -965,6 +985,9 @@ local usage-requirements =
 	<define>BOOST_ASIO_HAS_STD_CHRONO
 	<define>BOOST_ASIO_NO_DEPRECATED
 	<define>BOOST_SYSTEM_USE_UTF8
+	# C++17 removed std::unary_function which is used by boost/container_hash/hash.hpp
+	# in old versions of boost, without this define
+	<define>_HAS_AUTO_PTR_ETC=0
 	<conditional>@linking
 # msvc optimizations
 	<toolset>msvc,<variant>release:<linkflags>"/OPT:ICF=5"

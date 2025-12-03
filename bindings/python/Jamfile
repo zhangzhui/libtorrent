@@ -28,7 +28,7 @@ feature.compose <libtorrent-python-pic>on : <cxxflags>-fPIC ;
 feature python-install-path : : free path ;
 
 # when not specifying a custom install path, this controls whether to install
-# the python module in the system directory or user-specifc directory
+# the python module in the system directory or user-specific directory
 feature python-install-scope : user system : ;
 
 feature auto-ptr : off on : composite propagated ;
@@ -81,10 +81,12 @@ else
 		<search>/usr/local/lib
 		<search>/sw/lib
 		<search>/usr/g++/lib
+		<search>/opt/homebrew/lib
 		;
 
 	local boost-include-path =
 		<include>/opt/local/include
+		<include>/opt/homebrew/include
 		<include>/usr/local/include
 		<include>/usr/sfw/include
 	;
@@ -136,7 +138,7 @@ else
 		return ;
 	}
 
-	lib boost_python : : <tag>@boost_python_version : : $(boost-include-path) ;
+	lib boost_python : : <tag>@boost_python_version $(boost-lib-search-path) : : $(boost-include-path) ;
 	alias boost_python3 : boost_python ;
 }
 

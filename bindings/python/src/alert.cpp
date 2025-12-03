@@ -284,6 +284,21 @@ list get_dropped_alerts(alerts_dropped_alert const& alert)
     return ret;
 }
 
+object ep_variant(peer_alert const& pa)
+{
+	if (auto ip = std::get_if<peer_alert::ip_endpoint>(&pa.ep))
+	{
+		return boost::python::make_tuple(ip->address().to_string(), ip->port());
+	}
+
+	if (auto h = std::get_if<peer_alert::i2p_endpoint>(&pa.ep))
+	{
+		return object(bytes(h->data(), h->size()));
+	}
+	TORRENT_ASSERT_FAIL();
+	return object();
+}
+
 void bind_alert()
 {
     using boost::noncopyable;
@@ -409,7 +424,9 @@ void bind_alert()
     class_<torrent_alert, bases<alert>, noncopyable>(
         "torrent_alert", no_init)
         .add_property("handle", make_getter(&torrent_alert::handle, by_value()))
+#if TORRENT_ABI_VERSION < 4
         .add_property("torrent_name", &torrent_alert::torrent_name)
+#endif
         ;
 
     class_<tracker_alert, bases<torrent_alert>, noncopyable>(
@@ -419,6 +436,7 @@ void bind_alert()
 #endif
         .add_property("local_endpoint", make_getter(&tracker_alert::local_endpoint, by_value()))
         .def("tracker_url", &tracker_alert::tracker_url)
+        .def_readonly("version", &tracker_error_alert::version)
         ;
 
 #if TORRENT_ABI_VERSION == 1
@@ -451,7 +469,10 @@ void bind_alert()
 #if TORRENT_ABI_VERSION == 1
         .add_property("ip", make_getter(&peer_alert::ip, by_value()))
 #endif
+#if TORRENT_ABI_VERSION < 4
         .add_property("endpoint", make_getter(&peer_alert::endpoint, by_value()))
+#endif
+        .add_property("ep", &ep_variant)
         .def_readonly("pid", &peer_alert::pid)
     ;
     class_<tracker_error_alert, bases<tracker_alert>, noncopyable>(
@@ -464,28 +485,20 @@ void bind_alert()
         .def("failure_reason", &tracker_error_alert::failure_reason)
         .def_readonly("times_in_row", &tracker_error_alert::times_in_row)
         .def_readonly("error", &tracker_error_alert::error)
-        // TODO: move this to tracker_alert
-        .def_readonly("version", &tracker_error_alert::version)
         ;
 
     class_<tracker_warning_alert, bases<tracker_alert>, noncopyable>(
         "tracker_warning_alert", no_init)
-        // TODO: move this to tracker_alert
-        .def_readonly("version", &tracker_warning_alert::version)
         ;
 
     class_<tracker_reply_alert, bases<tracker_alert>, noncopyable>(
         "tracker_reply_alert", no_init)
         .def_readonly("num_peers", &tracker_reply_alert::num_peers)
-        // TODO: move this to tracker_alert
-        .def_readonly("version", &tracker_reply_alert::version)
         ;
 
     class_<tracker_announce_alert, bases<tracker_alert>, noncopyable>(
         "tracker_announce_alert", no_init)
         .def_readonly("event", &tracker_announce_alert::event)
-        // TODO: move this to tracker_alert
-        .def_readonly("version", &tracker_announce_alert::version)
         ;
 
     class_<hash_failed_alert, bases<torrent_alert>, noncopyable>(
@@ -635,7 +648,7 @@ void bind_alert()
         ;
 
 #if TORRENT_ABI_VERSION == 1
-    enum_<listen_succeeded_alert::socket_type_t>("listen_succeded_alert_socket_type_t")
+    enum_<listen_succeeded_alert::socket_type_t>("listen_succeeded_alert_socket_type_t")
        .value("tcp", listen_succeeded_alert::socket_type_t::tcp)
        .value("tcp_ssl", listen_succeeded_alert::socket_type_t::tcp_ssl)
        .value("udp", listen_succeeded_alert::socket_type_t::udp)

@@ -92,6 +92,12 @@ namespace {
 		if (info_hash2.size() == 32)
 			ret.info_hashes.v2.assign(info_hash2.data());
 
+		// time_t might be 32 bit if we're unlucky, but there isn't
+		// much to do about it
+		ret.creation_date = static_cast<std::time_t>(rd.dict_find_int_value("creation date", 0));
+		ret.created_by = rd.dict_find_string_value("created by", "");
+		ret.comment = rd.dict_find_string_value("comment", "");
+
 		bdecode_node const info = rd.dict_find_dict("info");
 		if (info)
 		{
@@ -106,23 +112,25 @@ namespace {
 			if ((!ret.info_hashes.has_v1() || resume_ih.v1 == ret.info_hashes.v1)
 				&& (!ret.info_hashes.has_v2() || resume_ih.v2 == ret.info_hashes.v2))
 			{
-				auto ti = std::make_shared<torrent_info>(resume_ih);
-
 				error_code err;
-				if (!ti->parse_info_section(info, err, piece_limit))
+				load_torrent_limits cfg{};
+				cfg.max_pieces = piece_limit;
+				auto ti = std::make_shared<torrent_info>(info, err, cfg, from_info_section);
+
+				if (err)
 				{
 					ec = err;
 				}
 				else
 				{
-					// time_t might be 32 bit if we're unlucky, but there isn't
-					// much to do about it
+#if TORRENT_ABI_VERSION < 4
 					ti->internal_set_creation_date(static_cast<std::time_t>(
 						rd.dict_find_int_value("creation date", 0)));
 					ti->internal_set_creator(rd.dict_find_string_value("created by", ""));
 					ti->internal_set_comment(rd.dict_find_string_value("comment", ""));
+#endif
+					ret.ti = std::move(ti);
 				}
-				ret.ti = std::move(ti);
 			}
 			else
 			{
@@ -444,7 +452,7 @@ namespace {
 		int pos;
 		bdecode_node rd = bdecode(buffer, ec, &pos, cfg.max_decode_depth
 			, cfg.max_decode_tokens);
-		if (ec) return add_torrent_params();
+		if (ec) return {};
 
 		return read_resume_data(rd, ec, cfg.max_pieces);
 	}

@@ -31,6 +31,10 @@ concurrency:
    group: ${{ github.ref }}-${{ github.workflow }}-${{ github.event_name }}
    cancel-in-progress: true
 
+env:
+   HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+   HOMEBREW_NO_AUTO_UPDATE: 1
+
 jobs:
 
   test:
@@ -43,17 +47,19 @@ jobs:
       # matching python versions
       matrix:
         include:
-          - os: ubuntu-20.04
-            python-version: 3.8
-          - os: macos-latest
+          - os: ubuntu-24.04
             python-version: "3.12"
-          - os: windows-2019
+          - os: macos-14
+            python-version: "3.13"
+          - os: windows-2022
             python-version: 3.6
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v5
       with:
         submodules: true
+        fetch-depth: 1
+        filter: tree:0
 
     # Note:
     #  - on mac and linux images, 'python' is python2 and 'python3' is
@@ -74,8 +80,8 @@ jobs:
     - name: dependencies (MacOS)
       if: runner.os == 'macOS'
       run: |
-        brew install boost-build boost boost-python3 python@3.12 openssl@1.1
-        export PATH=$(brew --prefix)/opt/python@3.12/bin:$PATH
+        brew install boost-build boost boost-python3 python@3.13 openssl@3 python-setuptools
+        export PATH=$(brew --prefix)/opt/python@3.13/bin:$PATH
 
     - name: update package lists (linux)
       if: runner.os == 'Linux'
@@ -100,7 +106,7 @@ jobs:
       if: runner.os == 'Windows'
       shell: cmd
       run: |
-        git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.78.0 https://github.com/boostorg/boost.git
+        git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.88.0 https://github.com/boostorg/boost.git
         cd boost
         bootstrap.bat
 
@@ -110,16 +116,6 @@ jobs:
       run: |
         cd boost
         .\b2 headers
-
-    - name: install openssl (windows)
-      if: runner.os == 'Windows'
-      uses: nick-fields/retry@v2
-      with:
-        shell: cmd
-        timeout_minutes: 5
-        retry_wait_seconds: 4
-        max_attempts: 3
-        command: choco install openssl --limitoutput --no-progress
 
     - name: build/test with tox (windows)
       if: runner.os == 'Windows'
@@ -134,6 +130,7 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         cd bindings/python
+        python3 -m pip install setuptools
         python3 setup.py build_ext --b2-args "deprecated-functions=off"
 
     - name: tests (Linux)
